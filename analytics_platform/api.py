@@ -22,6 +22,7 @@ from .database import Store
 from .domain import (AnswerMode, DataSourceKind, KnowledgeNode, NodeKind, ReviewStatus, RunStatus)
 from .execution.sampler import SamplerExecutor
 from .observability import Observability
+from .onboarding import OnboardingService
 from .pipeline import Pipeline
 from .tenancy import TenantService
 
@@ -84,6 +85,38 @@ class IngestSQL(BaseModel):
     title: Optional[str] = None
 
 
+class LegacyItem(BaseModel):
+    sql: str
+    source_ref: str = ""
+    title: Optional[str] = None
+
+
+class OnboardCompanyIn(BaseModel):
+    profile: Dict[str, Any]
+    datasource: Optional[Dict[str, Any]] = None
+    region: str = "global"
+    purpose: str = "onboarding"
+
+
+class MainTablesIn(BaseModel):
+    tables: List[str]
+    name: str = "primary"
+    kind: str = "direct_db"
+    dialect: str = "athena"
+
+
+class LegacyIn(BaseModel):
+    items: List[LegacyItem]
+    by: str = "ingest"
+
+
+class ReviewBatchIn(BaseModel):
+    approve_ids: List[str] = []
+    reject_ids: List[str] = []
+    by: str = "senior"
+    notes: str = ""
+
+
 # --------------------------------------------------------------------------- #
 # Application context
 # --------------------------------------------------------------------------- #
@@ -95,6 +128,7 @@ class AppContext:
     observability: Observability
     pipeline: Pipeline
     executor: SamplerExecutor
+    onboarding: OnboardingService
 
 
 def make_context(settings: Optional[Settings] = None,
@@ -106,8 +140,11 @@ def make_context(settings: Optional[Settings] = None,
     executor = SamplerExecutor(warehouse or {})
     pipeline = Pipeline(store, settings=settings, tenant_service=tenants,
                         executor=executor, observability=obs)
+    onboarding = OnboardingService(store, tenants=tenants, pipeline=pipeline,
+                                   observability=obs)
     return AppContext(settings=settings, store=store, tenants=tenants,
-                      observability=obs, pipeline=pipeline, executor=executor)
+                      observability=obs, pipeline=pipeline, executor=executor,
+                      onboarding=onboarding)
 
 
 def bootstrap_demo(ctx: AppContext) -> str:
@@ -277,6 +314,45 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
     @app.get("/metrics")
     def platform_metrics() -> Dict[str, Any]:
         return C.observability.metrics()
+
+    # -- onboarding wizard -----------------------------------------------
+    @app.post("/onboarding")
+    def onboard_company(body: OnboardCompanyIn) -> Dict[str, Any]:
+        t = C.onboarding.provision_company(body.profile, datasource=body.datasource,
+                                           region=body.region, purpose=body.purpose)
+        return {"tenant_id": t.id, "stage": "provisioned",
+                "readiness": C.onboarding.readiness(t.id)}
+
+    @app.post("/onboarding/{tenant_id}/main-tables")
+    def onboard_main_tables(tenant_id: str, body: MainTablesIn) -> Dict[str, Any]:
+        ds = C.onboarding.add_main_tables(tenant_id, body.tables, name=body.name,
+                                          kind=body.kind, dialect=body.dialect)
+        return {"datasource_id": ds.id, "tables": body.tables,
+                "readiness": C.onboarding.readiness(tenant_id)}
+
+    @app.post("/onboarding/{tenant_id}/legacy")
+    def onboard_legacy(tenant_id: str, body: LegacyIn) -> Dict[str, Any]:
+        items = [i.model_dump() for i in body.items]
+        nodes = C.onboarding.ingest_legacy(tenant_id, items, by=body.by)
+        return {"created": [n.to_dict() for n in nodes],
+                "candidate_ids": [n.id for n in nodes]}
+
+    @app.get("/onboarding/{tenant_id}/candidates")
+    def onboard_candidates(tenant_id: str) -> List[Dict[str, Any]]:
+        return [n.to_dict() for n in C.onboarding.candidates(tenant_id)]
+
+    @app.post("/onboarding/{tenant_id}/review")
+    def onboard_review(tenant_id: str, body: ReviewBatchIn) -> Dict[str, Any]:
+        return C.onboarding.review(tenant_id, approve_ids=body.approve_ids,
+                                   reject_ids=body.reject_ids, by=body.by, notes=body.notes)
+
+    @app.get("/onboarding/{tenant_id}/readiness")
+    def onboard_readiness(tenant_id: str) -> Dict[str, Any]:
+        return C.onboarding.readiness(tenant_id)
+
+    @app.get("/onboarding/{tenant_id}/digest")
+    def onboard_digest(tenant_id: str) -> Dict[str, Any]:
+        return C.onboarding.digest(tenant_id)
 
     return app
 

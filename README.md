@@ -19,10 +19,12 @@ analytics_platform/
   execution/policy.py   deterministic read-only / allow-list / row-limit policy (sqlglot)
   execution/sampler.py  offline executor: real SQL on pandas frames via duckdb + sqlglot transpile
   execution/browser_session.py  production executor: AppleScript->JS into the authenticated
-                        Chrome tab; same-origin fetch; login detected -> needs_login (fail-with-pause)
+                        Chrome tab; same-origin fetch; login detected -> needs_login (fail-with-pause);
+                        injectable OS runner => unit-tested offline
   llm/client.py         injectable LLMClient (NullClient offline / GatewayClient around LLMGateway)
   analysis.py           wraps FastSummaryProfiler + BusinessRuleEngine; facts vs hypotheses framing
   pipeline.py           orchestration: plan -> policy -> execute -> analyze -> persist -> telemetry
+  onboarding.py         P3 wizard: provision company -> main tables -> ingest legacy -> review -> readiness
   observability.py      every hop emits an OpenTelemetry-style span/event + /metrics
   api.py                FastAPI (modular-monolith API; components stay in-process)
   cli.py / __main__.py  CLI demo + `python -m analytics_platform serve`
@@ -72,8 +74,14 @@ curl -s localhost:8000/tenants/$TID/metrics
 ```
 
 ## Roadmap status
-P1–P3 foundation is implemented (module monolith, executor abstraction, policy,
-governed Brain, tenancy, observability, offline execution, API). Next per plan:
-browser-session hardening against a live Metabase, company-independent onboarding
-wizard, Company Brain v2 migration from the prototype Neo4j graph, and the junior
-maturity-stage engine.
+- **P1–P3 foundation: DONE** — modular monolith, executor abstraction, deterministic policy,
+  governed Brain, tenancy, observability, offline execution, FastAPI (23 routes).
+- **P2 browser-session hardening: DONE** — `BrowserSessionExecutor` hardened (host verification,
+  result caps, `needs_login` fail-with-pause) with an **injectable OS runner** → fully
+  unit-tested offline (no live Chrome needed) in `tests/test_browser_session.py`.
+- **P3 onboarding wizard: DONE** — `OnboardingService` + `/onboarding*` API: provision company,
+  map main tables, ingest legacy SQL as CANDIDATE, senior review (approve/reject), and a
+  readiness/stage report to gate the junior analyst.
+
+Next per plan: bind live Metabase against the hardened browser executor end-to-end,
+Company Brain v2 migration from the prototype's Neo4j graph, and the junior maturity-stage engine.
