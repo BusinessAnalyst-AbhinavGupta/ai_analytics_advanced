@@ -93,6 +93,23 @@ def cmd_metrics(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_migrate(args: argparse.Namespace) -> int:
+    from .migration import migrate_from_snapshot
+    ctx = make_context()
+    try:
+        brain = ctx.pipeline.brain(args.tenant_id)
+    except KeyError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    summary = migrate_from_snapshot(
+        brain, args.snapshot,
+        derive_definitions=not args.no_derive_definitions,
+        created_by=args.created_by)
+    _print(f"Migration summary (tenant {args.tenant_id})", summary)
+    _print("Brain stats", brain.stats())
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="analytics-platform")
     sub = p.add_subparsers(dest="command", required=True)
@@ -105,6 +122,14 @@ def build_parser() -> argparse.ArgumentParser:
     m = sub.add_parser("metrics", help="Show telemetry metrics")
     m.add_argument("--tenant-id", default="")
     m.set_defaults(func=cmd_metrics)
+    mg = sub.add_parser("migrate", help="Import a knowledge-graph snapshot into a tenant's Brain")
+    mg.add_argument("tenant_id")
+    mg.add_argument("--snapshot", required=True,
+                    help="path to knowledge_graph_snapshot.json")
+    mg.add_argument("--no-derive-definitions", action="store_true",
+                    help="skip deriving DEFINITION nodes from query filters")
+    mg.add_argument("--created-by", default="migration")
+    mg.set_defaults(func=cmd_migrate)
     return p
 
 

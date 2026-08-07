@@ -13,6 +13,7 @@ Invariants preserved:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -53,14 +54,15 @@ def _conf_source() -> Dict[str, float]:
             "freshness": 0.8, "reproducibility": 0.0, "source": 1.0}
 
 
-def _safe_ident(primary: Any, name: Any, idx: int) -> str:
-    v = str(primary).strip()
-    return v or (str(name).strip() if name else f"_{idx}")
+def _uid(*parts: Any) -> str:
+    """Short content hash — a stable, collision-resistant ident for a record."""
+    raw = "|".join("" if p is None else str(p) for p in parts)
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
 
 
 def _map_golden_query(rec: Dict[str, Any], reasoning: Optional[str]) -> NodeSpec:
     card_id = str(rec.get("card_id", "")).strip()
-    ident = card_id or _safe_ident(rec.get("name"), rec.get("name"), 0)
+    ident = card_id or _uid(rec.get("name"), rec.get("sql"))
     payload: Dict[str, Any] = {
         "sql": rec.get("sql", ""),
         "dialect": rec.get("dialect", "athena"),
@@ -90,7 +92,7 @@ def _derive_definitions(rec: Dict[str, Any], sql: str) -> List[NodeSpec]:
     specs: List[NodeSpec] = []
     info = extract(sql)
     card_id = str(rec.get("card_id", "")).strip()
-    ident = card_id or _safe_ident(rec.get("name"), rec.get("name"), 0)
+    ident = card_id or _uid(rec.get("name"), sql)
     for col, values in info.get("filters", {}).items():
         if len(values) > 1 or (values and isinstance(values[0], str)):
             specs.append(NodeSpec(
@@ -109,7 +111,7 @@ def _derive_definitions(rec: Dict[str, Any], sql: str) -> List[NodeSpec]:
 
 def _map_idiom(rec: Dict[str, Any], idx: int) -> NodeSpec:
     name = rec.get("name")
-    ident = _safe_ident(name, name, idx)
+    ident = _uid(name, rec.get("description"), rec.get("sql_skeleton"))
     return NodeSpec(
         kind=NodeKind.IDIOM,
         title=name or f"Idiom {idx}",
@@ -124,7 +126,7 @@ def _map_idiom(rec: Dict[str, Any], idx: int) -> NodeSpec:
 
 def _map_rule(rec: Dict[str, Any], idx: int) -> NodeSpec:
     rule_type = rec.get("rule_type") or ""
-    ident = _safe_ident(rule_type, rec.get("description"), idx)
+    ident = _uid(rule_type, rec.get("description"), rec.get("reasoning"))
     return NodeSpec(
         kind=NodeKind.BUSINESS_RULE,
         title=f"Rule: {rule_type or 'unnamed'}",

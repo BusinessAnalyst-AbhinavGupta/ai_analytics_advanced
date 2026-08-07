@@ -9,11 +9,13 @@ import os
 import unittest
 
 from analytics_platform.domain import NodeKind, ReviewStatus
+from analytics_platform.migration.loader import migrate_from_snapshot, migrate_specs
 from analytics_platform.migration.mapper import (
     SNAPSHOT_SOURCE,
     load_snapshot,
     plan_from_snapshot,
 )
+from tests.helpers import make_ctx
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "snapshot_seed.json")
 
@@ -85,6 +87,74 @@ class TestMigrationMapper(unittest.TestCase):
     def test_source_refs_unique(self):
         refs = [s.source_ref for s in self.specs]
         self.assertEqual(len(refs), len(set(refs)))
+
+
+class TestMigrationLoader(unittest.TestCase):
+    def setUp(self):
+        self.ctx = make_ctx()
+        self.tid = self.ctx.tenants.create_tenant("MigrateCo").id
+        self.brain = self.ctx.pipeline.brain(self.tid)
+
+    def tearDown(self):
+        self.ctx.close()
+
+    def test_migrates_all_as_candidate_with_counts(self):
+        summary = migrate_from_snapshot(self.brain, FIXTURE)
+        self.assertEqual(summary["imported"], 14)
+        self.assertEqual(summary["skipped"], 0)
+        nodes = self.brain.all(limit=500)
+        self.assertEqual(len(nodes), 14)
+        self.assertTrue(all(n.status == ReviewStatus.CANDIDATE for n in nodes))
+        self.assertEqual(summary["by_kind"][NodeKind.QUERY.value], 2)
+        self.assertEqual(summary["by_kind"][NodeKind.IDIOM.value], 2)
+        self.assertEqual(summary["by_kind"][NodeKind.BUSINESS_RULE.value], 3)
+
+    def test_idempotent_rerun(self):
+        migrate_from_snapshot(self.brain, FIXTURE)
+        summary = migrate_from_snapshot(self.brain, FIXTURE)
+        self.assertEqual(summary["imported"], 0)
+        self.assertEqual(summary["skipped"], 14)
+        self.assertEqual(len(self.brain.all(limit=500)), 14)
+
+    def test_provenance_and_confidence(self):
+        migrate_from_snapshot(self.brain, FIXTURE)
+        q = next(n for n in self.brain.all(limit=500)
+                 if n.kind == NodeKind.QUERY and n.payload.get("via") == "28369")
+        self.assertEqual(q.created_by, "migration")
+        self.assertTrue(q.source_ref.startswith(
+            f"{SNAPSHOT_SOURCE}#golden_queries/"))
+        self.assertEqual(q.evidence_ref, "28369")
+        self.assertEqual(q.confidence.get("source"), 1.0)
+        self.assertEqual(q.payload["journey_stage"], "Shipping")
+
+    def test_tenant_scoped(self):
+        other = self.ctx.tenants.create_tenant("OtherCorp").id
+        migrate_from_snapshot(self.brain, FIXTURE)
+        other_brain = self.ctx.pipeline.brain(other)
+        self.assertEqual(len(other_brain.all(limit=500)), 0)
+
+    def test_nothing_auto_approved(self):
+        migrate_from_snapshot(self.brain, FIXTURE)
+        self.assertEqual(len(self.brain.all(status=ReviewStatus.APPROVED,
+                                            limit=500)), 0)
+
+    def test_derive_definitions_off(self):
+        summary = migrate_from_snapshot(self.brain, FIXTURE,
+                                        derive_definitions=False)
+        self.assertEqual(summary["imported"], 10)  # 14 total - 4 derived defs
+
+    def test_real_snapshot_migration_gated(self):
+        real = os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                            "extracted_data", "knowledge_graph_snapshot.json")
+        if not os.path.exists(real):
+            self.skipTest("real snapshot not present")
+        summary = migrate_from_snapshot(self.brain, real)
+        expected = len(plan_from_snapshot(load_snapshot(real)))
+        self.assertEqual(summary["imported"], expected)
+        self.assertEqual(summary["skipped"], 0)
+        nodes = self.brain.all(limit=10000)
+        self.assertEqual(sum(1 for n in nodes if n.kind == NodeKind.QUERY), 158)
+        self.assertTrue(all(n.status == ReviewStatus.CANDIDATE for n in nodes))
 
 
 if __name__ == "__main__":

@@ -12,11 +12,16 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
 - **CP1 — mapper (DONE)**: added `NodeKind.IDIOM`; new `analytics_platform/migration/mapper.py`
   (pure: snapshot dict → `list[NodeSpec]`; QUERY + derived DEFINITIONs via `ingest.extract`,
   IDIOM, BUSINESS_RULE, stage/table DEFINITIONs; enriches query reasoning from `intents` by
-  `card_id`; all default `CANDIDATE`; stable `source_ref` keys for idempotency). Seed fixture
-  `tests/fixtures/snapshot_seed.json` + 9 mapper tests. **49/49 tests pass.**
-- **CP2 — loader + CLI `migrate` (PENDING)**: `migration/loader.py` (`migrate_specs`,
-  `migrate_from_snapshot`, idempotency guard via `source_ref`, provenance/confidence, tenant
-  scoping) + `cli.py migrate` subcommand + loader/integration tests.
+  `card_id`; all default `CANDIDATE`; stable content-hashed `source_ref`s for idempotency
+  even when `rule_type`/`name` collide). Seed fixture `tests/fixtures/snapshot_seed.json`
+  + 9 mapper tests. **49/49 tests pass.**
+- **CP2 — loader + CLI `migrate` (DONE)**: `analytics_platform/migration/loader.py`
+  (`migrate_specs` / `migrate_from_snapshot`; idempotency via `source_ref`; provenance +
+  confidence; tenant-scoped). `cli.py` gains `analytics-platform migrate <tenant> --snapshot
+  <path> [--no-derive-definitions] [--created-by]`. Loader + gated real-snapshot tests
+  (16 migration tests total, **56/56 overall**). Verified on the real snapshot: 1229 nodes
+  (158 QUERY / 598 DEFINITION / 180 IDIOM / 293 BUSINESS_RULE), all CANDIDATE, 0 auto-approved;
+  CLI is idempotent across runs.
 - **CP3 — real migrate + handoff (PENDING)**: run against `extracted_data/knowledge_graph_snapshot.json`, verify, refresh this doc.
 
 ## How to run (all in repo root)
