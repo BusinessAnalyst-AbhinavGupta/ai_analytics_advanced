@@ -4,9 +4,14 @@ Prepared: 2026-08-07 · Repo: `/Users/abhinav.gupta/Documents/ai_analytics_advan
 Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANALYTICS_PLATFORM_PLAN.md`).
 
 ## State
-- Git clean at `9321854` (handoff committed). **Original `AI analytics/` folder is untouched.**
-- **40/40 tests pass**: `cd <repo> && .venv/bin/python -m unittest discover -s tests`
-- Live API verified (provision→tables→legacy→review→readiness smoke). 23 routes.
+- **HEAD `9b3c672` (CP-L6), tree clean.** Original `AI analytics/` folder untouched.
+- **96/96 offline tests** (`cd <repo> && .venv/bin/python -m unittest discover -s tests`), plus the
+  **2 live `MetabaseLive` tests PASS when `ANALYTICS_MB_LIVE=1`** (skipped otherwise).
+- **Live Metabase E2E CONFIRMED (CP-L6)** — host `metabase.om.yo-digital.com`, DB `59`, browser-
+  cookie only (no token). Verify anytime:
+  `ANALYTICS_MB_LIVE=1 ANALYTICS_MB_DATABASE_ID=59 ANALYTICS_MB_EXPECTED_HOST=metabase.om.yo-digital.com \
+   .venv/bin/python -m unittest discover -s tests -k MetabaseLive -v`
+- Live API (offline demo) verified earlier; 23 routes.
 
 ## Progress (Brain v2 migration — in progress)
 - **CP1 — mapper (DONE)**: added `NodeKind.IDIOM`; new `analytics_platform/migration/mapper.py`
