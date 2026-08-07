@@ -23,6 +23,7 @@ from .database import Store
 from .domain import (AnswerMode, DataSourceKind, KnowledgeNode, NodeKind, ReviewStatus, RunStatus)
 from .execution.sampler import SamplerExecutor
 from .junior import JuniorEngine
+from .llm.client import make_client_from
 from .observability import Observability
 from .onboarding import OnboardingService
 from .pipeline import Pipeline
@@ -431,7 +432,8 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
     def _junior(tenant_id: str) -> JuniorEngine:
         tenant_or_404(tenant_id)
         return JuniorEngine(ctx.store, executor=_api_junior_executor(ctx.settings, ctx.executor),
-                            tenants=ctx.tenants, observability=ctx.observability)
+                            tenants=ctx.tenants, observability=ctx.observability,
+                            llm=make_client_from(ctx.settings))
 
     @app.get("/junior/{tenant_id}/stage")
     def junior_stage(tenant_id: str, limit: int = 200) -> Dict[str, Any]:

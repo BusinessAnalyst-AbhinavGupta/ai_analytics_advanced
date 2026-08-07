@@ -29,12 +29,15 @@ from .tenancy import TenantService
 class JuniorEngine:
     def __init__(self, store: Store, executor: Optional[QueryExecutor] = None,
                  tenants: Optional[TenantService] = None,
-                 observability: Optional[Observability] = None):
+                 observability: Optional[Observability] = None,
+                 llm: Optional[Any] = None):
         from .execution.sampler import SamplerExecutor
+        from .llm.client import NullClient
         self.store = store
         self.executor = executor or SamplerExecutor()
         self.tenants = tenants or TenantService(store)
         self.obs = observability or Observability(store)
+        self.llm = llm or NullClient()  # injectable; NullClient (offline) by default
 
     def brain(self, tenant_id: str) -> CompanyBrain:
         return CompanyBrain(self.store, tenant_id)
@@ -188,8 +191,49 @@ class JuniorEngine:
                 suggestions.append({"target": "", "category": "", "priority": 0,
                                     "question": f"Analyze {col} distribution of {vals[:3]}?",
                                     "columns": [col], "source": "approved_definition"})
+        # optional LLM enrichment (only when a live client is configured) -----
+        self._enrich_with_llm(tenant_id, suggestions, profile)
         return {"tenant_id": tenant_id, "count": len(suggestions),
                 "suggestions": suggestions}
+
+    def _llm_live(self) -> bool:
+        """True when an actual LLM client (not the offline NullClient) is configured."""
+        return getattr(self.llm, "name", "null") != "null"
+
+    def _enrich_with_llm(self, tenant_id: str, suggestions: List[Dict[str, Any]],
+                         profile: Optional[Any]) -> None:
+        """Optional LLM-authored questions (only when a live client is wired).
+
+        Purely additive: never removes the deterministic suggestions, never sends
+        raw rows/sql/cookies to the LLM (only targets + existing question text),
+        and a failure is logged as observability, never raised.
+        """
+        if not self._llm_live():
+            return
+        targets = list(profile.targets) if profile else []
+        context = "\n".join(f"- {s['question']}" for s in suggestions) or "no approved targets yet"
+        prompt = (
+            "Suggest 2 concise, data-driven analysis questions for a product analyst.\n"
+            f"Company profile targets: {', '.join(t.name for t in targets) or 'none provided'}.\n"
+            f"Already proposed:\n{context}\n"
+            "Return only the questions, one per line, no numbering."
+        )
+        try:
+            res = self.llm.generate(prompt=prompt, system_prompt=(
+                "You are a senior product-analytics assistant. Be concrete and measurable."),
+                temperature=0.3)
+            added = 0
+            for line in (res.text or "").splitlines():
+                line = line.strip().lstrip("0123456789.-• ").strip()
+                if line and added < 2:
+                    suggestions.append({"target": "", "category": "llm", "priority": 0,
+                                        "question": line, "columns": [], "source": "llm"})
+                    added += 1
+            self.obs.event(tenant_id=tenant_id, stage="junior.suggest.llm", actor="junior",
+                           tokens_out=getattr(res, "tokens_out", 0), meta={"added": added})
+        except Exception as e:  # noqa: BLE001 - LLM is an optional enhancement
+            self.obs.event(tenant_id=tenant_id, stage="junior.suggest.llm", actor="junior",
+                           status="FAILED", meta={"error": str(e)})
 
 
 __all__ = ["JuniorEngine"]

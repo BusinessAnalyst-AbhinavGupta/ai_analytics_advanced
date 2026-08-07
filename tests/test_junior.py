@@ -16,6 +16,19 @@ def approve_query(brain, sql, title="approved metric"):
     return n
 
 
+class _FakeLLM:
+    """A live-looking LLM client (name != 'null') that returns canned text."""
+
+    name = "gateway"
+
+    def __init__(self, text):
+        self.text = text
+
+    def generate(self, prompt, system_prompt="", **kw):
+        from analytics_platform.llm.client import LLMResponse
+        return LLMResponse(text=self.text, tokens_out=9)
+
+
 class TestJunior(unittest.TestCase):
     def _ctx_with_warehouse(self):
         ctx = make_ctx(warehouse=build_retail_warehouse())
@@ -94,6 +107,31 @@ class TestJunior(unittest.TestCase):
         s = self.engine.suggest_questions(self.tid)
         self.assertGreaterEqual(s["count"], 1)
         self.assertTrue(any("reproduce" in x["question"] for x in s["suggestions"]))
+
+    def test_suggest_questions_ignores_llm_when_null(self):
+        # self.engine uses the default NullClient -> no "llm"-source suggestions
+        s = self.engine.suggest_questions(self.tid)
+        self.assertFalse(any(x["source"] == "llm" for x in s["suggestions"]))
+
+    def test_suggest_questions_llm_enrichment(self):
+        eng = JuniorEngine(self.ctx.store, executor=self.ctx.executor,
+                           tenants=self.ctx.tenants,
+                           llm=_FakeLLM("1. What drives the view_to_order drop?\n"
+                                        "2. Segment completion rate by region"))
+        s = eng.suggest_questions(self.tid)
+        self.assertTrue(any(x["source"] == "llm" for x in s["suggestions"]))
+        self.assertGreaterEqual(s["count"], 1)
+        texts = {x["question"] for x in s["suggestions"]}
+        self.assertTrue(any("view_to_order" in t or "completion" in t for t in texts))
+
+    def test_suggest_questions_llm_failure_is_non_fatal(self):
+        class _Boom(_FakeLLM):
+            def generate(self, prompt, system_prompt="", **kw):
+                raise RuntimeError("boom")
+        eng = JuniorEngine(self.ctx.store, executor=self.ctx.executor,
+                           tenants=self.ctx.tenants, llm=_Boom(""))
+        s = eng.suggest_questions(self.tid)  # must not raise
+        self.assertFalse(any(x["source"] == "llm" for x in s["suggestions"]))
 
     def test_runs_over_browser_executor_seam_offline(self):
         """JuniorEngine drives the live BrowserSessionExecutor (injectable runner).

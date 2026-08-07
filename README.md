@@ -152,6 +152,12 @@ curl -s localhost:8000/junior/$TID/questions        # goal-aligned suggestion qu
   expose the previous CLI-only services over HTTP (36 routes total; offline executor by default,
   live browser executor when `ANALYTICS_MB_LIVE=1`). Covered by `tests/test_api.py` (endpoints hit
   over a real `create_app(ctx)`, no new dependencies).
+- **LLM hook wired: DONE** — `JuniorEngine` now takes an injectable `llm`
+  (`llm/client.make_client_from`): with a configured provider (non-`null`) it enriches
+  `suggest_questions` with LLM-authored questions; with the default `NullClient` everything stays
+  deterministic. `GatewayClient` wraps the **static** `core.llm_gateway.LLMGateway.generate`
+  (never instantiated; no raw rows/cookies to the LLM). Covered by `tests/test_llm.py` + junior
+  enrichment/failure tests.
 
-Next per plan: wire the `GatewayClient` LLM hook (richer stage-3 / question generation), then a
-thin Streamlit UI over the API, then keep triaging the ~871 remaining CANDIDATEs.
+Next per plan: build a thin Streamlit UI over the API, then keep triaging the ~871 remaining
+CANDIDATEs.

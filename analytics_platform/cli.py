@@ -212,6 +212,7 @@ def cmd_junior(args: argparse.Namespace) -> int:
     ctx = make_context()
     from .execution.sampler import SamplerExecutor
     from .junior import JuniorEngine
+    from .llm.client import make_client_from
     try:
         ctx.tenants.require_tenant(args.tenant_id)
     except KeyError as e:
@@ -219,7 +220,8 @@ def cmd_junior(args: argparse.Namespace) -> int:
         return 1
     executor = _resolve_junior_executor(ctx.settings, ctx.executor or SamplerExecutor())
     eng = JuniorEngine(ctx.store, executor=executor,
-                       tenants=ctx.tenants, observability=ctx.observability)
+                       tenants=ctx.tenants, observability=ctx.observability,
+                       llm=make_client_from(ctx.settings))
     _print("Junior readiness", eng.stage(args.tenant_id, limit=args.limit))
     cat = eng.catalog(args.tenant_id)
     _print("Catalog", {"tables_known": cat["tables_known"],
