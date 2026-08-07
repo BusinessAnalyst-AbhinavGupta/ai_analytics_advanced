@@ -8,9 +8,9 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
 > snapshot on top of it — keep the plan's spine updated when work lands.
 
 ## State
-- **HEAD `d3ee7bb` **CP-11** (`main`) — clean tree; everything committed.** P0–P9 core + CP-10 + CP-11 +
+- **HEAD `49af43f` **CP-11** (`main`) — clean tree; everything committed.** P0–P9 core + CP-10 + CP-11 +
   triage + launcher/docs are all in `git log`. Original `AI analytics/` folder untouched.
-  Latest checkpoints: `d3ee7bb` **CP-11** (config panel + junior depth + MD) · `da27d19` Docs(sync) ·
+  Latest checkpoints: `49af43f` **CP-11** (config panel + junior depth + MD) · `da27d19` Docs(sync) ·
   `e874406` **CP-10** (senior tool) · `12b0aed` **CP-9** (observability + background junior).
 - **CP-11 (config panel + junior depth + senior review depth) is IN** — human promote/downgrade of the
   junior question-depth (0 basic → 2 advanced) scales the questions it asks and adds business

@@ -9,7 +9,7 @@
 
 ## Plan Status & Progress (living spine)
 
-> **This section is the spine of the repo — keep it updated as work lands.** Last updated: 2026-08-08 · HEAD `d3ee7bb` **CP-11** (`main`).
+> **This section is the spine of the repo — keep it updated as work lands.** Last updated: 2026-08-08 · HEAD `49af43f` **CP-11** (`main`).
 
 **Overall:** implementation **in progress — core complete**. Phases **P0–P9 are DONE (core)**; the platform ships as a supervised analytics copilot. CP-11 lands the **config panel + junior depth + senior review depth** (per-analysis MD renderings, human-promoted/demoted question depth, human-signoff window, provider model ping, worker enable-gate). Remaining work = operator/security tail (live OIDC/SSO, per-tenant browser profiles, threat model/pen-test/DR/SOC2) + junior Stage-4/5 autonomy. No knowledge is lost; everything below is committed.
 
