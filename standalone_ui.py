@@ -621,6 +621,23 @@ if tenant:
         st.json(_guarded(lambda: _client().junior_questions(tenant)) or {})
         st.subheader("Business hypotheses (depth-scaled)")
         st.json(_guarded(lambda: _client().junior_hypotheses(tenant)) or {})
+        st.subheader("Run next junior analysis (test drive)")
+        jrun = st.columns([2, 1])
+        jrun_force = jrun[0].checkbox(
+            "Force (bypass 10–19h window + 1/hr rate for testing; serial + disable still hold)",
+            value=True, key=f"jr_force_{tenant}")
+        if jrun[1].button("▶ Run one", key=f"jr_run_{tenant}"):
+            res = _guarded(lambda: _client().junior_run(tenant, force=jrun_force)) or {}
+            st.session_state[f"jr_res_{tenant}"] = res
+        if f"jr_res_{tenant}" in st.session_state:
+            res = st.session_state[f"jr_res_{tenant}"]
+            if res.get("ran"):
+                st.success(f"Ran · {res.get('run_id')} · ok={res.get('ok')} "
+                           f"rows={res.get('row_count')} insights={res.get('insights')}")
+                st.caption((res.get("question") or "")[:160])
+            else:
+                st.warning(f"Did not run: {res.get('reason')}")
+        st.subheader("Catalog (schema / EDA)")
         st.subheader("Catalog (schema / EDA)")
         st.json(_guarded(lambda: _client().junior_catalog(tenant)) or {})
 

@@ -25,9 +25,13 @@ import threading
 import time
 from typing import Any, Dict, List, Optional
 
-from .database import Store
-from .domain import new_id, now_iso, RunStatus
+from .analysis import (analyze_results, evaluate_rules, profile_df,
+                       synthesize_analysis_llm)
+from .database import Store, dump_json, load_json
+from .domain import (AnalysisRun, AnswerMode, NodeKind, ReviewStatus, RunStatus,
+                     new_id, now_iso)
 from .execution.base import ExecutionContext
+from .markdown import write_analysis_md
 from .observability import Observability, new_trace
 
 
@@ -43,18 +47,24 @@ class JuniorWorker:
     def __init__(self, store: Store, junior: Any, *, tenant_id: str,
                  work_start: str = "10:00", work_end: str = "19:00",
                  min_interval_minutes: int = 60,
+                 daily_cap: int = 3,
                  observability: Optional[Observability] = None,
-                 clock: Any = time.time, default_tenant: Optional[str] = None):
+                 clock: Any = time.time, default_tenant: Optional[str] = None,
+                 reviews_dir: str = "data/reviews",
+                 row_limit: int = 50000):
         self.store = store
         self.junior = junior            # JuniorEngine (suggestions + executor)
         self.tenant_id = tenant_id      # also exposed for Scheduler.tick
         self.work_start = work_start
         self.work_end = work_end
         self.min_interval_minutes = int(min_interval_minutes)
+        self.daily_cap = int(daily_cap)  # at most N analyses per UTC day (persisted)
         self.obs = observability or Observability(store)
         self._clock = clock
         self._lock = threading.Lock()   # serial gate: one query at a time
         self.default_tenant = default_tenant or tenant_id
+        self.reviews_dir = reviews_dir
+        self.row_limit = int(row_limit)
 
     # -- window + rate limit -------------------------------------------------- #
     @staticmethod
@@ -79,6 +89,21 @@ class JuniorWorker:
     def _state_key(self) -> str:
         return f"junior_last:{self.tenant_id}"
 
+    def _daily_key(self, now: float) -> str:
+        day = time.strftime("%Y-%m-%d", time.gmtime(now))
+        return f"junior_daily:{self.tenant_id}:{day}"
+
+    def _runs_today(self, now: float) -> int:
+        """Persisted count of junior analyses already run this UTC day."""
+        try:
+            row = self.store.query_one(
+                "SELECT value FROM scheduler_state WHERE key=?", (self._daily_key(now),))
+            if row and row["value"]:
+                return int(float(row["value"]))
+        except Exception:  # noqa: BLE001 - best-effort
+            pass
+        return 0
+
     def _last_ran_ts(self) -> Optional[float]:
         try:
             row = self.store.query_one(
@@ -97,11 +122,33 @@ class JuniorWorker:
                 "updated_at=excluded.updated_at",
                 (self._state_key(), str(now),
                  time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())))
+
+            # persist the per-UTC-day count so restarts never reset the 3/day cap
+            dkey = self._daily_key(now)
+            self.store.execute(
+                "INSERT INTO scheduler_state (key,value,updated_at) VALUES (?,?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value, "
+                "updated_at=excluded.updated_at",
+                (dkey, str(self._runs_today(now) + 1),
+                 time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())))
         except Exception:
             pass
         # -- pipeline -------------------------------------------------------- #
     def pick_problem_statement(self) -> Dict[str, Any]:
-        """Choose one goal-aligned suggestion from the junior engine."""
+        """Choose an approved, reproducible query this junior hasn't just answered.
+
+        The question text is the approved query's title (a real, goal-aligned
+        question in the governed Brain), so each exploratory analysis is distinct
+        and grounded. Falls back to the junior's suggested questions, then a
+        baseline, so the worker always has something safe to do.
+        """
+        picks = self._reproducible_approved()
+        if picks:
+            recent = self._recent_sqls(len(picks))
+            chosen = next((p for p in picks if p["sql"] not in recent), picks[0])
+            return {"target": "", "category": "approved", "priority": 0,
+                    "question": chosen["question"], "columns": [],
+                    "source": "approved", "sql": chosen["sql"]}
         try:
             s = self.junior.suggest_questions(self.tenant_id, limit_per_target=1)
             for sg in s.get("suggestions", []):
@@ -112,13 +159,43 @@ class JuniorWorker:
         return {"target": "", "category": "", "priority": 0,
                 "question": "", "columns": [], "source": "none"}
 
-    def resolve_sql(self, statement: Dict[str, Any]) -> str:
-        """Prefer an approved reproducible query; else a safe single SELECT."""
+    def _reproducible_approved(self) -> List[Dict[str, Any]]:
+        """Approved, template-free (reproducible) queries for this tenant.
+
+        A query is reproducible only when it is pure SQL: no Metabase template
+        tags and no embedded JSON/escape braces (which Metabase's parser rejects).
+        """
+        out: List[Dict[str, Any]] = []
         try:
-            rows = self.junior.approved_queries(self.tenant_id, limit=1)
-            if rows:
-                sql = (rows[0].payload or {}).get("sql", "")
-                if sql and sql.strip():
+            for n in self.junior.approved_queries(self.tenant_id, limit=200):
+                sql = (n.payload or {}).get("sql", "")
+                if sql and "{{" not in sql and "{" not in sql and "}" not in sql:
+                    out.append({"id": n.id, "title": n.title,
+                                "question": n.title, "sql": sql})
+        except Exception:  # noqa: BLE001 - best-effort
+            pass
+        return out
+
+    def _recent_sqls(self, k: int = 8) -> set:
+        """SQL of the most recent junior runs (to avoid immediate repeats)."""
+        try:
+            rows = self.store.query_all(
+                "SELECT sql FROM analysis_runs WHERE tenant_id=? AND executor='junior-bg' "
+                "ORDER BY generated_at DESC LIMIT ?", (self.tenant_id, k))
+            return {r["sql"] for r in rows}
+        except Exception:  # noqa: BLE001 - best-effort
+            return set()
+
+    def resolve_sql(self, statement: Dict[str, Any]) -> str:
+        """Prefer a reproducible approved query (no Metabase template tags); else
+        a safe single SELECT built from the statement's columns."""
+        if statement.get("sql"):
+            return statement["sql"]
+        try:
+            rows = self.junior.approved_queries(self.tenant_id, limit=200)
+            for n in rows:
+                sql = (n.payload or {}).get("sql", "")
+                if sql and "{{" not in sql:  # reproducible: skip {{tag}} templating
                     return sql
         except Exception:
             pass
@@ -134,8 +211,14 @@ class JuniorWorker:
         return "SELECT 1 AS sanity WHERE 1=1"
 
     def run_cycle(self, tenant_id: Optional[str] = None,
-                  now: Optional[float] = None) -> Dict[str, Any]:
-        """Execute at most one problem statement, serially. May skip."""
+                  now: Optional[float] = None,
+                  force: bool = False) -> Dict[str, Any]:
+        """Execute at most one problem statement, serially. May skip.
+
+        `force=True` is the test/operator lever: it relaxes ONLY the clock window +
+        the 1/hr rate so a human can drive a controlled run out-of-hours. The
+        `junior.enabled` gate and the serial single-flight lock are always honoured.
+        """
         t0 = time.perf_counter()
         now = now if now is not None else self._clock()
         tid = tenant_id or self.tenant_id
@@ -148,12 +231,24 @@ class JuniorWorker:
         if not junior_enabled:
             return {"ran": False, "tenant_id": tid, "in_window": True,
                     "rate_ok": True, "reason": "junior_disabled"}
-        win = self.in_window(now)
-        rate_ok = _mins_since(self._last_ran_ts(), now) >= self.min_interval_minutes
-        if not win or not rate_ok:
-            return {"ran": False, "tenant_id": tid,
-                    "in_window": win, "rate_ok": rate_ok,
-                    "reason": "outside_window" if not win else "rate_limited",
+        win = True if force else self.in_window(now)
+        rate_ok = True if force else (
+            _mins_since(self._last_ran_ts(), now) >= self.min_interval_minutes)
+        daily_ok = True if force else (self._runs_today(now) < self.daily_cap)
+        if not win:
+            return {"ran": False, "tenant_id": tid, "in_window": False,
+                    "rate_ok": rate_ok, "daily_ok": daily_ok,
+                    "reason": "outside_window",
+                    "duration_ms": round((time.perf_counter() - t0) * 1000.0, 2)}
+        if not rate_ok:
+            return {"ran": False, "tenant_id": tid, "in_window": True,
+                    "rate_ok": False, "daily_ok": daily_ok,
+                    "reason": "rate_limited",
+                    "duration_ms": round((time.perf_counter() - t0) * 1000.0, 2)}
+        if not daily_ok:
+            return {"ran": False, "tenant_id": tid, "in_window": True,
+                    "rate_ok": True, "daily_ok": False,
+                    "reason": "daily_cap",
                     "duration_ms": round((time.perf_counter() - t0) * 1000.0, 2)}
 
         statement = self.pick_problem_statement()
@@ -161,6 +256,7 @@ class JuniorWorker:
         sql = self.resolve_sql(statement)
         self.obs.event(tenant_id=tid, stage="junior.bg_started", actor="junior",
                        resource=question[:60], status="OK")
+        result = None  # analysis path reads it after the serial block
 
         # serial gate ---------------------------------------------------------
         with self._lock:
@@ -182,37 +278,110 @@ class JuniorWorker:
             except Exception as e:  # never kill the loop
                 error = str(e)
 
-        self._record_ran(now)
-        self._save_run(tid, question, sql, ok, row_count, error, t0, statement)
+        analysis = self._baseline_analysis(error, ok)
+        if ok and getattr(result, "data", None) is not None and not result.data.empty:
+            analysis = self._analyze(tid, question, sql, result.data)
+            llm = getattr(self.junior, "llm", None)
+            if llm is not None and getattr(llm, "name", "null") != "null":
+                llm_insight = synthesize_analysis_llm(
+                    analysis.get("profile", {}), analysis.get("rule_triggers", []),
+                    question, analysis["insights"], analysis["assumptions"], llm)
+                if llm_insight:
+                    analysis["insights"].append(
+                        {"text": llm_insight, "novel": True, "kind": "llm"})
+
+        self._record_ran(now)  # each attempt consumes the 1/hr + 3/day caps (conservative)
+        run = self._save_run(tid, question, sql, ok, row_count, error, t0, statement, analysis)
         self.obs.event(tenant_id=tid, stage="junior.bg_completed", actor="junior",
                        resource=question[:60], status="OK" if ok else "FAILED",
                        duration_ms=(time.perf_counter() - t0) * 1000.0,
-                       meta={"sql": sql, "row_count": row_count,
+                       meta={"sql": sql, "row_count": row_count, "run_id": run.id,
                              "error": error[:200] if error else ""})
         return {"ran": True, "tenant_id": tid, "in_window": win, "rate_ok": True,
-                "question": question, "sql": sql, "ok": ok, "row_count": row_count,
-                "error": error, "source": statement.get("source"),
+                "run_id": run.id, "question": question, "sql": sql, "ok": ok,
+                "row_count": row_count, "error": error, "source": statement.get("source"),
+                "insights": len(analysis["insights"]),
                 "duration_ms": round((time.perf_counter() - t0) * 1000.0, 2)}
+
+    def _baseline_analysis(self, error: str, ok: bool) -> Dict[str, Any]:
+        """Minimal analysis for a run that produced no usable DataFrame."""
+        return {"facts": [], "insights": [], "assumptions": [], "next_actions": [],
+                "uncertainties": [error or "Empty / non-DataFrame result."],
+                "profile": {"error": error} if not ok else {}, "rule_triggers": [],
+                "summary": "Query did not yield an analyzable result set."}
+
+    def _analyze(self, tid: str, question: str, sql: str, df: Any) -> Dict[str, Any]:
+        """Run the shared deterministic analysis (insights / actionables /
+        assumptions) and check novelty against the tenant's approved Brain FINDINGs."""
+        from .brain.store import CompanyBrain
+        profile = profile_df(df, title=question)
+        rules = evaluate_rules(df)
+        existing: Optional[List[str]] = None
+        try:
+            existing = [n.title for n in CompanyBrain(self.store, tid).all(limit=500)
+                        if getattr(n, "kind", None) == NodeKind.FINDING
+                        and getattr(getattr(n, "status", None), "is_usable", lambda: False)()]
+        except Exception:  # noqa: BLE001 - novelty is best-effort
+            existing = None
+        frame = analyze_results(df, sql, question, rules=rules, existing=existing,
+                                row_limit=self.row_limit)
+        frame["profile"] = profile
+        frame["rule_triggers"] = rules
+        return frame
 
     def _save_run(self, tid: str, question: str, sql: str, ok: bool,
                   row_count: int, error: str, t0: float,
-                  statement: Dict[str, Any]) -> None:
-        from .database import dump_json, load_json
-        run_status = RunStatus.COMPLETED if ok else RunStatus.FAILED
+                  statement: Dict[str, Any],
+                  analysis: Dict[str, Any]) -> Optional[AnalysisRun]:
+        """Persist a full analysis run (CP-12) and write its reviewable `.md`.
+
+        Sets `review_status=CANDIDATE` so the run surfaces in the senior review
+        inbox (human is the senior while the AI senior is off / signoff window).
+        """
+        status = RunStatus.COMPLETED if ok else RunStatus.FAILED
+        anomalies = [r for r in analysis.get("rule_triggers", [])
+                     if r.get("severity") in ("CRITICAL", "HIGH")]
+        answer_mode = (AnswerMode.REQUIRES_SENIOR_REVIEW if anomalies
+                       else AnswerMode.NEW_LOW_RISK_ANALYSIS)
+        run = AnalysisRun(
+            id=new_id("run"), tenant_id=tid, trace_id=new_trace(), question_id="",
+            question_text=question, sql=sql, dialect="athena", executor="junior-bg",
+            status=status, answer_mode=answer_mode, review_status=ReviewStatus.CANDIDATE,
+            execution_ms=round((time.perf_counter() - t0) * 1000.0, 2),
+            row_count=row_count,
+            profile_summary=analysis.get("profile", {}),
+            rule_triggers=analysis.get("rule_triggers", []),
+            answer=analysis.get("summary", ""),
+            facts=analysis.get("facts", []),
+            hypotheses=analysis.get("hypotheses", []),
+            uncertainties=analysis.get("uncertainties", []),
+            next_actions=analysis.get("next_actions", []),
+            insights=analysis.get("insights", []),
+            assumptions=analysis.get("assumptions", []),
+            cost_estimate=0.0,
+            policy_reasons=[],
+            source_node_ids=[],
+        )
         try:
             self.store.execute(
-                "INSERT INTO analysis_runs (id,tenant_id,trace_id,question_id,question_text,"
-                "sql,dialect,executor,status,generated_at,execution_ms,row_count,"
-                "profile_summary,answer,facts,hypotheses,uncertainties,next_actions,"
-                "cost_estimate,policy_reasons,source_node_ids) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (new_id("run"), tid, new_trace(), "", question, sql, "athena",
-                 "junior-bg", run_status.value, now_iso(),
-                 round((time.perf_counter() - t0) * 1000.0, 2), row_count,
-                 dump_json({"error": error} if not ok else {"rows": row_count}),
-                 "", "[]", "[]", "[]", "[]", 0.0, "[]", "[]"))
-        except Exception:
-            pass  # persisting the run must never break the worker
+                "INSERT INTO analysis_runs (id,tenant_id,trace_id,question_id,question_text,sql,"
+                "dialect,executor,status,answer_mode,review_status,generated_at,execution_ms,"
+                "row_count,profile_summary,rule_triggers,answer,facts,hypotheses,uncertainties,"
+                "next_actions,insights,assumptions,cost_estimate,policy_reasons,source_node_ids) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (run.id, run.tenant_id, run.trace_id, run.question_id, run.question_text,
+                 run.sql, run.dialect, run.executor, run.status.value,
+                 run.answer_mode.value, run.review_status.value, run.generated_at,
+                 run.execution_ms, run.row_count, dump_json(run.profile_summary),
+                 dump_json(run.rule_triggers), run.answer, dump_json(run.facts),
+                 dump_json(run.hypotheses), dump_json(run.uncertainties),
+                 dump_json(run.next_actions), dump_json(run.insights),
+                 dump_json(run.assumptions), run.cost_estimate,
+                 dump_json(run.policy_reasons), dump_json(run.source_node_ids)))
+            write_analysis_md(run, self.reviews_dir)
+        except Exception:  # noqa: BLE001 - persisting the run must never break the worker
+            return None
+        return run
 
 
 __all__ = ["JuniorWorker"]

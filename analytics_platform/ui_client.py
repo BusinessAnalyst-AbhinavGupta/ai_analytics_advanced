@@ -79,6 +79,10 @@ class APIClient:
     def junior_datasets(self, tenant: str) -> List[str]:
         return self._req("GET", f"/junior/{tenant}/datasets")
 
+    def junior_run(self, tenant: str, force: bool = False) -> Dict[str, Any]:
+        """On-demand junior run (one self-picked question; serial; CP-12)."""
+        return self._req("POST", f"/tenants/{tenant}/junior/run", json={"force": bool(force)})
+
     # -- triage ------------------------------------------------------------
     def triage_summary(self, tenant: str) -> Dict[str, Any]:
         return self._req("GET", f"/triage/{tenant}/summary")

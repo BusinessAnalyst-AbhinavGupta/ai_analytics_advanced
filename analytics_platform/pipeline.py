@@ -6,10 +6,11 @@ REQUIRES_SENIOR_REVIEW and are only promoted to the Brain by an authorized
 """
 from __future__ import annotations
 
+import os
 import time
 from typing import Any, Callable, Dict, List, Optional
 
-from .analysis import evaluate_rules, frame_answer, profile_df
+from .analysis import analyze_results, evaluate_rules, profile_df, synthesize_analysis_llm
 from .brain.store import CompanyBrain
 from .config import Settings
 from .database import Store, dump_json, load_json
@@ -135,14 +136,25 @@ class Pipeline:
                            actor="analyst"):
             profile = profile_df(df, title=question_text)
             rules = evaluate_rules(df)
-            frame = frame_answer(df, run.sql, question_text, rules=rules)
+            existing = [n.title for n in self.brain(tenant_id).all(limit=500)
+                        if n.kind == NodeKind.FINDING and n.status.is_usable()]
+            frame = analyze_results(df, run.sql, question_text, rules=rules,
+                                    existing=existing,
+                                    row_limit=self.settings.policy.default_row_limit)
         run.profile_summary = profile
         run.rule_triggers = rules
         run.answer = frame["summary"]
         run.facts = frame["facts"]
         run.hypotheses = frame["hypotheses"]
         run.uncertainties = list(frame["uncertainties"])
-        run.next_actions = frame["next_actions"]
+        run.next_actions = frame["actionables"]
+        run.insights = frame["insights"]
+        run.assumptions = frame["assumptions"]
+        if getattr(self.llm, "name", "null") != "null":  # optional LLM narration
+            llm_insight = synthesize_analysis_llm(
+                profile, rules, question_text, run.insights, run.assumptions, self.llm)
+            if llm_insight:
+                run.insights.append({"text": llm_insight, "novel": True, "kind": "llm"})
 
         has_anomaly = any(r["severity"] in ("CRITICAL", "HIGH") for r in rules)
         if has_anomaly:
@@ -154,6 +166,8 @@ class Pipeline:
         self.obs.event(tenant_id=tenant_id, trace_id=trace, stage="analysis.completed",
                        actor="analyst", resource=run.id, status="OK")
         self._save_run(run)
+        from .markdown import write_analysis_md  # per-analysis .md for human review (R3)
+        write_analysis_md(run, os.path.join(os.path.dirname(self.settings.resolve_db_path()), "reviews"))
         return run
 # <<P3>>
     # ------------------------------------------------------------------ #
@@ -169,20 +183,23 @@ class Pipeline:
             "INSERT INTO analysis_runs (id,tenant_id,trace_id,question_id,question_text,sql,"
             "dialect,executor,status,answer_mode,review_status,generated_at,execution_ms,row_count,"
             "profile_summary,rule_triggers,answer,facts,hypotheses,uncertainties,next_actions,"
-            "cost_estimate,policy_reasons,source_node_ids) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+            "insights,assumptions,cost_estimate,policy_reasons,source_node_ids) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(id) DO UPDATE SET status=excluded.status, answer_mode=excluded.answer_mode, "
             "review_status=excluded.review_status, execution_ms=excluded.execution_ms, "
             "row_count=excluded.row_count, profile_summary=excluded.profile_summary, "
             "rule_triggers=excluded.rule_triggers, answer=excluded.answer, facts=excluded.facts, "
             "hypotheses=excluded.hypotheses, uncertainties=excluded.uncertainties, "
-            "next_actions=excluded.next_actions, policy_reasons=excluded.policy_reasons, "
+            "next_actions=excluded.next_actions, insights=excluded.insights, "
+            "assumptions=excluded.assumptions, policy_reasons=excluded.policy_reasons, "
             "source_node_ids=excluded.source_node_ids",
             (run.id, run.tenant_id, run.trace_id, run.question_id, run.question_text, run.sql,
              run.dialect, run.executor, run.status.value, run.answer_mode.value if run.answer_mode else None,
              run.review_status.value, run.generated_at, run.execution_ms, run.row_count,
              dump_json(run.profile_summary), dump_json(run.rule_triggers), run.answer,
              dump_json(run.facts), dump_json(run.hypotheses), dump_json(run.uncertainties),
-             dump_json(run.next_actions), run.cost_estimate, dump_json(run.policy_reasons),
+             dump_json(run.next_actions), dump_json(run.insights), dump_json(run.assumptions),
+             run.cost_estimate, dump_json(run.policy_reasons),
              dump_json(run.source_node_ids)))
 
     def get_run(self, tenant_id: str, run_id: str) -> Optional[AnalysisRun]:
@@ -201,6 +218,8 @@ class Pipeline:
         r["hypotheses"] = load_json(r["hypotheses"], [])
         r["uncertainties"] = load_json(r["uncertainties"], [])
         r["next_actions"] = load_json(r["next_actions"], [])
+        r["insights"] = load_json(r["insights"], [])
+        r["assumptions"] = load_json(r["assumptions"], [])
         r["policy_reasons"] = load_json(r["policy_reasons"], [])
         r["source_node_ids"] = load_json(r["source_node_ids"], [])
         return AnalysisRun(**r)

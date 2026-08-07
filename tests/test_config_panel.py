@@ -104,6 +104,31 @@ class TestJuniorWorkerGate(unittest.TestCase):
         self.assertFalse(res["ran"])
         self.assertEqual(res["reason"], "junior_disabled")
 
+    def test_daily_cap_enforced_and_persists(self):
+        from analytics_platform.junior_worker import JuniorWorker
+        # Always-in-window window so only the hourly + daily caps gate the test.
+        def mk_worker():
+            return JuniorWorker(self.base.store, self.ctx.junior, tenant_id=self.tid,
+                                daily_cap=2, min_interval_minutes=60,
+                                work_start="00:00", work_end="23:59")
+        worker = mk_worker()
+        now = 1720000000.0          # 2024-07-03T12:26Z
+        r1 = worker.run_cycle(tenant_id=self.tid, now=now)
+        self.assertTrue(r1["ran"], r1)
+        r2 = worker.run_cycle(tenant_id=self.tid, now=now + 3600)
+        self.assertTrue(r2["ran"], r2)
+        # 2 already this UTC day -> 3rd is blocked by the persisted daily cap
+        r3 = worker.run_cycle(tenant_id=self.tid, now=now + 3600 * 2)
+        self.assertFalse(r3["ran"])
+        self.assertEqual(r3["reason"], "daily_cap")
+        # a *brand-new* worker instance still sees the cap (persisted in DB)
+        r4 = mk_worker().run_cycle(tenant_id=self.tid, now=now + 3600 * 3)
+        self.assertFalse(r4["ran"])
+        self.assertEqual(r4.get("reason"), "daily_cap")
+        # next UTC day the cap resets (new daily key)
+        r5 = mk_worker().run_cycle(tenant_id=self.tid, now=now + 86400)
+        self.assertTrue(r5["ran"], r5)
+
 
 if __name__ == "__main__":
     unittest.main()

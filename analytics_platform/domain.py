@@ -285,6 +285,8 @@ class AnalysisRun:
     hypotheses: List[str] = field(default_factory=list)
     uncertainties: List[str] = field(default_factory=list)
     next_actions: List[str] = field(default_factory=list)
+    insights: List[Dict[str, Any]] = field(default_factory=list)  # {text, novel, kind}
+    assumptions: List[str] = field(default_factory=list)
     cost_estimate: float = 0.0
     policy_reasons: List[str] = field(default_factory=list)
     source_node_ids: List[str] = field(default_factory=list)

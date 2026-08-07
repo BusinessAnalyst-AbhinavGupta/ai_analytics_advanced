@@ -20,6 +20,19 @@ def _li(items: Any) -> str:
     return "\n".join(f"- {i}" for i in items)
 
 
+def _li_insights(insights: Any) -> str:
+    if not insights:
+        return "_none_"
+    lines = []
+    for ins in insights:
+        if isinstance(ins, dict):
+            tag = "🔍 novel" if ins.get("novel") else "already covered"
+            lines.append(f"- **[{tag}]** {ins.get('text', '')}")
+        else:
+            lines.append(f"- {ins}")
+    return "\n".join(lines)
+
+
 def render_analysis_md(run: AnalysisRun) -> str:
     """Render an AnalysisRun as markdown for human review."""
     review = (run.review_status.value if isinstance(run.review_status, ReviewStatus)
@@ -43,6 +56,18 @@ def render_analysis_md(run: AnalysisRun) -> str:
         "",
         run.answer or "_no summary_",
         "",
+        "## Insights",
+        "",
+        _li_insights(run.insights),
+        "",
+        "## Assumptions",
+        "",
+        _li(run.assumptions),
+        "",
+        "## Actionable recommendations",
+        "",
+        _li(run.next_actions),
+        "",
         "## Facts",
         "",
         _li(run.facts),
@@ -54,10 +79,6 @@ def render_analysis_md(run: AnalysisRun) -> str:
         "## Uncertainties",
         "",
         _li(run.uncertainties),
-        "",
-        "## Next actions",
-        "",
-        _li(run.next_actions),
         "",
     ])
 

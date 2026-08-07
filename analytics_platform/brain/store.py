@@ -90,8 +90,9 @@ class CompanyBrain:
         return self.get(node_id)
 
     # convenience transitions
-    def submit(self, node_id: str, by: str = "junior") -> KnowledgeNode:
-        return self.transition(node_id, ReviewStatus.UNDER_REVIEW, by=by, notes="submitted for review")
+    def submit(self, node_id: str, by: str = "junior", notes: str = "") -> KnowledgeNode:
+        return self.transition(node_id, ReviewStatus.UNDER_REVIEW, by=by,
+                               notes=notes or "submitted for review")
 
     def approve(self, node_id: str, by: str = "senior", notes: str = "") -> KnowledgeNode:
         node = self.transition(node_id, ReviewStatus.APPROVED, by=by, notes=notes or "approved")
@@ -145,6 +146,20 @@ class CompanyBrain:
         sql += " ORDER BY updated_at DESC LIMIT ?"
         params.append(limit)
         return [self._row_to_node(r) for r in self.store.query_all(sql, tuple(params))]
+
+    def usable_queries(self, limit: int = 200) -> List[KnowledgeNode]:
+        """All QUERY nodes whose status is usable (approved), newest first.
+
+        Filters in SQL so a large Brain (e.g. after a migration) is scanned fully
+        rather than whoever happens to fall in the first `limit` rows of `all()`.
+        """
+        statuses = [ReviewStatus.APPROVED.value, ReviewStatus.APPROVED_WITH_CAVEATS.value]
+        placeholders = ",".join("?" for _ in statuses)
+        rows = self.store.query_all(
+            f"SELECT * FROM knowledge_nodes WHERE tenant_id=? AND kind=? "
+            f"AND status IN ({placeholders}) ORDER BY updated_at DESC LIMIT ?",
+            (self.tenant_id, NodeKind.QUERY.value, *statuses, limit))
+        return [self._row_to_node(r) for r in rows]
 
     def all(self, kind: Optional[NodeKind] = None, status: Optional[ReviewStatus] = None,
             limit: int = 200) -> List[KnowledgeNode]:

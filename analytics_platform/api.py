@@ -80,6 +80,10 @@ class QuestionIn(BaseModel):
     sql: Optional[str] = None   # optional persisted/generated SQL
 
 
+class JuniorRunIn(BaseModel):
+    force: bool = False         # test/operator lever: bypass window+rate (serial+disable hold)
+
+
 class ReviewIn(BaseModel):
     action: str = "approve"     # approve | approve_with_caveats | reject | revise | submit | stale
     by: str = "senior"
@@ -296,6 +300,7 @@ def _make_junior_worker(settings: Settings, store: Store, junior: Any,
             work_start=settings.junior_work_start,
             work_end=settings.junior_work_end,
             min_interval_minutes=settings.junior_min_interval_minutes,
+            daily_cap=settings.junior_daily_cap,
             observability=obs, default_tenant=target["id"])
     except Exception:
         return None
@@ -796,6 +801,29 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
     @app.get("/junior/{tenant_id}/reproduce")
     def junior_reproduce(tenant_id: str, limit: int = 200) -> Dict[str, Any]:
         return _junior(tenant_id).reproduce_metrics(tenant_id, limit=limit)
+
+    @app.post("/tenants/{tenant_id}/junior/run")
+    def junior_run(tenant_id: str, body: JuniorRunIn) -> Dict[str, Any]:
+        """On-demand junior run for a controlled test drive (CP-12).
+
+        Drives one self-picked question through the engine with the *live*
+        read-only executor when `ANALYTICS_MB_LIVE=1`, analyses the result (insight
+        / actionables / assumptions), writes the reviewable `.md`, and leaves the
+        run in the human senior inbox (`CANDIDATE`). `force=True` bypasses only the
+        clock window + 1/hr rate; serial single-flight and the disable gate hold.
+        """
+        tenant_or_404(tenant_id)
+        from .junior_worker import JuniorWorker
+        eng = JuniorEngine(ctx.store, executor=_api_junior_executor(ctx.settings, ctx.executor),
+                           tenants=ctx.tenants, observability=ctx.observability,
+                           llm=make_client_from(ctx.settings))
+        worker = JuniorWorker(ctx.store, eng, tenant_id=tenant_id,
+                              work_start=ctx.settings.junior_work_start,
+                              work_end=ctx.settings.junior_work_end,
+                              min_interval_minutes=ctx.settings.junior_min_interval_minutes,
+                              daily_cap=ctx.settings.junior_daily_cap,
+                              observability=ctx.observability)
+        return worker.run_cycle(tenant_id=tenant_id, force=body.force)
 
     # -- P6 stakeholder analyst -------------------------------------------
     @app.post("/stakeholder/{tenant_id}/answer")

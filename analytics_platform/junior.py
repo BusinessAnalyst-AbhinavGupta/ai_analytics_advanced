@@ -49,9 +49,8 @@ class JuniorEngine:
 
     # -- reads ---------------------------------------------------------------
     def approved_queries(self, tenant_id: str, limit: int = 200) -> List[KnowledgeNode]:
-        return [n for n in self.brain(tenant_id).all(limit=limit)
-                if n.kind == NodeKind.QUERY and n.status.is_usable()
-                and n.payload.get("sql")]
+        return [n for n in self.brain(tenant_id).usable_queries(limit=limit)
+                if n.payload.get("sql")]
 
     def _approved_counts(self, tenant_id: str) -> Dict[str, int]:
         out: Dict[str, int] = {}

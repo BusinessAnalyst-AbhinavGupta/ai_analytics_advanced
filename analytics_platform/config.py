@@ -43,6 +43,7 @@ class Settings:
     junior_work_start: str = "10:00"   # junior background window start (system time)
     junior_work_end: str = "19:00"      # junior background window end
     junior_min_interval_minutes: int = 60  # one problem statement per hour max
+    junior_daily_cap: int = 3           # at most N junior analyses per UTC day
     junior_human_signoff_days: int = 7 # initial window: every analysis -> human review
 
     def resolve_db_path(self) -> str:
@@ -51,13 +52,22 @@ class Settings:
         return os.path.join(os.path.dirname(__file__), "..", "data", "platform.db")
 
     def effective_api_key(self) -> str:
-        return self.llm_api_key or os.environ.get("ANALYTICS_LLM_API_KEY", "")
+        """LLM key resolution: explicit override, then ANALYTICS_LLM_API_KEY, then
+        the operator's OpenRouter key (OPENROUTER_API_KEY). Never stored at rest."""
+        return (self.llm_api_key
+                or os.environ.get("ANALYTICS_LLM_API_KEY", "")
+                or os.environ.get("OPENROUTER_API_KEY", ""))
 
     @classmethod
     def from_env(cls) -> "Settings":
+        # Default the LLM provider to OpenRouter when the operator only exports an
+        # OpenRouter key (and no explicit provider override) — this machine does.
+        _provider = os.environ.get("ANALYTICS_LLM_PROVIDER", "").strip()
+        if not _provider and os.environ.get("OPENROUTER_API_KEY"):
+            _provider = "openrouter"
         return cls(
             db_path=os.environ.get("ANALYTICS_DB_PATH", ""),
-            llm_provider=os.environ.get("ANALYTICS_LLM_PROVIDER", "null"),
+            llm_provider=_provider or "null",
             llm_model=os.environ.get("ANALYTICS_LLM_MODEL", "deepseek/deepseek-v4-flash-0731"),
             llm_api_key=os.environ.get("ANALYTICS_LLM_API_KEY", ""),
             ollama_base_url=os.environ.get("ANALYTICS_OLLAMA_URL", "http://localhost:11434"),
@@ -77,6 +87,8 @@ class Settings:
             junior_work_end=os.environ.get("ANALYTICS_JUNIOR_WORK_END", "19:00"),
             junior_min_interval_minutes=int(
                 os.environ.get("ANALYTICS_JUNIOR_MIN_INTERVAL_MINUTES", "60")),
+            junior_daily_cap=int(
+                os.environ.get("ANALYTICS_JUNIOR_DAILY_CAP", "3")),
             junior_human_signoff_days=int(
                 os.environ.get("ANALYTICS_JUNIOR_HUMAN_SIGNOFF_DAYS", "7")),
         )

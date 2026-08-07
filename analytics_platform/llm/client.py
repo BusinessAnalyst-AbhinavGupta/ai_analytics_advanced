@@ -59,6 +59,8 @@ class GatewayClient(LLMClient):
                  context_window: int = 0, timeout_s: float = 120.0,
                  on_token: Optional[Any] = None, **kwargs: Any) -> LLMResponse:
         from core.llm_gateway import LLMGateway  # local import; static usage only
+        extra = dict(kwargs)
+        extra.pop("on_token", None)  # gateway is non-streaming; protocol param is unused
         res = LLMGateway.generate(
             prompt=prompt,
             system_prompt=system_prompt,
@@ -67,9 +69,9 @@ class GatewayClient(LLMClient):
             api_key=api_key or self.api_key,
             temperature=temperature,
             context_window=context_window or 262144,
-            ollama_base_url=self.ollama_base_url,
-            on_token=on_token,
-            **kwargs,
+            ollama_url=self.ollama_base_url or "http://127.0.0.1:11434",
+            timeout=int(timeout_s or 120),
+            **extra,
         )
         if isinstance(res, str):
             return LLMResponse(text=res, provider=provider or self.provider,

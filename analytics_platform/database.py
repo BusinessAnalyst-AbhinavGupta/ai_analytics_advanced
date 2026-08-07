@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS analysis_runs (
     answer_mode TEXT, review_status TEXT, generated_at TEXT, execution_ms REAL,
     row_count INTEGER, profile_summary TEXT, rule_triggers TEXT, answer TEXT,
     facts TEXT, hypotheses TEXT, uncertainties TEXT, next_actions TEXT,
+    insights TEXT, assumptions TEXT,
     cost_estimate REAL, policy_reasons TEXT, source_node_ids TEXT
 );
 CREATE TABLE IF NOT EXISTS telemetry (
@@ -132,6 +133,22 @@ def init_db(conn: sqlite3.Connection) -> None:
     with _LOCK:
         conn.executescript(SCHEMA)
         conn.commit()
+        _migrate(conn)
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Non-destructive column additions so an existing DB picks up new fields.
+
+    CREATE TABLE IF NOT EXISTS never adds columns to an already-created table, so
+    add the CP-12 columns to `analysis_runs` when they are missing."""
+    try:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(analysis_runs)").fetchall()}
+        for col in ("insights", "assumptions"):
+            if col not in cols:
+                conn.execute(f"ALTER TABLE analysis_runs ADD COLUMN {col} TEXT")
+        conn.commit()
+    except Exception:  # noqa: BLE001 - migration must never block startup
+        pass
 
 
 def dump_json(obj: Any) -> str:
