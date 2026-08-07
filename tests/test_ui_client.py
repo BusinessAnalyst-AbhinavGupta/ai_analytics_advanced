@@ -51,9 +51,11 @@ class TestAPIClient(unittest.TestCase):
 
     def test_triage_approve_posts_ids(self):
         with self._patch({"approved": ["n1"]}) as m:
-            out = APIClient("http://x").triage_approve("t1", ["n1"], by="senior")
+            out = APIClient("http://x").triage_approve("t1", ["n1"], by="senior",
+                                                        notes="checked")
         self.assertEqual(out, {"approved": ["n1"]})
-        self.assertEqual(m.call_args[1]["json"], {"ids": ["n1"], "by": "senior"})
+        self.assertEqual(m.call_args[1]["json"],
+                         {"ids": ["n1"], "by": "senior", "notes": "checked"})
 
     def test_http_error_propagates(self):
         with self._patch(status=404):

@@ -53,16 +53,22 @@ class APIClient:
     def triage_conflicts(self, tenant: str, limit: int = 100) -> List[Dict[str, Any]]:
         return self._req("GET", f"/triage/{tenant}/conflicts", params={"limit": limit})
 
-    def triage_approve(self, tenant: str, ids: List[str], by: str = "senior") -> Dict[str, Any]:
-        return self._req("POST", f"/triage/{tenant}/approve", json={"ids": ids, "by": by})
+    def triage_approve(self, tenant: str, ids: List[str], by: str = "senior",
+                       notes: str = "") -> Dict[str, Any]:
+        return self._req("POST", f"/triage/{tenant}/approve",
+                         json={"ids": ids, "by": by, "notes": notes})
 
-    def triage_reject(self, tenant: str, ids: List[str], by: str = "senior") -> Dict[str, Any]:
-        return self._req("POST", f"/triage/{tenant}/reject", json={"ids": ids, "by": by})
+    def triage_reject(self, tenant: str, ids: List[str], by: str = "senior",
+                      notes: str = "") -> Dict[str, Any]:
+        return self._req("POST", f"/triage/{tenant}/reject",
+                         json={"ids": ids, "by": by, "notes": notes})
 
     def triage_bulk(self, tenant: str, kind: str = "", action: str = "approve",
-                    by: str = "senior", limit: int = 200) -> Dict[str, Any]:
+                    by: str = "senior", limit: int = 200,
+                    notes: str = "") -> Dict[str, Any]:
         return self._req("POST", f"/triage/{tenant}/bulk",
-                         json={"kind": kind or None, "action": action, "by": by, "limit": limit})
+                         json={"kind": kind or None, "action": action, "by": by,
+                               "limit": limit, "notes": notes})
 
 
 __all__ = ["APIClient"]

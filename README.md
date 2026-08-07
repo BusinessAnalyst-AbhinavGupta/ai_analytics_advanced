@@ -121,7 +121,9 @@ curl -s localhost:8000/junior/$TID/questions        # goal-aligned suggestion qu
 .venv/bin/python -m analytics_platform serve 8000          # http://localhost:8000/docs
 # terminal 2 - the UI (thin APIClient -> the running API)
 .venv/bin/streamlit run standalone_ui.py                   # http://localhost:8501
-# (override the API base with ANALYTICS_API_URL if not localhost:8000)
+# point the UI at any DB-backed API, e.g. the review DB:
+ANALYTICS_API_URL=http://localhost:8001 .venv/bin/streamlit run standalone_ui.py
+# (ANALYTICS_API_URL default http://localhost:8000)
 ```
 
 ## Roadmap status
@@ -174,7 +176,10 @@ curl -s localhost:8000/junior/$TID/questions        # goal-aligned suggestion qu
   (`analytics_platform/ui_client.py`) hitting `/tenants`, `/junior/*`, `/triage/*` (list/create
   tenant, stage + catalog + questions, triage summary/queue/approve/bulk). Covered by
   `tests/test_ui_client.py`; boots headless against the running API. Legacy `app.py` (`core.*`)
-  remains the reference; React/Next later per plan §5.
+  remains the reference; React/Next later per plan §5. The Triage tab is a full **review panel**:
+  metrics, per-row approve/reject via `st.data_editor`, bulk by kind, a node inspector, and a
+  **Conflicts** tab (keep-one/reject-rest dedupe). Fixed a latent UI bug (GET `/tenants` returns
+  `id`, POST returns `tenant_id`).
 
 Next per plan: keep triaging the ~871 remaining CANDIDATEs (`cli review` / `/triage`), then P6
 stakeholder workflow, P7 external research, P8 commercial hardening.

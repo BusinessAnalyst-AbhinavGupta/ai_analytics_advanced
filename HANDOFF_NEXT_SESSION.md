@@ -155,6 +155,15 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
   triage summary/queue/approve/bulk; `ANALYTICS_API_URL` override). Legacy `app.py` (`core.*`) stays
   the reference; React/Next later (plan §5). Added `tests/test_ui_client.py` (5); boots headless
   (HTTP 200) against the running API. **121 tests (3 live skipped).**
+- **CP-X5 — Triage review panel in the UI (DONE)**: `standalone_ui.py` Triage tab is now a real
+  **review panel** — 4 metrics (total/actionable/approved/conflicts), **Queue review** tab
+  (`st.data_editor` rows: select → Approve/Reject selected; Bulk-approve/reject by kind; reviewer
+  + notes; "Inspect a node" expander with full title/summary/payload), and a **Conflicts** tab
+  (per-group "keep one → reject rest" dedupe, or approve whole group). `ui_client` approve/reject/
+  bulk now pass `notes`. **Fixed a latent UI bug:** `GET /tenants` serializes id as `id` (POST
+  returns `tenant_id`), so the tenant selector previously always showed `None` → `_tenants()` now
+  reads `id`, falling back to `tenant_id`. Validated with Streamlit `AppTest` (no exceptions). Left
+  running: review API `:8001` → `data/migration.db`, UI `:8501` → `:8001`.
 
 ## How to run (all in repo root)
 ```bash
@@ -206,8 +215,9 @@ Deps frozen in `requirements-advanced.txt` (incl. `fastapi==0.141.1`).
   senior reviewer.*
 
 ## Next steps (Brain v2 + Live-Metabase + Junior engine + Junior→live + API exposure + LLM hook + thin UI + first triage DONE)
-1. **Finish reviewing the 756 CANDIDATEs (QUERY + DEFINITION) in the UI / `/triage`**, and dedupe
-   the 74 value-set Definition conflicts (`--conflicts`) — approval stays the hard gate.
+1. **Finish reviewing the 756 CANDIDATEs (QUERY + DEFINITION)** in the UI review panel
+   (`http://localhost:8501` → review API `:8001` → `data/migration.db`, tenant `tnt_56a8295f82c3`),
+   and dedupe the 74 value-set Definition conflicts in the Conflicts tab — approval stays the hard gate.
 2. (later) Plan phases P6 stakeholder workflow (evidence/freshness/escalation), P7 external
    research, P8 commercial hardening (SSO/RBAC, per-tenant browser profile).
 

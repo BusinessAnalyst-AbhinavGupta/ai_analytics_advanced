@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 
+import pandas as pd
 import streamlit as st
 
 from analytics_platform.ui_client import APIClient
@@ -38,10 +39,102 @@ def _guarded(fn):
         return None
 
 
+_KINDS = ["", "QUERY", "DEFINITION", "IDIOM", "BUSINESS_RULE"]
+
+
+def _run_review(tenant, fn, confirm_msg):
+    """Run an API triage write and reflect the outcome, re-running the app."""
+    res = _guarded(fn)
+    if res:
+        st.success(f"{confirm_msg}: approved={len(res.get('approved', []))} "
+                   f"rejected={len(res.get('rejected', []))} "
+                   f"skipped={len(res.get('skipped', []))}")
+        st.rerun()
+
+
+def _queue_review(tenant):
+    st.subheader("Queue review")
+    c = st.columns([1, 1, 1, 1, 1, 1])
+    kind = c[0].selectbox("Kind", _KINDS, key="qkind")
+    search = c[1].text_input("Search title/summary", key="qsearch")
+    by = c[2].text_input("Reviewer", value="senior", key="reviewer")
+    notes = c[3].text_input("Notes (optional)", key="qnotes")
+    refresh = c[5].button("Refresh")
+    rows = _guarded(lambda: _client().triage_queue(tenant, kind=kind, search=search,
+                                                   limit=2000)) or []
+    if not rows:
+        st.info("Queue is empty for this filter.")
+        return
+
+    df = pd.DataFrame([{
+        "Select": False,
+        "id": r.get("id"), "kind": r.get("kind"), "status": r.get("status"),
+        "title": r.get("title"), "summary": (r.get("summary") or "").strip()[:140],
+    } for r in rows])
+    edited = st.data_editor(
+        df, hide_index=True, width="stretch", num_rows="fixed",
+        disabled=[col for col in df.columns if col != "Select"],
+        column_config={"Select": st.column_config.CheckboxColumn("✓", width="small")},
+    )
+    selected = edited[edited["Select"]].id.tolist()
+
+    a = st.columns(4)
+    if a[0].button(f"Approve selected ({len(selected)})", disabled=not selected):
+        _run_review(tenant, lambda: _client().triage_approve(tenant, selected, by=by, notes=notes),
+                    f"Approved {len(selected)}")
+    if a[1].button(f"Reject selected ({len(selected)})", disabled=not selected):
+        _run_review(tenant, lambda: _client().triage_reject(tenant, selected, by=by, notes=notes),
+                    f"Rejected {len(selected)}")
+    if a[2].button(f"Bulk-approve all '{kind or 'any kind'}'", disabled=not kind):
+        _run_review(tenant, lambda: _client().triage_bulk(tenant, kind=kind, action="approve",
+                                                          by=by, notes=notes),
+                    "Bulk-approve")
+    if a[3].button(f"Bulk-reject all '{kind or 'any kind'}'", disabled=not kind):
+        _run_review(tenant, lambda: _client().triage_bulk(tenant, kind=kind, action="reject",
+                                                          by=by, notes=notes),
+                    "Bulk-reject")
+
+    with st.expander("Inspect a node before deciding"):
+        ids = [r.get("id") for r in rows]
+        rows_by_id = {r.get("id"): r for r in rows}
+        pick = st.selectbox("Node", ids,
+                            format_func=lambda i: f"{i} — {rows_by_id[i]['title'][:60]}")
+        if pick:
+            node = rows_by_id[pick]
+            st.json({k: node.get(k) for k in
+                     ("id", "kind", "status", "title", "summary", "payload", "source_ref")})
+
+
+def _conflicts_review(tenant):
+    st.subheader("Conflicts (probable value-set dups)")
+    conflicts = _guarded(lambda: _client().triage_conflicts(tenant)) or []
+    st.caption(f"{len(conflicts)} title-conflicts — pick one per group to keep, "
+               "reject the rest to dedupe.")
+    if not conflicts:
+        st.info("No conflicts.")
+        return
+    for cf in conflicts:
+        ids = cf.get("ids", [])
+        with st.expander(f"`{cf.get('title')}` — {cf.get('count')} nodes"):
+            st.code("\n".join(ids))
+            b = st.columns([1, 1, 3])
+            group = st.radio("Keep / drop group", ids, label_visibility="collapsed",
+                             key=f"keep-{ids[0]}") if len(ids) > 1 else None
+            if b[0].button("Reject other(s) (keep one)", key=f"r-{ids[0]}") and group:
+                rest = [i for i in ids if i != group]
+                _run_review(tenant, lambda: _client().triage_reject(tenant, rest, by="senior",
+                                                                    notes="dedupe group"),
+                            f"Rejected {len(rest)}")
+            if b[1].button("Approve whole group", key=f"ap-{ids[0]}"):
+                _run_review(tenant, lambda: _client().triage_approve(tenant, ids, by="senior"),
+                            "Approved group")
+
+
 def _tenants() -> list:
     client = _client()
     try:
-        return [t.get("tenant_id") for t in client.list_tenants()]
+        # NOTE: GET /tenants serializes the id as `id`; the create endpoint uses `tenant_id`.
+        return [t.get("id") or t.get("tenant_id") for t in client.list_tenants()]
     except Exception as e:  # noqa: BLE001
         st.error(f"Cannot reach API at {BASE_URL}: {e}. Is `serve 8000` running?")
         return []
@@ -76,18 +169,17 @@ if tenant:
         st.json(_guarded(lambda: _client().junior_questions(tenant)) or {})
 
     with tabs[1]:
-        st.subheader("Summary")
-        st.json(_guarded(lambda: _client().triage_summary(tenant)) or {})
-        kind = st.text_input("Queue kind (e.g. DEFINITION, QUERY)", key="qkind")
-        q = _guarded(lambda: _client().triage_queue(tenant, kind=kind.strip()))
-        if q:
-            ids = [n.get("id") for n in q]
-            st.dataframe([{k: n.get(k) for k in ("id", "kind", "status", "title")}
-                          for n in q])
-            c1, c2 = st.columns(2)
-            if c1.button("Approve listed"): 
-                st.json(_client().triage_approve(tenant, ids))
-            if c2.button("Bulk-approve by kind") and kind.strip():
-                st.json(_client().triage_bulk(tenant, kind=kind.strip(), action="approve"))
+        summary = _guarded(lambda: _client().triage_summary(tenant)) or {}
+        if summary:
+            m = st.columns(4)
+            m[0].metric("Total nodes", summary.get("total", 0))
+            m[1].metric("Actionable (needs review)", summary.get("actionable", 0))
+            m[2].metric("Approved", summary.get("approved", 0))
+            m[3].metric("Conflicts", summary.get("conflicts", 0))
+        rt1, rt2 = st.tabs(["Queue review", "Conflicts"])
+        with rt1:
+            _queue_review(tenant)
+        with rt2:
+            _conflicts_review(tenant)
 else:
     st.info("Select or create a tenant to begin.")
