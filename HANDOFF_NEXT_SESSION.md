@@ -191,9 +191,23 @@ Deps frozen in `requirements-advanced.txt` (incl. `fastapi==0.141.1`).
 - `api.py` — `create_app(ctx)`; `make_context()`; onboarding + triage + junior endpoints; 36 routes.
 - `fixtures/` — synthetic retail warehouse + golden queries (athena-dialect SQL; transpiled at runtime).
 
-## Next steps (Brain v2 + Live-Metabase + Junior engine + Junior→live + API exposure + LLM hook + thin UI DONE)
-1. **Keep triaging the remaining ~871 CANDIDATEs.** `cli review` / `/triage` — bulk approve by
-   kind, `--conflicts` to dedupe the value-set Definition candidates.
+## Progress — Triage of the re-migrated Brain (current)
+- **CP-X4 — triage the migrated CANDIDATEs (data task, DONE)**: the prior sessions' migrated
+  Brain wasn't in the repo's `data/`, so I re-migrated the snapshot idempotently (CANDIDATE-only)
+  into `data/migration.db` (tenant `tnt_56a8295f82c3`; `data/*.db` is gitignored): **1229 nodes**
+  (158 QUERY / 598 DEFINITION / 180 IDIOM / 293 BUSINESS_RULE, 0 approved, 74 conflicts). Then
+  **bulk-approved IDIOM (180) + BUSINESS_RULE (293) = 473 approved** (low-risk semantic kinds,
+  matching the CP-T3 precedent). **756 CANDIDATEs remain (QUERY 158 + DEFINITION 598) — left for
+  human review, respecting the approval hard gate**; 74 value-set Definition conflicts are the dedup
+  target. Reproduce anytime:
+  `ANALYTICS_DB_PATH=data/migration.db .venv/bin/python -m analytics_platform.cli review tnt_56a8295f82c3 --conflicts`
+  (or in the UI via `/triage/{tid}`). *Honest: auto-approving QUERY/DEFINITION offline could
+  encode SQL/value-sets that aren't verified against real Metabase, so they stay CANDIDATE for a
+  senior reviewer.*
+
+## Next steps (Brain v2 + Live-Metabase + Junior engine + Junior→live + API exposure + LLM hook + thin UI + first triage DONE)
+1. **Finish reviewing the 756 CANDIDATEs (QUERY + DEFINITION) in the UI / `/triage`**, and dedupe
+   the 74 value-set Definition conflicts (`--conflicts`) — approval stays the hard gate.
 2. (later) Plan phases P6 stakeholder workflow (evidence/freshness/escalation), P7 external
    research, P8 commercial hardening (SSO/RBAC, per-tenant browser profile).
 
