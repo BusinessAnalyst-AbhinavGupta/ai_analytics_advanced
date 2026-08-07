@@ -104,5 +104,40 @@ class JuniorEngine:
                 return True
         return False
 
+    # -- stage 0-1: schema / EDA catalog (read-only) -------------------------
+    def _tables(self, tenant_id: str) -> List[str]:
+        seen: List[str] = []
+        for ds in self.tenants.list_datasources(tenant_id):
+            for t in ds.get("tables", []) or []:
+                if t and t not in seen:
+                    seen.append(t)
+        return seen
+
+    def catalog(self, tenant_id: str) -> Dict[str, Any]:
+        """Describe registered tables via `SELECT * FROM t LIMIT 0` (dialect-agnostic)."""
+        tables = self._tables(tenant_id)
+        entries = []
+        ok_n = 0
+        for t in tables:
+            r = self.executor.execute(
+                f"SELECT * FROM {t} LIMIT 0",
+                ExecutionContext(tenant_id=tenant_id, dialect="athena"))
+            if r.ok and r.data is not None:
+                entries.append({"table": t, "columns": list(r.data.columns),
+                                "types": [str(d) for d in r.data.dtypes],
+                                "error": ""})
+                ok_n += 1
+            else:
+                entries.append({"table": t, "columns": [], "types": [],
+                                "error": r.error or "unable to describe"})
+        return {"tenant_id": tenant_id,
+                "tables_known": len(tables),
+                "tables_described": ok_n,
+                "tables": entries}
+
+    def datasets(self, tenant_id: str) -> List[str]:
+        """Distinct column/schema names known across described tables (for EDA)."""
+        return [t["table"] for t in self.catalog(tenant_id)["tables"] if t["columns"]]
+
 
 __all__ = ["JuniorEngine"]

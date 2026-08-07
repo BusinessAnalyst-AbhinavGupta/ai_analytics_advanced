@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import unittest
 
-from analytics_platform.domain import NodeKind, ReviewStatus
+from analytics_platform.domain import DataSourceKind, NodeKind, ReviewStatus
 from analytics_platform.fixtures import WEEKLY_ORDER_SQL, build_retail_warehouse
 from analytics_platform.junior import JuniorEngine
 from tests.helpers import make_ctx
@@ -57,6 +57,24 @@ class TestJunior(unittest.TestCase):
         repro = self.engine.reproduce_metrics(self.tid)
         self.assertEqual(repro["attempted"], 1)
         self.assertEqual(repro["reproduced"], 1)
+
+    def test_catalog_describes_registered_table(self):
+        self.ctx.tenants.add_datasource(self.tid, "Events", DataSourceKind.DIRECT_DB,
+                                        dialect="athena", tables=["events"])
+        c = self.engine.catalog(self.tid)
+        self.assertEqual(c["tables_known"], 1)
+        self.assertEqual(c["tables_described"], 1)
+        cols = c["tables"][0]["columns"]
+        self.assertIn("action", cols)
+        self.assertIn("revenue", cols)
+
+    def test_catalog_unknown_table_reports_error(self):
+        self.ctx.tenants.add_datasource(self.tid, "Missing", DataSourceKind.DIRECT_DB,
+                                        tables=["nope_missing"])
+        c = self.engine.catalog(self.tid)
+        self.assertEqual(c["tables_known"], 1)
+        self.assertEqual(c["tables_described"], 0)
+        self.assertTrue(c["tables"][0]["error"])
 
 
 if __name__ == "__main__":

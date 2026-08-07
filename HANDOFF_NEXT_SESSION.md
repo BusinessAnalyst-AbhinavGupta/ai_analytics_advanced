@@ -63,8 +63,9 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
   injectable executor; reports attempted/reproduced/failed), `stage()` (0 provisioning → 1
   schema/EDA → 2 metric-understanding → 3 process-analysis, requiring reproduced + targets).
   `tests/test_junior.py` (4). **85 tests (2 skipped).**
-- **CP-J2 — schema/EDA catalog (PENDING)**: stage-0/1 `catalog()` describing registered tables
-  (columns/types via SamplerExecutor) for the "data discovery" gate.
+- **CP-J2 — schema/EDA catalog (DONE)**: `JuniorEngine.catalog()`/`datasets()` — describes
+  registered tables via `SELECT * FROM t LIMIT 0` (dialect-agnostic, injectable executor);
+  reports columns/types/errors. Tests +2 → **87 tests (2 skipped).**
 - **CP-J3 — goal-aligned questions + CLI `junior` (PENDING)**: stage-3 `suggest_questions()` from
   `CompanyProfile.targets` ↔ approved definitions/definitions + `cli.py` `junior` command.
 
