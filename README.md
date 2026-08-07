@@ -177,9 +177,10 @@ ANALYTICS_API_URL=http://localhost:8001 .venv/bin/streamlit run standalone_ui.py
   tenant, stage + catalog + questions, triage summary/queue/approve/bulk). Covered by
   `tests/test_ui_client.py`; boots headless against the running API. Legacy `app.py` (`core.*`)
   remains the reference; React/Next later per plan §5. The Triage tab is a full **review panel**:
-  metrics, per-row approve/reject via `st.data_editor`, bulk by kind, a node inspector, and a
-  **Conflicts** tab (keep-one/reject-rest dedupe). Fixed a latent UI bug (GET `/tenants` returns
-  `id`, POST returns `tenant_id`).
+  metrics, a **Definitions** review tab (grouped by column; shows each value-set + its source SQL
+  before you approve/reject), per-row approve/reject via `st.data_editor`, bulk by kind, a node
+  inspector, and a **Conflicts** tab (keep-one/reject-rest dedupe). Fixed a latent UI bug
+  (GET `/tenants` returns `id`, POST returns `tenant_id`).
 
 Next per plan: keep triaging the ~871 remaining CANDIDATEs (`cli review` / `/triage`), then P6
 stakeholder workflow, P7 external research, P8 commercial hardening.

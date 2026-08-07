@@ -79,17 +79,17 @@ def _queue_review(tenant):
     selected = edited[edited["Select"]].id.tolist()
 
     a = st.columns(4)
-    if a[0].button(f"Approve selected ({len(selected)})", disabled=not selected):
+    if a[0].button(f"Approve selected ({len(selected)})", disabled=not selected, key="q-appr"):
         _run_review(tenant, lambda: _client().triage_approve(tenant, selected, by=by, notes=notes),
                     f"Approved {len(selected)}")
-    if a[1].button(f"Reject selected ({len(selected)})", disabled=not selected):
+    if a[1].button(f"Reject selected ({len(selected)})", disabled=not selected, key="q-rej"):
         _run_review(tenant, lambda: _client().triage_reject(tenant, selected, by=by, notes=notes),
                     f"Rejected {len(selected)}")
-    if a[2].button(f"Bulk-approve all '{kind or 'any kind'}'", disabled=not kind):
+    if a[2].button(f"Bulk-approve all '{kind or 'any kind'}'", disabled=not kind, key="q-bulk-appr"):
         _run_review(tenant, lambda: _client().triage_bulk(tenant, kind=kind, action="approve",
                                                           by=by, notes=notes),
                     "Bulk-approve")
-    if a[3].button(f"Bulk-reject all '{kind or 'any kind'}'", disabled=not kind):
+    if a[3].button(f"Bulk-reject all '{kind or 'any kind'}'", disabled=not kind, key="q-bulk-rej"):
         _run_review(tenant, lambda: _client().triage_bulk(tenant, kind=kind, action="reject",
                                                           by=by, notes=notes),
                     "Bulk-reject")
@@ -128,6 +128,66 @@ def _conflicts_review(tenant):
             if b[1].button("Approve whole group", key=f"ap-{ids[0]}"):
                 _run_review(tenant, lambda: _client().triage_approve(tenant, ids, by="senior"),
                             "Approved group")
+
+
+def _definition_meta(node):
+    """Human-readable view of a DEFINITION node (column X uses values Y)."""
+    p = node.get("payload") or {}
+    col = p.get("column") or ""
+    vals = p.get("values")
+    vals_s = ", ".join(map(str, vals)) if isinstance(vals, list) else str(vals or "")
+    sql = p.get("source_sql") or ""
+    ctx = " | ".join(
+        line.lstrip().lstrip("-").strip()
+        for line in sql.splitlines()[:10]
+        if line.lstrip().startswith("--")
+        and any(k in line for k in ("Business Problem", "Journey Stage", "Instructions")))
+    return col, vals_s, ctx, sql
+
+
+def _definitions_review(tenant):
+    st.subheader("Definition review (value-sets by column)")
+    rows = _guarded(lambda: _client().triage_queue(tenant, kind="DEFINITION", limit=2000)) or []
+    if not rows:
+        st.info("No DEFINITION nodes to review.")
+        return
+    metas = [_definition_meta(r) for r in rows]
+    ncols = len({c for c, *_ in metas if c})
+    by = st.text_input("Reviewer", value="senior", key="drev")
+    notes = st.text_input("Notes (optional)", key="dnotes")
+    st.caption(f"{len(rows)} DEFINITION nodes across {ncols} columns — each is "
+               "“column X uses value(s) Y” from a source query. Sortable by column; approve only "
+               "what's correct & worth keeping. The Conflicts tab dedupes overlapping value-sets.")
+    df = pd.DataFrame([{
+        "Select": False,
+        "id": r.get("id"), "column": m[0], "values": m[1], "status": r.get("status"),
+        "context": m[2][:120],
+    } for r, m in zip(rows, metas)]).sort_values("column").reset_index(drop=True)
+    edited = st.data_editor(
+        df, hide_index=True, width="stretch", num_rows="fixed",
+        disabled=[c for c in df.columns if c != "Select"],
+        column_config={"Select": st.column_config.CheckboxColumn("✓", width="small")},
+    )
+    selected = edited[edited["Select"]].id.tolist()
+    a = st.columns(3)
+    if a[0].button(f"Approve selected ({len(selected)})", disabled=not selected, key="d-appr"):
+        _run_review(tenant, lambda: _client().triage_approve(tenant, selected, by=by, notes=notes),
+                    "Approved")
+    if a[1].button(f"Reject selected ({len(selected)})", disabled=not selected, key="d-rej"):
+        _run_review(tenant, lambda: _client().triage_reject(tenant, selected, by=by, notes=notes),
+                    "Rejected")
+    if a[2].button("Bulk-approve all DEFINITIONs", key="d-bulk"):
+        _run_review(tenant, lambda: _client().triage_bulk(tenant, kind="DEFINITION",
+                                                          action="approve", by=by, notes=notes),
+                    "Bulk-approve DEFINITION")
+    with st.expander("See a definition's source SQL"):
+        ids = [r.get("id") for r in rows]
+        m = dict(zip(ids, metas))
+        pick = st.selectbox("Definition", ids,
+                            format_func=lambda i: f"{i} — {m[i][0]} = “{m[i][1][:40]}”")
+        col, vals_s, ctx, sql = m[pick]
+        st.markdown(f"**{col}** uses: `{vals_s}`")
+        st.code(sql or "(no source_sql)", language="sql")
 
 
 def _tenants() -> list:
@@ -176,10 +236,12 @@ if tenant:
             m[1].metric("Actionable (needs review)", summary.get("actionable", 0))
             m[2].metric("Approved", summary.get("approved", 0))
             m[3].metric("Conflicts", summary.get("conflicts", 0))
-        rt1, rt2 = st.tabs(["Queue review", "Conflicts"])
+        rt1, rt2, rt3 = st.tabs(["Definitions", "Queue review", "Conflicts"])
         with rt1:
-            _queue_review(tenant)
+            _definitions_review(tenant)
         with rt2:
+            _queue_review(tenant)
+        with rt3:
             _conflicts_review(tenant)
 else:
     st.info("Select or create a tenant to begin.")

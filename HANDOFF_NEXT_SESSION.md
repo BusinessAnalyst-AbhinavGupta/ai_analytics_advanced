@@ -164,6 +164,13 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
   returns `tenant_id`), so the tenant selector previously always showed `None` → `_tenants()` now
   reads `id`, falling back to `tenant_id`. Validated with Streamlit `AppTest` (no exceptions). Left
   running: review API `:8001` → `data/migration.db`, UI `:8501` → `:8001`.
+- **CP-X6 — Definitions review tab (DONE)**: the Triage area now has a dedicated **Definitions**
+  tab that is a value-set review surface — each DEFINITION is shown as `column uses values […]
+  (from source query)`, **grouped/sortable by column**, with per-row approve/reject + a "see its
+  source SQL" expander (`st.code`), plus bulk-approve-all-DEFINITIONs. So a reviewer can actually
+  read the definition and its provenance before deciding. Also fixed duplicate-button-ID errors
+  (all review buttons now carry unique `key`s). Validated with Streamlit `AppTest` (no exceptions);
+  UI restarted on `:8501 → :8001`.
 
 ## How to run (all in repo root)
 ```bash
@@ -218,6 +225,9 @@ Deps frozen in `requirements-advanced.txt` (incl. `fastapi==0.141.1`).
 1. **Finish reviewing the 756 CANDIDATEs (QUERY + DEFINITION)** in the UI review panel
    (`http://localhost:8501` → review API `:8001` → `data/migration.db`, tenant `tnt_56a8295f82c3`),
    and dedupe the 74 value-set Definition conflicts in the Conflicts tab — approval stays the hard gate.
+   Note: approving QUERYs (and setting company-profile targets) is what lifts `junior stage` to 2→3;
+   DEFINITION approvals drive `defined_terms`/essential-term coverage. This review is a gate to junior
+   value, but not to the orthogonal P6–P8 feature milestones below — they can proceed in parallel.
 2. (later) Plan phases P6 stakeholder workflow (evidence/freshness/escalation), P7 external
    research, P8 commercial hardening (SSO/RBAC, per-tenant browser profile).
 
