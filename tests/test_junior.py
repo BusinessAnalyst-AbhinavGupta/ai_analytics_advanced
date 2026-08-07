@@ -95,6 +95,39 @@ class TestJunior(unittest.TestCase):
         self.assertGreaterEqual(s["count"], 1)
         self.assertTrue(any("reproduce" in x["question"] for x in s["suggestions"]))
 
+    def test_runs_over_browser_executor_seam_offline(self):
+        """JuniorEngine drives the live BrowserSessionExecutor (injectable runner).
+
+        Proves the stage-3 reproduction / catalog path works against the same executor
+        used for real Metabase — host-guarded, cookie stays in the browser — without
+        needing Chrome here (stub runner simulates the JS roundtrip).
+        """
+        from analytics_platform.execution.browser_session import BrowserSessionExecutor
+        from tests.test_browser_session import exec_payload, make_runner, probe_payload
+
+        # a mapped table + an approved query the engine should reproduce
+        self.ctx.tenants.add_datasource(self.tid, "Events", DataSourceKind.DIRECT_DB,
+                                        dialect="athena", tables=["events"])
+        approve_query(self.ctx.pipeline.brain(self.tid), WEEKLY_ORDER_SQL)
+
+        live = BrowserSessionExecutor(
+            database_id=59, expected_host="metabase.om.yo-digital.com",
+            runner=make_runner(probe_payload(host="metabase.om.yo-digital.com"),
+                               exec_payload(rows=[[1, "a"]], cols=["month", "orders"])))
+        eng = JuniorEngine(self.ctx.store, executor=live, tenants=self.ctx.tenants)
+
+        # stage () reproduces the approved query through the browser executor
+        st = eng.stage(self.tid)
+        self.assertGreaterEqual(st["reproduction"]["attempted"], 1)
+        self.assertGreaterEqual(st["reproduction"]["reproduced"], 1)
+        self.assertEqual(st["reproduction"]["failed"], [])
+
+        # catalog() describes the mapped table through the browser executor
+        cat = eng.catalog(self.tid)
+        self.assertEqual(cat["tables_known"], 1)
+        self.assertEqual(cat["tables_described"], 1)
+        self.assertIn("month", cat["tables"][0]["columns"])
+
 
 if __name__ == "__main__":
     unittest.main()

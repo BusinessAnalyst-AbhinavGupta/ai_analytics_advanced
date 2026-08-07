@@ -118,5 +118,67 @@ class TestCliBrowser(unittest.TestCase):
         self.assertEqual(brain.get(n.id).status, ReviewStatus.APPROVED)
 
 
+class _ShimJunior:
+    """Record the executor handed to JuniorEngine without running stage/catalog/etc."""
+
+    instances = []
+
+    def __init__(self, *a, **k):
+        self.kwargs = k
+        _ShimJunior.instances.append(self)
+
+    def stage(self, *a, **k):
+        return {}
+
+    def catalog(self, *a, **k):
+        return {"tables_known": 0, "tables_described": 0, "tables": []}
+
+    def suggest_questions(self, *a, **k):
+        return {"count": 0, "suggestions": []}
+
+
+def _junior_ctx(metabase_live: bool):
+    """A minimal ctx for cmd_junior so executor selection is what we assert."""
+    from unittest import mock
+    ctx = mock.Mock()
+    ctx.settings = mock.Mock(metabase_live=metabase_live)
+    ctx.store = object()
+    ctx.tenants = mock.Mock()
+    ctx.observability = object()
+    ctx.executor = "offline-executor"
+    return ctx
+
+
+class TestCliJunior(unittest.TestCase):
+    def setUp(self):
+        _ShimJunior.instances = []
+
+    def test_uses_live_executor_when_metabase_live(self):
+        from unittest import mock
+        from analytics_platform.cli import cmd_junior
+        ctx = _junior_ctx(metabase_live=True)
+        live_ex = "live-executor"
+        with mock.patch("analytics_platform.cli.make_context", return_value=ctx), \
+                mock.patch("analytics_platform.junior.JuniorEngine", _ShimJunior), \
+                mock.patch("analytics_platform.execution.browser_session.make_live_executor",
+                           return_value=live_ex) as mle:
+            rc = cmd_junior(argparse.Namespace(tenant_id="t1", limit=50))
+        self.assertEqual(rc, 0)
+        mle.assert_called_once()
+        self.assertIs(_ShimJunior.instances[0].kwargs["executor"], live_ex)
+
+    def test_uses_offline_executor_when_not_live(self):
+        from unittest import mock
+        from analytics_platform.cli import cmd_junior
+        ctx = _junior_ctx(metabase_live=False)
+        with mock.patch("analytics_platform.cli.make_context", return_value=ctx), \
+                mock.patch("analytics_platform.junior.JuniorEngine", _ShimJunior), \
+                mock.patch("analytics_platform.execution.browser_session.make_live_executor") as mle:
+            rc = cmd_junior(argparse.Namespace(tenant_id="t1", limit=50))
+        self.assertEqual(rc, 0)
+        mle.assert_not_called()
+        self.assertIs(_ShimJunior.instances[0].kwargs["executor"], "offline-executor")
+
+
 if __name__ == "__main__":
     unittest.main()

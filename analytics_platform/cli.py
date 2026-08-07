@@ -194,6 +194,20 @@ def cmd_review(args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_junior_executor(settings: Any, offline: Any) -> Any:
+    """Choose the executor for the `junior` command.
+
+    Live path (real Metabase via the browser, cookie stays in Chrome) is gated on
+    `settings.metabase_live` (i.e. ANALYTICS_MB_LIVE=1); otherwise fall back to the
+    offline SamplerExecutor (synthetic warehouse). Both are injected into the very
+    same `JuniorEngine` so stage/catalog/reproduce_metrics run over whichever is chosen.
+    """
+    if settings.metabase_live:
+        from .execution.browser_session import make_live_executor
+        return make_live_executor(settings=settings)
+    return offline
+
+
 def cmd_junior(args: argparse.Namespace) -> int:
     ctx = make_context()
     from .execution.sampler import SamplerExecutor
@@ -203,7 +217,8 @@ def cmd_junior(args: argparse.Namespace) -> int:
     except KeyError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
-    eng = JuniorEngine(ctx.store, executor=ctx.executor or SamplerExecutor(),
+    executor = _resolve_junior_executor(ctx.settings, ctx.executor or SamplerExecutor())
+    eng = JuniorEngine(ctx.store, executor=executor,
                        tenants=ctx.tenants, observability=ctx.observability)
     _print("Junior readiness", eng.stage(args.tenant_id, limit=args.limit))
     cat = eng.catalog(args.tenant_id)

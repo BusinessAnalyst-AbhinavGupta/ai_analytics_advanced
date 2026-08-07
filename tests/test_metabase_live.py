@@ -45,5 +45,56 @@ class TestMetabaseLive(unittest.TestCase):
         self.assertTrue(r.data is not None)
 
 
+@unittest.skipUnless(ANALYTICS_MB_LIVE,
+                     "Live junior-Metabase test: export ANALYTICS_MB_LIVE=1 + have "
+                     "Metabase logged in on the active Chrome tab")
+class TestJuniorMetabaseLive(unittest.TestCase):
+    """Run the JuniorEngine stage-3 assessment over the LIVE BrowserSessionExecutor.
+
+    Same code path as `cli junior` with ANALYTICS_MB_LIVE=1: repro an approved query
+    and read a mapped table through the real Chrome tab (cookie never leaves browser).
+    """
+
+    def setUp(self):
+        from tests.helpers import make_ctx
+        self.ctx = make_ctx()
+        self.tid = self.ctx.tenants.create_tenant("JuniorLiveCo").id
+
+    def tearDown(self):
+        self.ctx.close()
+
+    def _approve(self, sql, title):
+        from analytics_platform.domain import NodeKind
+        brain = self.ctx.pipeline.brain(self.tid)
+        n = brain.create(NodeKind.QUERY, title, payload={"sql": sql, "dialect": "athena"})
+        brain.submit(n.id, by="senior")
+        brain.approve(n.id, by="senior")
+        return n
+
+    def test_junior_reproduces_and_catalogs_over_live_browser(self):
+        from analytics_platform.domain import DataSourceKind
+        from analytics_platform.execution.browser_session import make_live_executor
+        from analytics_platform.junior import JuniorEngine
+
+        ex = make_live_executor()
+        if ex.config.database_id is None:
+            raise unittest.SkipTest("ANALYTICS_MB_DATABASE_ID not set")
+
+        # an approved, safe query reproducible on real Metabase
+        self._approve("SELECT 1 AS n", "live probe")
+        # a mapped table the engine will describe (may or may not exist in DB 59)
+        self.ctx.tenants.add_datasource(self.tid, "Mapped", DataSourceKind.DIRECT_DB,
+                                        dialect="ANSI", tables=["events"])
+
+        eng = JuniorEngine(self.ctx.store, executor=ex, tenants=self.ctx.tenants)
+        repro = eng.reproduce_metrics(self.tid)
+        self.assertGreaterEqual(repro["attempted"], 1)
+        self.assertGreaterEqual(repro["reproduced"], 1)
+        st = eng.stage(self.tid)
+        self.assertGreaterEqual(st["reproduction"]["reproduced"], 1)
+        c = eng.catalog(self.tid)
+        self.assertEqual(c["tables_known"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

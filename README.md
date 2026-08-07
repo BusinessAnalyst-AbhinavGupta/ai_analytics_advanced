@@ -85,6 +85,11 @@ ANALYTICS_MB_LIVE=1 \
 ```
 ```bash
 # Junior maturity-stage assessment (stage + EDA catalog + goal-aligned questions):
+#   offline (synthetic warehouse) executor:
+.venv/bin/python -m analytics_platform.cli junior <tenant>
+#   against REAL Metabase (stage-3 reproduction over the live browser executor):
+ANALYTICS_MB_LIVE=1 ANALYTICS_MB_DATABASE_ID=<id> \
+ANALYTICS_MB_EXPECTED_HOST=<your.metabase.host> \
 .venv/bin/python -m analytics_platform.cli junior <tenant>
 ```
 
@@ -131,7 +136,13 @@ curl -s localhost:8000/tenants/$TID/metrics
   queries + targets), `reproduce_metrics()` (runs approved queries via the injectable executor),
   `catalog()` (schema/EDA of registered tables), `suggest_questions()` (Company
   `Profile.targets` ↔ approved definitions/queries). CLI `analytics-platform junior <tenant>`.
+- **Junior wired to live Metabase: DONE** — `analytics-platform junior` runs the *same*
+  `JuniorEngine` over the live `BrowserSessionExecutor` when `ANALYTICS_MB_LIVE=1`
+  (host-guarded, cookie stays in the browser, read-only) and falls back to the offline
+  `SamplerExecutor` otherwise. The seam is unit-tested offline in `tests/test_junior.py` /
+  `tests/test_cli.py`, and the real-Metabase path is covered by the gated
+  `TestJuniorMetabaseLive` (skipped unless `ANALYTICS_MB_LIVE=1`).
 
-Next per plan: wire the junior engine to the live `BrowserSessionExecutor` for stage‑3 assessment
-on real data; keep triaging the ~871 remaining CANDIDATEs; option to expose review/junior via the
-FastAPI. Finishing the live-Metabase E2E run needs your `ANALYTICS_MB_DATABASE_ID`/`EXPECTED_HOST`.
+Next per plan: keep triaging the ~871 remaining CANDIDATEs; option to expose review/junior via the
+FastAPI. Finishing the live-Metabase E2E runs (`MetabaseLive` + `TestJuniorMetabaseLive`) needs your
+`ANALYTICS_MB_DATABASE_ID`/`EXPECTED_HOST` and a logged-in Metabase tab in Chrome.

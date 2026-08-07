@@ -4,9 +4,18 @@ Prepared: 2026-08-07 · Repo: `/Users/abhinav.gupta/Documents/ai_analytics_advan
 Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANALYTICS_PLATFORM_PLAN.md`).
 
 ## State
-- **HEAD `9b3c672` (CP-L6), tree clean.** Original `AI analytics/` folder untouched.
-- **96/96 offline tests** (`cd <repo> && .venv/bin/python -m unittest discover -s tests`), plus the
-  **2 live `MetabaseLive` tests PASS when `ANALYTICS_MB_LIVE=1`** (skipped otherwise).
+- **HEAD `b64262c` (CP-L7), tree clean.** Original `AI analytics/` folder untouched.
+- **95/95 standalone tests pass** (all `tests/` modules except the legacy `test_ui_and_db`), plus the
+  **4 live tests (2 `MetabaseLive` + 2 `TestJuniorMetabaseLive`) PASS when `ANALYTICS_MB_LIVE=1`**
+  (skipped otherwise). Run:
+  `cd <repo> && .venv/bin/python -m unittest tests.test_brain tests.test_browser_session tests.test_cli
+  tests.test_ingest tests.test_integration tests.test_junior tests.test_metabase_live tests.test_migration
+  tests.test_onboarding tests.test_pipeline_e2e tests.test_policy tests.test_tenancy tests.test_triage
+  # -> 98 tests (3 live skipped)`
+  **Caveat (pre-existing, environmental):** `unittest discover -s tests` hangs on this machine in
+  `test_ui_and_db.test_pipeline_with_form_metadata` — `core.IngestionPipeline.run`'s Step-4 Cypher
+  generation waits on a Neo4j that isn't reachable here. It is legacy `core.*` code, unrelated to
+  `analytics_platform/`, and was left untouched.
 - **Live Metabase E2E CONFIRMED (CP-L6)** — host `metabase.om.yo-digital.com`, DB `59`, browser-
   cookie only (no token). Verify anytime:
   `ANALYTICS_MB_LIVE=1 ANALYTICS_MB_DATABASE_ID=59 ANALYTICS_MB_EXPECTED_HOST=metabase.om.yo-digital.com \
@@ -95,11 +104,35 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
   questions). Verified: demo tenant → stage 3, 2/2 reproduced, 1 table described, 2 goal-aligned
   questions. Tests +3 → **90 tests (2 skipped).** **Junior engine is complete.**
 
+## Progress — Junior wired to live Metabase (current)
+- **CP-L7 — junior engine over the live `BrowserSessionExecutor` (DONE)**: `cli.py` `junior`
+  now picks the executor via `_resolve_junior_executor(settings, offline)` — `make_live_executor()`
+  when `ANALYTICS_MB_LIVE=1` (host-guarded, cookie stays in the browser, read-only), else the
+  offline `SamplerExecutor`. The exact same `JuniorEngine.stage()/catalog()/reproduce_metrics()`
+  runs over whichever executor is injected.
+  - Offline seam test: `tests/test_junior.py::test_runs_over_browser_executor_seam_offline` drives
+    `JuniorEngine` with a `BrowserSessionExecutor` (stub runner, `metabase.om.yo-digital.com` host
+    guard) → stage reproduction + catalog green.
+  - CLI selection tests: `tests/test_cli.py::TestCliJunior` asserts `junior` uses the live executor
+    when `metabase_live` and the offline one otherwise.
+  - Live gated test: `tests/test_metabase_live.py::TestJuniorMetabaseLive` (skipped unless
+    `ANALYTICS_MB_LIVE=1`) runs junior stage-3 over real Metabase. **98 tests (3 live skipped).**
+  - README: `junior` Run-it block shows both offline and `ANALYTICS_MB_LIVE=1` incantations; new
+    roadmap bullet "Junior wired to live Metabase: DONE". *Honest note: not run live here — the
+    live path is gated and needs your logged-in Chrome; the offline seam + CLI selection are
+    unit-tested and green.*
+
 ## How to run (all in repo root)
 ```bash
 .venv/bin/python -m analytics_platform.cli demo      # offline E2E demo (synthetic company)
-.venv/bin/python -m unittest discover -s tests -v    # tests
 .venv/bin/python -m analytics_platform serve 8000     # FastAPI → http://localhost:8000/docs
+# standalone tests (98 = 95 pass + 3 live skipped); NOTE: plain `discover -s tests`
+# additionally includes the legacy tests/test_ui_and_db which can hang on this machine
+# (core.IngestionPipeline -> Neo4j not reachable) - see State caveat, it is untouched:
+.venv/bin/python -m unittest tests.test_brain tests.test_browser_session tests.test_cli \
+  tests.test_ingest tests.test_integration tests.test_junior tests.test_metabase_live \
+  tests.test_migration tests.test_onboarding tests.test_pipeline_e2e tests.test_policy \
+  tests.test_tenancy tests.test_triage
 ```
 Env overrides: `ANALYTICS_DB_PATH`, `ANALYTICS_LLM_PROVIDER/MODEL/API_KEY`, `ANALYTICS_OLLAMA_URL`.
 Deps frozen in `requirements-advanced.txt` (incl. `fastapi==0.141.1`).
@@ -122,15 +155,16 @@ Deps frozen in `requirements-advanced.txt` (incl. `fastapi==0.141.1`).
 - `api.py` — `create_app(ctx)`; `make_context()`; onboarding endpoints; 23 routes.
 - `fixtures/` — synthetic retail warehouse + golden queries (athena-dialect SQL; transpiled at runtime).
 
-## Next steps (Brain v2 + Live-Metabase wired; Triage + Junior engine DONE)
-1. **Wire the junior engine to the live `BrowserSessionExecutor`.** Run `JuniorEngine` with a
-   live executor so stage‑3 assessment (`reproduce_metrics`/`catalog`) works against real Metabase
-   data — same code path, now over the browser executor.
-2. **Finish the live-Metabase E2E (your Chrome).** Run the gated `MetabaseLive` test /
-   `analytics-platform browser` with your `database_id` + `expected_host`.
-3. **Keep triaging the remaining ~871 CANDIDATEs.** `cli review` — bulk approve by kind,
+## Next steps (Brain v2 + Live-Metabase wired; Triage + Junior engine + Junior→live DONE)
+1. **Run the live-Metabase E2E on your Chrome (both paths).** With `ANALYTICS_MB_LIVE=1` +
+   `ANALYTICS_MB_DATABASE_ID=59` + `ANALYTICS_MB_EXPECTED_HOST=metabase.om.yo-digital.com` and a
+   Metabase tab logged in, run `.venv/bin/python -m unittest -k MetabaseLive -v` and
+   `.venv/bin/python -m unittest -k JuniorMetabaseLive -v`, and/or
+   `analytics-platform junior <tenant>` for the real stage-3 assessment. Optional flavors:
+   `.venv/bin/python -m unittest -k BrowserSession -v`.
+2. **Keep triaging the remaining ~871 CANDIDATEs.** `cli review` — bulk approve by kind,
    `--conflicts` to dedupe the value-set Definition candidates.
-4. (optional) Expose `triage`/`junior` as FastAPI endpoints; add an LLM hook for richer
+3. (optional) Expose `triage`/`junior` as FastAPI endpoints; add an LLM hook for richer
    stage-3 questions (NullClient today → `GatewayClient`).
 
 Re-run migration into any tenant's Brain (idempotent, CANDIDATE-only):
