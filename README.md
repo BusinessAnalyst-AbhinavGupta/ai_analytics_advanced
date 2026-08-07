@@ -60,6 +60,9 @@ tests/                  stdlib-unittest suite (56 tests)
 
 # API server (interactive: http://localhost:8000/docs)
 .venv/bin/python -m analytics_platform serve 8000
+
+# one-click launcher: starts the backend (if not already running), opens the UI
+./run_dashboard.command                  # http://localhost:8501
 ```
 ```bash
 # migrate a prototype knowledge-graph snapshot into a tenant's Brain
@@ -117,6 +120,10 @@ curl -s localhost:8000/junior/$TID/questions        # goal-aligned suggestion qu
 
 ### Standalone UI (thin Streamlit client)
 ```bash
+# recommended: one click — starts the API if needed, then opens the UI
+./run_dashboard.command                          # http://localhost:8501
+
+# manual (two terminals)
 # terminal 1 - the API
 .venv/bin/python -m analytics_platform serve 8000          # http://localhost:8000/docs
 # terminal 2 - the UI (thin APIClient -> the running API)
@@ -125,6 +132,9 @@ curl -s localhost:8000/junior/$TID/questions        # goal-aligned suggestion qu
 ANALYTICS_API_URL=http://localhost:8001 .venv/bin/streamlit run standalone_ui.py
 # (ANALYTICS_API_URL default http://localhost:8000)
 ```
+> `standalone_ui.py` is the CURRENT UI (Business / Junior / Triage / Stakeholder /
+> Research / Governance / Observability). `app.py` is the **legacy** SQL-generator UI
+> from the original prototype (`AI analytics/`) and is **not** launched anymore.
 
 ## Roadmap status
 - **P1–P3 foundation: DONE** — modular monolith, executor abstraction, deterministic policy,
@@ -205,9 +215,14 @@ ANALYTICS_API_URL=http://localhost:8001 .venv/bin/streamlit run standalone_ui.py
   **Observability** tab; `tests/test_phase9.py` + API/ui_client coverage. `AppContext` now exposes
   `scheduler` / `junior_worker`.
 
-Next per plan: (a) **senior-analyst review + human sign-off + promote/downgrade of the junior**
-(each analysis rendered to an MD file; depth scales with senior approval), (b) an **OpenRouter config
-panel** (list provider models via a live ping, save config, log config state/changes), then wire the
-operator tail for P8 (live OIDC/SSO + per-tenant browser profile) and the security tail (threat
-model / pen test / DR / SOC2 readiness). Senior review of the migrated Brain is complete
-(536 approved / 693 rejected).
+- **CP-10 Senior-analyst tool: DONE** — `senior.py` (`SeniorService`): per-analyst AI
+  toggles + model (junior / senior / stakeholder) stored per tenant (`analyst_configs`,
+  versioned in `analyst_config_history`); a senior **review inbox** over junior analyses
+  (approve / reject / revise → promote to a governed FINDING); the human plays the senior
+  role through the same surface when the senior AI is off (human-on-top). Config panel in
+  the UI; covered by the API + `ui_client` test suites.
+
+Next per plan: an **OpenRouter config panel** (list provider models via a live ping, save
+config, log config state/changes), then wire the operator tail for P8 (live OIDC/SSO +
+per-tenant browser profile) and the security tail (threat model / pen test / DR / SOC2
+readiness). Senior review of the migrated Brain is complete (536 approved / 693 rejected).
