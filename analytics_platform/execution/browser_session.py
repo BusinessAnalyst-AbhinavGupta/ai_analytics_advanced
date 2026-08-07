@@ -34,7 +34,9 @@ def build_osascript_command(js: str, host: str = "") -> List[str]:
     """AppleScript to run `js` in a Chrome tab whose URL contains `host`.
 
     When `host` is empty it falls back to the front window's active tab (the old
-    behaviour). Returns the osascript argv list; pure (no side effects).
+    behaviour). Chrome's `execute javascript` returns its value, so we must
+    `return` it — a bare `execute ... javascript ...` statement discards it and
+    osascript would print nothing. Returns the osascript argv list (pure).
     """
     quoted = _shell_quote(js)
     if host:
@@ -44,14 +46,13 @@ def build_osascript_command(js: str, host: str = "") -> List[str]:
             "repeat with w in windows\n"
             "  repeat with t in tabs of w\n"
             f"    if URL of t contains \"{safe_host}\" then\n"
-            f"      execute t javascript {quoted}\n"
             "      set found to true\n"
-            "      exit repeat\n"
+            f"      return (execute t javascript {quoted})\n"
             "    end if\n"
             "  end repeat\n"
-            "  if found then exit repeat\n"
             "end repeat\n"
-            f"if not found then execute front window's active tab javascript {quoted}"
+            "if not found then return (execute front window's active tab javascript "
+            + quoted + ")\n"
         )
         return ["osascript", "-e", f"tell application \"Google Chrome\"\n{body}\nend tell"]
     return [
@@ -104,13 +105,20 @@ RESET_JS = "window.__mb = {payload:null, ready:false}; 'reset'"
 
 
 def _build_execute_kick_js(payload: str) -> str:
-    """JS that kicks off the same-origin `/api/dataset` fetch, stashing into __mb."""
+    """JS that kicks off the same-origin `/api/dataset` fetch, stashing into __mb.
+
+    `fetch` requires a string body, so the JSON payload is embedded as a JS
+    string literal (`body:"{...}"`), never as a raw object (which fetch would
+    send as "[object Object]").
+    """
+    body_text = payload if isinstance(payload, str) else json.dumps(payload)
+    body_literal = json.dumps(body_text)   # JS string literal containing the JSON
     return (
         "window.__mb = {payload:null, ready:false};"
         "(function(){try{(async()=>{try{"
         "const r=await fetch('/api/dataset',{method:'POST',"
         "headers:{'content-type':'application/json'},body:"
-        + json.dumps(payload) +
+        + body_literal +
         "});const j=await r.json();"
         "if(j.error){window.__mb.payload=JSON.stringify({ok:false,error:j.error||'metabase_error'});}"
         "else{const cols=(j.data&&j.data.cols||[]).map(c=>c.name);"

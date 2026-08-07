@@ -56,6 +56,12 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
   are stashed in `window.__mb` and read back with separate synchronous calls
   (`PROBE_KICK_JS`/`_build_execute_kick_js`, `READ_STATE_JS`, `RESET_JS`, `_run_roundtrip()`).
   Offline stub `make_runner` now mirrors reset→kick→read. **95 tests (2 skipped).**
+- **CP-L6 — live Metabase E2E CONFIRMED (DONE)**: two more live bugs fixed — (1) the tab-loop
+  AppleScript used a bare `execute t javascript …` statement whose return value osascript
+  discards (→ empty); now `return (execute …)`. (2) `fetch` got a raw JS object body → Metabase
+  `Unrecognized token 'object'`; payload is now embedded as a JS string literal. Live run green:
+  `MetabaseLive` 2/2 **OK** on `metabase.om.yo-digital.com` DB 59 (session valid + `SELECT 1`).
+  **96 tests (2 skipped).**
 
 ## Progress — Triage (current)
 - **CP-T1 — service reads (DONE)**: `analytics_platform/triage.py` — `TriageService`

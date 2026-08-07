@@ -175,10 +175,11 @@ class TestOsascriptTargeting(unittest.TestCase):
         cmd = build_osascript_command("console.log('x')", "metabase.om.yo-digital.com")
         script = " ".join(cmd)
         self.assertIn("URL of t contains \"metabase.om.yo-digital.com\"", script)
-        self.assertIn("execute t javascript", script)
+        # the JS result must be RETURNED, not discarded by a bare statement
+        self.assertIn("return (execute t javascript", script)
         self.assertIn("console.log('x')", script)
         # fallback remains so a missing tab still reports instead of silently failing
-        self.assertIn("if not found then execute front window's active tab", script)
+        self.assertIn("return (execute front window's active tab", script)
 
     def test_build_command_no_host_uses_active_tab(self):
         cmd = build_osascript_command("console.log('x')")
@@ -190,6 +191,15 @@ class TestOsascriptTargeting(unittest.TestCase):
         from analytics_platform.execution.browser_session import Runner
         rn = make_osascript_runner(host="mb.example")
         self.assertTrue(callable(rn))
+
+    def test_execute_kick_embeds_body_as_string_literal(self):
+        from analytics_platform.execution.browser_session import _build_execute_kick_js
+        js = _build_execute_kick_js({"database": 59, "type": "native",
+                                     "native": {"query": "SELECT 1"}})
+        # fetch must receive a string body, not a raw object -> "[object Object]"
+        self.assertNotIn("body:{", js)
+        self.assertIn('body:"', js)
+        self.assertIn("database", js)
 
     def test_executor_default_runner_targets_expected_host(self):
         ex = BrowserSessionExecutor(database_id=1, expected_host="mb.example.com")
