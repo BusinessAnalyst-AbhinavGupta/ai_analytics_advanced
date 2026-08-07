@@ -44,6 +44,8 @@ class Settings:
     junior_work_end: str = "19:00"      # junior background window end
     junior_min_interval_minutes: int = 60  # one problem statement per hour max
     junior_daily_cap: int = 3           # at most N junior analyses per UTC day
+    junior_llm_cache_ttl_minutes: int = 60  # LLM enrichment cached per tenant (bill guard)
+    llm_daily_cap: int = 20         # at most N LLM generations per tenant per UTC day (persisted)
     junior_human_signoff_days: int = 7 # initial window: every analysis -> human review
 
     def resolve_db_path(self) -> str:
@@ -89,6 +91,10 @@ class Settings:
                 os.environ.get("ANALYTICS_JUNIOR_MIN_INTERVAL_MINUTES", "60")),
             junior_daily_cap=int(
                 os.environ.get("ANALYTICS_JUNIOR_DAILY_CAP", "3")),
+            junior_llm_cache_ttl_minutes=int(
+                os.environ.get("ANALYTICS_JUNIOR_LLM_CACHE_TTL_MINUTES", "60")),
+            llm_daily_cap=int(
+                os.environ.get("ANALYTICS_LLM_DAILY_CAP", "20")),
             junior_human_signoff_days=int(
                 os.environ.get("ANALYTICS_JUNIOR_HUMAN_SIGNOFF_DAYS", "7")),
         )

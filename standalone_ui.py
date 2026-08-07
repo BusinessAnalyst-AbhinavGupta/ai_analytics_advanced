@@ -30,6 +30,32 @@ def _client() -> APIClient:
     return st.session_state.client
 
 
+# CP-13 bill guard: cache the expensive junior reads per tenant so Streamlit
+# reruns (any checkbox/button tick) never re-hit the LLM or re-probe Metabase.
+# The LLM enrichment is additionally throttled server-side (see JuniorEngine).
+_CACHE_TTL_S = 3600
+
+
+@st.cache_data(ttl=_CACHE_TTL_S, show_spinner=False)
+def _cached_junior_stage(tenant: str, limit: int) -> dict:
+    return _client().junior_stage(tenant, limit=limit)
+
+
+@st.cache_data(ttl=_CACHE_TTL_S, show_spinner=False)
+def _cached_junior_questions(tenant: str) -> dict:
+    return _client().junior_questions(tenant)
+
+
+@st.cache_data(ttl=_CACHE_TTL_S, show_spinner=False)
+def _cached_junior_hypotheses(tenant: str) -> dict:
+    return _client().junior_hypotheses(tenant)
+
+
+@st.cache_data(ttl=_CACHE_TTL_S, show_spinner=False)
+def _cached_junior_catalog(tenant: str) -> dict:
+    return _client().junior_catalog(tenant)
+
+
 def _guarded(fn):
     """Run an API call; return None and show the error on failure."""
     try:
@@ -613,14 +639,17 @@ if tenant:
         _business_context_tab(tenant)
     with tabs[1]:
         st.subheader("Junior maturity stage")
-        st.json(_guarded(lambda: _client().junior_stage(tenant)) or {})
+        if st.button("Refresh junior data", key=f"jr_refresh_{tenant}"):
+            st.cache_data.clear()
+            st.rerun()
+        st.json(_guarded(lambda: _cached_junior_stage(tenant, 3)) or {})
         jcfg = _guarded(lambda: _client().get_analyst_config(tenant)) or {}
         st.caption(f"Junior question depth: **{jcfg.get('depth_label', 'standard')}** "
                    f"({int(jcfg.get('junior_depth', 1))}/2)")
         st.subheader("Suggested questions (depth-scaled)")
-        st.json(_guarded(lambda: _client().junior_questions(tenant)) or {})
+        st.json(_guarded(lambda: _cached_junior_questions(tenant)) or {})
         st.subheader("Business hypotheses (depth-scaled)")
-        st.json(_guarded(lambda: _client().junior_hypotheses(tenant)) or {})
+        st.json(_guarded(lambda: _cached_junior_hypotheses(tenant)) or {})
         st.subheader("Run next junior analysis (test drive)")
         jrun = st.columns([2, 1])
         jrun_force = jrun[0].checkbox(
@@ -638,8 +667,7 @@ if tenant:
             else:
                 st.warning(f"Did not run: {res.get('reason')}")
         st.subheader("Catalog (schema / EDA)")
-        st.subheader("Catalog (schema / EDA)")
-        st.json(_guarded(lambda: _client().junior_catalog(tenant)) or {})
+        st.json(_guarded(lambda: _cached_junior_catalog(tenant)) or {})
 
     with tabs[2]:
         summary = _guarded(lambda: _client().triage_summary(tenant)) or {}

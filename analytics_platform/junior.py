@@ -16,6 +16,8 @@ real data source.
 """
 from __future__ import annotations
 
+import threading
+import time
 from typing import Any, Dict, List, Optional
 
 from .brain.store import CompanyBrain
@@ -30,12 +32,20 @@ _HYP_EXPLAIN = "'{0}' moved this period — what business driver explains it?"
 _HYP_SEGMENT = "A specific segment (channel / cohort / region) drove '{0}' — which one?"
 _HYP_BASELINE = "'{0}' changed because the underlying behaviour shifted, not the definition — verify against the baseline."
 
+# Process-wide LLM enrichment cache (CP-13 bill guard). The API builds a fresh
+# JuniorEngine per request, so the cache must live at module scope to actually
+# throttle cross-request calls (UI reruns, schedulers, other clients).
+_LLM_ENRICH_CACHE: Dict[tuple, tuple] = {}   # key -> (ts, lines_text)
+_LLM_ENRICH_LOCK = threading.Lock()
+
 
 class JuniorEngine:
     def __init__(self, store: Store, executor: Optional[QueryExecutor] = None,
                  tenants: Optional[TenantService] = None,
                  observability: Optional[Observability] = None,
-                 llm: Optional[Any] = None):
+                 llm: Optional[Any] = None,
+                 llm_cache_ttl_minutes: int = 60,
+                 llm_daily_cap: int = 20):
         from .execution.sampler import SamplerExecutor
         from .llm.client import NullClient
         self.store = store
@@ -43,6 +53,53 @@ class JuniorEngine:
         self.tenants = tenants or TenantService(store)
         self.obs = observability or Observability(store)
         self.llm = llm or NullClient()  # injectable; NullClient (offline) by default
+        self.llm_cache_ttl_seconds = int(llm_cache_ttl_minutes) * 60
+        self.llm_daily_cap = int(llm_daily_cap)
+
+    # -- LLM enrichment cache + daily budget (bill guard) --------------------
+    def _llm_cache_key(self, tenant_id: str, kind: str, depth: int) -> tuple:
+        return (tenant_id, kind, int(depth))
+
+    def _llm_cache_get(self, key: tuple) -> Optional[str]:
+        with _LLM_ENRICH_LOCK:
+            entry = _LLM_ENRICH_CACHE.get(key)
+            if not entry:
+                return None
+            ts, text = entry
+            if time.time() - ts < self.llm_cache_ttl_seconds:
+                return text
+        return None
+
+    def _llm_cache_put(self, key: tuple, text: str) -> None:
+        with _LLM_ENRICH_LOCK:
+            _LLM_ENRICH_CACHE[key] = (time.time(), text)
+
+    def _llm_budget_key(self, tenant_id: str) -> str:
+        return f"llm_daily:{tenant_id}:{time.strftime('%Y-%m-%d', time.gmtime())}"
+
+    def _llm_budget_ok(self, tenant_id: str) -> bool:
+        try:
+            row = self.store.query_one(
+                "SELECT value FROM scheduler_state WHERE key=?", (self._llm_budget_key(tenant_id),))
+            used = int(float(row["value"])) if row and row["value"] else 0
+            return used < self.llm_daily_cap
+        except Exception:  # noqa: BLE001 - best-effort
+            return True
+
+    def _llm_spend(self, tenant_id: str) -> None:
+        try:
+            key = self._llm_budget_key(tenant_id)
+            row = self.store.query_one(
+                "SELECT value FROM scheduler_state WHERE key=?", (key,))
+            used = int(float(row["value"])) if row and row["value"] else 0
+            self.store.execute(
+                "INSERT INTO scheduler_state (key,value,updated_at) VALUES (?,?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value, "
+                "updated_at=excluded.updated_at",
+                (key, str(used + 1),
+                 time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())))
+        except Exception:  # noqa: BLE001 - best-effort
+            pass
 
     def brain(self, tenant_id: str) -> CompanyBrain:
         return CompanyBrain(self.store, tenant_id)
@@ -275,13 +332,32 @@ class JuniorEngine:
 
     def _enrich_with_llm(self, tenant_id: str, suggestions: List[Dict[str, Any]],
                          profile: Optional[Any]) -> None:
-        """Optional LLM-authored questions (only when a live client is wired).
+        """Optional LLM-authored questions, throttled (CP-13).
 
-        Purely additive: never removes the deterministic suggestions, never sends
-        raw rows/sql/cookies to the LLM (only targets + existing question text),
-        and a failure is logged as observability, never raised.
+        Additive only; deterministic suggestions are never removed and raw
+        rows/sql/cookies are never sent. The OpenRouter call fires at most once
+        per `llm_cache_ttl_minutes` per (tenant, depth), and at most
+        `llm_daily_cap` times per UTC day (persisted) — so UI reruns and
+        background calls share the budget and cannot multiply the bill.
         """
         if not self._llm_live():
+            return
+        depth = self.junior_depth(tenant_id)
+        key = self._llm_cache_key(tenant_id, "questions", depth)
+        cached = self._llm_cache_get(key)
+        if cached is not None:
+            added = 0
+            for line in self._llm_lines(cached, 2):
+                suggestions.append({"target": "", "category": "llm", "priority": 0,
+                                    "question": line, "columns": [], "source": "llm"})
+                added += 1
+            self.obs.event(tenant_id=tenant_id, stage="junior.suggest.llm", actor="junior",
+                           status="CACHED", meta={"added": added})
+            return
+        if not self._llm_budget_ok(tenant_id):
+            self.obs.event(tenant_id=tenant_id, stage="junior.suggest.llm", actor="junior",
+                           status="BUDGET_EXCEEDED",
+                           meta={"daily_cap": self.llm_daily_cap})
             return
         targets = list(profile.targets) if profile else []
         context = "\n".join(f"- {s['question']}" for s in suggestions) or "no approved targets yet"
@@ -295,21 +371,39 @@ class JuniorEngine:
             res = self.llm.generate(prompt=prompt, system_prompt=(
                 "You are a senior product-analytics assistant. Be concrete and measurable."),
                 temperature=0.3)
-            added = 0
-            for line in self._llm_lines(res.text, 2):
+            lines = self._llm_lines(res.text, 2)
+            for line in lines:
                 suggestions.append({"target": "", "category": "llm", "priority": 0,
                                     "question": line, "columns": [], "source": "llm"})
-                added += 1
+            if lines:
+                self._llm_cache_put(key, "\n".join(lines))
+                self._llm_spend(tenant_id)
             self.obs.event(tenant_id=tenant_id, stage="junior.suggest.llm", actor="junior",
-                           tokens_out=getattr(res, "tokens_out", 0), meta={"added": added})
+                           tokens_out=getattr(res, "tokens_out", 0), meta={"added": len(lines)})
         except Exception as e:  # noqa: BLE001 - LLM is an optional enhancement
             self.obs.event(tenant_id=tenant_id, stage="junior.suggest.llm", actor="junior",
                            status="FAILED", meta={"error": str(e)})
 
     def _enrich_hypotheses_llm(self, tenant_id: str, hyps: List[Dict[str, Any]],
                                profile: Optional[Any], depth: int) -> None:
-        """Optional LLM-authored business hypotheses, additive, depth-scaled."""
+        """Optional LLM-authored business hypotheses, additive + throttled (CP-13)."""
         if not self._llm_live() or depth < 2:
+            return
+        key = self._llm_cache_key(tenant_id, "hypotheses", depth)
+        cached = self._llm_cache_get(key)
+        if cached is not None:
+            added = 0
+            for line in self._llm_lines(cached, 2):
+                hyps.append({"target": "", "category": "llm",
+                             "hypothesis": line, "testable": True, "source": "llm"})
+                added += 1
+            self.obs.event(tenant_id=tenant_id, stage="junior.hypotheses.llm", actor="junior",
+                           status="CACHED", meta={"depth": depth, "added": added})
+            return
+        if not self._llm_budget_ok(tenant_id):
+            self.obs.event(tenant_id=tenant_id, stage="junior.hypotheses.llm", actor="junior",
+                           status="BUDGET_EXCEEDED",
+                           meta={"daily_cap": self.llm_daily_cap, "depth": depth})
             return
         targets = list(profile.targets) if profile else []
         context = "\n".join(f"- {h['hypothesis']}" for h in hyps) or "no approved targets yet"
@@ -324,14 +418,16 @@ class JuniorEngine:
                 "You are a senior product-analytics assistant. Hypotheses must be "
                 "specific and falsifiable with the company's own data."),
                 temperature=0.4)
-            added = 0
-            for line in self._llm_lines(res.text, 2):
+            lines = self._llm_lines(res.text, 2)
+            for line in lines:
                 hyps.append({"target": "", "category": "llm",
                              "hypothesis": line, "testable": True, "source": "llm"})
-                added += 1
+            if lines:
+                self._llm_cache_put(key, "\n".join(lines))
+                self._llm_spend(tenant_id)
             self.obs.event(tenant_id=tenant_id, stage="junior.hypotheses.llm", actor="junior",
                            tokens_out=getattr(res, "tokens_out", 0),
-                           meta={"depth": depth, "added": added})
+                           meta={"depth": depth, "added": len(lines)})
         except Exception as e:  # noqa: BLE001 - LLM is an optional enhancement
             self.obs.event(tenant_id=tenant_id, stage="junior.hypotheses.llm", actor="junior",
                            status="FAILED", meta={"error": str(e)})
