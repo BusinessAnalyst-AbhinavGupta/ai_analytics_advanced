@@ -27,6 +27,17 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
   and CLI end-to-end. README roadmap marked **Brain v2 migration DONE**; this doc refreshed.
   **Brain v2 migration is complete (56/56 tests).**
 
+## Progress — Live Metabase bind (current)
+- **CP-L1 — config + factory (DONE)**: `config.py` gained `ANALYTICS_MB_LIVE/HOST/DATABASE_ID/EXPECTED_HOST`
+  → `Settings.metabase_live/base_url/database_id/expected_host` (+`from_env`). `BrowserSessionExecutor`
+  gained `from_env(runner=...)` classmethod + module `make_live_executor(settings=...)`; exported from
+  `execution/`. database_id parsed to int when numeric. **62/62 tests.**
+- **CP-L2 — CLI `browser` live command (PENDING)**: `cli.py` subcommand `analytics-platform browser
+  [--sql ...] [--database-id N] [--expected-host HOST]`; reports `session_status()` and runs a read-only
+  query with fail-with-pause.
+- **CP-L3 — gated live test + docs (PENDING)**: `tests/test_metabase_live.py` (skip unless
+  `ANALYTICS_MB_LIVE=1`), README + this doc refresh.
+
 ## How to run (all in repo root)
 ```bash
 .venv/bin/python -m analytics_platform.cli demo      # offline E2E demo (synthetic company)

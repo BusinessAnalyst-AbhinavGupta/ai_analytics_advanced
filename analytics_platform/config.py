@@ -26,6 +26,10 @@ class Settings:
     source_dialect: str = "athena"      # dialect the SQL is authored in (executors transpile if needed)
     policy: PolicySettings = field(default_factory=PolicySettings)
     data_dir: str = ""                 # synthetic / sampled warehouse loader dir
+    metabase_live: bool = False        # gate for live Metabase executors/tests (ANALYTICS_MB_LIVE=1)
+    metabase_base_url: str = ""        # Metabase URL (informational; same-origin fetch uses the tab)
+    metabase_database_id: Any = ""     # Metabase DB id (str or int) to query
+    metabase_expected_host: str = ""   # hostname guard (anti-tenant-bleed)
 
     def resolve_db_path(self) -> str:
         if self.db_path:
@@ -43,6 +47,10 @@ class Settings:
             llm_model=os.environ.get("ANALYTICS_LLM_MODEL", "deepseek/deepseek-v4-flash-0731"),
             llm_api_key=os.environ.get("ANALYTICS_LLM_API_KEY", ""),
             ollama_base_url=os.environ.get("ANALYTICS_OLLAMA_URL", "http://localhost:11434"),
+            metabase_live=os.environ.get("ANALYTICS_MB_LIVE") == "1",
+            metabase_base_url=os.environ.get("ANALYTICS_MB_HOST", ""),
+            metabase_database_id=os.environ.get("ANALYTICS_MB_DATABASE_ID", ""),
+            metabase_expected_host=os.environ.get("ANALYTICS_MB_EXPECTED_HOST", ""),
         )
 
     def to_dict(self) -> Dict[str, Any]:

@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import json
+import os
 import unittest
 
+from analytics_platform.config import Settings
 from analytics_platform.execution.base import ExecutionContext
 from analytics_platform.execution.browser_session import (
     BrowserSessionExecutor,
     SessionUnavailable,
+    make_live_executor,
 )
 
 
@@ -94,6 +97,65 @@ class TestBrowserSession(unittest.TestCase):
                                                        exec_payload(rows=rows, cols=["x"])))
         r = ex.execute("SELECT 1", ExecutionContext(tenant_id="t"))
         self.assertEqual(r.row_count, 10)
+
+
+class TestBrowserFromEnv(unittest.TestCase):
+    ENV = ("ANALYTICS_MB_LIVE", "ANALYTICS_MB_HOST", "ANALYTICS_MB_DATABASE_ID",
+           "ANALYTICS_MB_EXPECTED_HOST")
+
+    def setUp(self):
+        self._saved = {k: os.environ.get(k) for k in self.ENV}
+        for k in self.ENV:
+            os.environ.pop(k, None)
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def test_from_env_defaults_absent(self):
+        ex = BrowserSessionExecutor.from_env()
+        self.assertIsNone(ex.config.database_id)
+        self.assertEqual(ex.config.expected_host, "")
+        self.assertEqual(ex.base_url, "")
+
+    def test_from_env_parses_int_database_id(self):
+        os.environ["ANALYTICS_MB_DATABASE_ID"] = "42"
+        os.environ["ANALYTICS_MB_EXPECTED_HOST"] = "metabase.acme.internal"
+        os.environ["ANALYTICS_MB_HOST"] = "https://metabase.acme.internal"
+        ex = BrowserSessionExecutor.from_env()
+        self.assertEqual(ex.config.database_id, 42)
+        self.assertEqual(ex.config.expected_host, "metabase.acme.internal")
+        self.assertEqual(ex.base_url, "https://metabase.acme.internal")
+
+    def test_make_live_executor_from_settings(self):
+        s = Settings(metabase_database_id="7", metabase_expected_host="mb.example.com",
+                     metabase_base_url="https://mb.example.com")
+        ex = make_live_executor(s)
+        self.assertEqual(ex.config.database_id, 7)
+        self.assertEqual(ex.config.expected_host, "mb.example.com")
+
+    def test_make_live_executor_defaults_env(self):
+        os.environ["ANALYTICS_MB_DATABASE_ID"] = "99"
+        os.environ["ANALYTICS_MB_EXPECTED_HOST"] = "mb.env.example"
+        ex = make_live_executor()
+        self.assertEqual(ex.config.database_id, 99)
+        self.assertEqual(ex.config.expected_host, "mb.env.example")
+
+    def test_settings_live_gate_from_env(self):
+        self.assertFalse(Settings.from_env().metabase_live)
+        os.environ["ANALYTICS_MB_LIVE"] = "1"
+        self.assertTrue(Settings.from_env().metabase_live)
+
+    def test_from_env_executes_offline_with_stub_runner(self):
+        os.environ["ANALYTICS_MB_DATABASE_ID"] = "5"
+        ex = BrowserSessionExecutor.from_env(
+            runner=make_runner(probe_payload(), exec_payload(rows=[[1]], cols=["x"])))
+        r = ex.execute("SELECT 1", ExecutionContext(tenant_id="t"))
+        self.assertTrue(r.ok)
+        self.assertEqual(r.row_count, 1)
 
 
 if __name__ == "__main__":

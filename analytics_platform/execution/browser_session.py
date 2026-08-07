@@ -77,6 +77,21 @@ class BrowserSessionExecutor(QueryExecutor):
                                             timeout_s=timeout_s, max_rows=max_rows)
         self._runner = runner or osascript_runner  # default = production AppleScript
 
+    @classmethod
+    def from_env(cls, runner: Optional[Runner] = None) -> "BrowserSessionExecutor":
+        """Build a live executor from ANALYTICS_MB_* env vars (offline-testable)."""
+        import os
+        raw_id = os.environ.get("ANALYTICS_MB_DATABASE_ID", "").strip()
+        database_id: Any = raw_id
+        if raw_id.isdigit():
+            database_id = int(raw_id)
+        return cls(
+            metabase_base_url=os.environ.get("ANALYTICS_MB_HOST", ""),
+            database_id=database_id or None,
+            expected_host=os.environ.get("ANALYTICS_MB_EXPECTED_HOST", ""),
+            runner=runner,
+        )
+
     def supports(self, ctx: ExecutionContext) -> bool:
         return True
 
@@ -176,5 +191,21 @@ class SessionUnavailable(Exception):
         self.status = status
 
 
+def make_live_executor(settings: Optional["Settings"] = None) -> BrowserSessionExecutor:
+    """Build a live BrowserSessionExecutor from Settings (defaults to env)."""
+    if settings is None:
+        from ..config import Settings
+        settings = Settings.from_env()
+    raw_id = settings.metabase_database_id or ""
+    database_id: Any = raw_id
+    if isinstance(raw_id, str) and raw_id.isdigit():
+        database_id = int(raw_id)
+    return BrowserSessionExecutor(
+        metabase_base_url=settings.metabase_base_url,
+        database_id=database_id or None,
+        expected_host=settings.metabase_expected_host,
+    )
+
+
 __all__ = ["BrowserSessionExecutor", "SessionUnavailable", "BrowserExecutorConfig",
-           "osascript_runner", "PROBE_JS"]
+           "osascript_runner", "PROBE_JS", "make_live_executor"]
