@@ -36,6 +36,13 @@ class Settings:
     oidc_issuer: str = ""              # optional OIDC issuer to trust (verify-sig seam; no secret at rest)
     cost_per_1k_input: float = 0.30    # USD per 1k tokens for usage metering
     cost_per_1k_output: float = 1.20
+    # Phase 9 — owner-facing observability + background junior ------------------
+    log_retention_days: int = 30        # API logs kept this long before purge
+    maintenance_interval_days: int = 7  # weekly auto-trigger of log clean-up
+    scheduler_enabled: bool = False     # background scheduler (serve-only; env WATCHER)
+    junior_work_start: str = "10:00"   # junior background window start (system time)
+    junior_work_end: str = "19:00"      # junior background window end
+    junior_min_interval_minutes: int = 60  # one problem statement per hour max
 
     def resolve_db_path(self) -> str:
         if self.db_path:
@@ -62,6 +69,13 @@ class Settings:
             oidc_issuer=os.environ.get("ANALYTICS_OIDC_ISSUER", ""),
             cost_per_1k_input=float(os.environ.get("ANALYTICS_COST_PER_1K_IN", "0.30")),
             cost_per_1k_output=float(os.environ.get("ANALYTICS_COST_PER_1K_OUT", "1.20")),
+            log_retention_days=int(os.environ.get("ANALYTICS_LOG_RETENTION_DAYS", "30")),
+            maintenance_interval_days=int(os.environ.get("ANALYTICS_MAINT_INTERVAL_DAYS", "7")),
+            scheduler_enabled=os.environ.get("ANALYTICS_WATCHER") == "1",
+            junior_work_start=os.environ.get("ANALYTICS_JUNIOR_WORK_START", "10:00"),
+            junior_work_end=os.environ.get("ANALYTICS_JUNIOR_WORK_END", "19:00"),
+            junior_min_interval_minutes=int(
+                os.environ.get("ANALYTICS_JUNIOR_MIN_INTERVAL_MINUTES", "60")),
         )
 
     def to_dict(self) -> Dict[str, Any]:

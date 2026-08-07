@@ -6,7 +6,7 @@ platform — per the plan's "Streamlit as a thin API client" (React/Next later,
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import requests
 
@@ -27,6 +27,29 @@ class APIClient:
 
     def create_tenant(self, name: str) -> Dict[str, Any]:
         return self._req("POST", "/tenants", json={"name": name})
+
+    def get_tenant(self, tenant: str) -> Dict[str, Any]:
+        """Tenant row + its company profile (the analysts' business context)."""
+        return self._req("GET", f"/tenants/{tenant}")
+
+    def set_profile(self, tenant: str, profile: Dict[str, Any]) -> Dict[str, Any]:
+        """Persist company/business context (description, OKRs/targets, metrics)."""
+        return self._req("PUT", f"/tenants/{tenant}/company-profile", json=profile)
+
+    def profile_history(self, tenant: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """Versioned history of business-context changes (config panel)."""
+        return self._req("GET", f"/tenants/{tenant}/company-profile/history",
+                         params={"limit": limit})
+
+    def list_datasources(self, tenant: str) -> List[Dict[str, Any]]:
+        return self._req("GET", f"/tenants/{tenant}/datasources")
+
+    def add_datasource(self, tenant: str, name: str, kind: str = "direct_db",
+                       dialect: str = "athena", tables: Optional[List[str]] = None,
+                       connected: bool = True) -> Dict[str, Any]:
+        return self._req("POST", f"/tenants/{tenant}/datasources",
+                         json={"name": name, "kind": kind, "dialect": dialect,
+                               "tables": tables or [], "connected": connected})
 
     # -- junior (read-only) ------------------------------------------------
     def junior_stage(self, tenant: str, limit: int = 200) -> Dict[str, Any]:
@@ -120,6 +143,21 @@ class APIClient:
     # -- P8 governance -----------------------------------------------------
     def billing_usage(self, tenant: str) -> Dict[str, Any]:
         return self._req("GET", f"/billing/{tenant}/usage")
+
+    # -- Phase 9 observability (owner-facing) -----------------------------
+    def observability_status(self) -> Dict[str, Any]:
+        return self._req("GET", "/observability/status")
+
+    def observability_logs(self, tenant: str = "", limit: int = 200) -> Dict[str, Any]:
+        return self._req("GET", "/observability/logs",
+                         params={"tenant_id": tenant, "limit": limit})
+
+    def observability_purge(self) -> Dict[str, Any]:
+        return self._req("POST", "/observability/purge")
+
+    def observability_junior_run(self, tenant: str = "") -> Dict[str, Any]:
+        return self._req("POST", "/observability/junior/run",
+                         params={"tenant_id": tenant})
 
 
 __all__ = ["APIClient"]

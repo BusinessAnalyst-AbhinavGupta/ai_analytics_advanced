@@ -194,7 +194,20 @@ ANALYTICS_API_URL=http://localhost:8001 .venv/bin/streamlit run standalone_ui.py
   `retention.py` (per-tenant purge + full tenant deletion with audit). `/auth`, `/billing/*`,
   `/retention/*`, `DELETE /tenants/{tid}`. `tests/test_governance_auth.py` +
   `tests/test_governance_retention.py`.
+- **P9 Metric/Observability layer (owner-facing): DONE (core)** — `api_logs` table + an HTTP
+  access-log middleware (`create_app`) recording every request (30-day retention, no credentials);
+  `analytics_platform/scheduler.py` `Scheduler` auto-purges API logs **weekly** (persisted due-state,
+  `ANALYTICS_WATCHER=1` + `uvicorn analytics_platform.serve:make_serve --factory`); an autonomous
+  background **`JuniorWorker`** (`analytics_platform/junior_worker.py`) that runs only inside its
+  system-time window (default 10:00–19:00, `ANALYTICS_JUNIOR_WORK_START/END`), **one problem
+  statement per hour** (`ANALYTICS_JUNIOR_MIN_INTERVAL_MINUTES`), executing **serially** (single-flight
+  lock — never two queries at once). Routes `/observability/{status,logs,purge,junior/run}`; a UI
+  **Observability** tab; `tests/test_phase9.py` + API/ui_client coverage. `AppContext` now exposes
+  `scheduler` / `junior_worker`.
 
-Next per plan: wire the operator tail for P6–P8 (live OIDC/SSO + per-tenant browser profile, real
-approved search providers, retention scheduler), then the security tail (threat model / pen test /
-DR / SOC2 readiness). Senior review of the migrated Brain is complete (536 approved / 693 rejected).
+Next per plan: (a) **senior-analyst review + human sign-off + promote/downgrade of the junior**
+(each analysis rendered to an MD file; depth scales with senior approval), (b) an **OpenRouter config
+panel** (list provider models via a live ping, save config, log config state/changes), then wire the
+operator tail for P8 (live OIDC/SSO + per-tenant browser profile) and the security tail (threat
+model / pen test / DR / SOC2 readiness). Senior review of the migrated Brain is complete
+(536 approved / 693 rejected).

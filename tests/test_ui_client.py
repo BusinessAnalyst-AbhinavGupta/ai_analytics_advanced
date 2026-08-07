@@ -76,6 +76,77 @@ class TestAPIClient(unittest.TestCase):
                           "by": "senior", "notes": "dedupe group"})
 
 
+    def test_get_tenant_returns_profile(self):
+        with self._patch({"tenant": {"id": "t1"}, "profile": {"name": "Biz"}}) as m:
+            out = APIClient("http://x").get_tenant("t1")
+        self.assertEqual(out["profile"]["name"], "Biz")
+        self.assertEqual(m.call_args[0][0], "GET")
+        self.assertEqual(m.call_args[0][1], "http://x/tenants/t1")
+
+    def test_set_profile_posts_business_context(self):
+        with self._patch({"tenant_id": "t1", "profile": {"name": "Biz"}}) as m:
+            out = APIClient("http://x").set_profile("t1", {"name": "Biz", "targets": []})
+        self.assertEqual(out["profile"]["name"], "Biz")
+        self.assertEqual(m.call_args[0][0], "PUT")
+        self.assertEqual(m.call_args[0][1], "http://x/tenants/t1/company-profile")
+        self.assertEqual(m.call_args[1]["json"], {"name": "Biz", "targets": []})
+
+    def test_list_datasources(self):
+        with self._patch([{"name": "Events", "tables": ["t1"]}]) as m:
+            out = APIClient("http://x").list_datasources("t1")
+        self.assertEqual(out[0]["tables"], ["t1"])
+        self.assertEqual(m.call_args[0][1], "http://x/tenants/t1/datasources")
+
+    def test_add_datasource_posts(self):
+        with self._patch({"datasource_id": "ds1"}) as m:
+            out = APIClient("http://x").add_datasource("t1", "Events", dialect="athena",
+                                                       tables=["t1", "t2"])
+        self.assertEqual(out["datasource_id"], "ds1")
+        self.assertEqual(m.call_args[0][0], "POST")
+        self.assertEqual(m.call_args[0][1], "http://x/tenants/t1/datasources")
+        self.assertEqual(m.call_args[1]["json"],
+                         {"name": "Events", "kind": "direct_db", "dialect": "athena",
+                          "tables": ["t1", "t2"], "connected": True})
+
+    def test_profile_history_fetches_versions(self):
+        with self._patch([{"version": 2, "changed_by": "x", "snapshot": {}}]) as m:
+            out = APIClient("http://x").profile_history("t1", limit=50)
+        self.assertEqual(out[0]["version"], 2)
+        self.assertEqual(m.call_args[0][0], "GET")
+        self.assertEqual(m.call_args[0][1], "http://x/tenants/t1/company-profile/history")
+        self.assertEqual(m.call_args[1]["params"], {"limit": 50})
+
+    # -- Phase 9 observability client ------------------------------------
+    def test_observability_status(self):
+        with self._patch({"retention_days": 30, "purge": {}}) as m:
+            out = APIClient("http://x").observability_status()
+        self.assertEqual(out["retention_days"], 30)
+        self.assertEqual(m.call_args[0][0], "GET")
+        self.assertEqual(m.call_args[0][1], "http://x/observability/status")
+
+    def test_observability_logs(self):
+        with self._patch({"logs": [{"status": 200}]}) as m:
+            out = APIClient("http://x").observability_logs(tenant="t1", limit=50)
+        self.assertEqual(out["logs"][0]["status"], 200)
+        self.assertEqual(m.call_args[0][1], "http://x/observability/logs")
+        self.assertEqual(m.call_args[1]["params"], {"tenant_id": "t1", "limit": 50})
+
+    def test_observability_purge(self):
+        with self._patch({"ran": True, "expired_rows": 0}) as m:
+            out = APIClient("http://x").observability_purge()
+        self.assertEqual(out["ran"], True)
+        self.assertEqual(m.call_args[0][0], "POST")
+        self.assertEqual(m.call_args[0][1], "http://x/observability/purge")
+
+    def test_observability_junior_run(self):
+        with self._patch({"ran": False, "reason": "outside_window"}) as m:
+            out = APIClient("http://x").observability_junior_run(tenant="t1")
+        self.assertEqual(out["reason"], "outside_window")
+        self.assertEqual(m.call_args[0][0], "POST")
+        self.assertEqual(m.call_args[0][1], "http://x/observability/junior/run")
+        self.assertEqual(m.call_args[1]["params"], {"tenant_id": "t1"})
+
+
 class TestUIAPIConnectivity(unittest.TestCase):
     """Requirement 5.4: every front-end control is wired to an API client method."""
 

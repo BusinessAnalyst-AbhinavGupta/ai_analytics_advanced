@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from .database import Store, dump_json, load_json
 from .domain import (CompanyProfile, CompanyTarget, DataSource, DataSourceKind,
-                     Tenant, TenantStatus, new_id)
+                     Tenant, TenantStatus, new_id, now_iso)
 
 
 class TenantService:
@@ -50,7 +50,8 @@ class TenantService:
         return self.store.rows_to_dicts(self.store.query_all("SELECT * FROM tenants ORDER BY created_at"))
 
     # -- company profile -------------------------------------------------------
-    def set_company_profile(self, tenant_id: str, profile: Dict[str, Any]) -> CompanyProfile:
+    def set_company_profile(self, tenant_id: str, profile: Dict[str, Any],
+                            changed_by: str = "owner") -> CompanyProfile:
         self.require_tenant(tenant_id)
         targets = [CompanyTarget(t["name"], **{k: v for k, v in t.items() if k != "name"})
                    if not isinstance(t, CompanyTarget) else t
@@ -83,7 +84,31 @@ class TenantService:
              p.product, p.value_creation, p.revenue_model,
              dump_json(p.constraints), dump_json(p.risks), dump_json(p.competitors),
              dump_json(p.preferred_metrics), dump_json([t.to_dict() for t in p.targets])))
+        # versioned history snapshot (business context changes over time) ---------
+        previous = self.store.query_one(
+            "SELECT COALESCE(MAX(version), 0) AS v FROM company_profile_history "
+            "WHERE tenant_id=?", (tenant_id,))
+        version = (previous["v"] if previous else 0) + 1
+        self.store.execute(
+            "INSERT INTO company_profile_history "
+            "(id, tenant_id, version, snapshot, changed_by, created_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (new_id("cph"), tenant_id, version, dump_json(p.to_dict()),
+             changed_by, now_iso()))
         return p
+
+    def get_company_profile_history(self, tenant_id: str,
+                                    limit: int = 20) -> List[Dict[str, Any]]:
+        """Config-panel history: every profile version (business context over time)."""
+        rows = self.store.query_all(
+            "SELECT * FROM company_profile_history WHERE tenant_id=? "
+            "ORDER BY version DESC LIMIT ?", (tenant_id, limit))
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["snapshot"] = load_json(d.get("snapshot"), {})
+            out.append(d)
+        return out
 
     def get_company_profile(self, tenant_id: str) -> Optional[CompanyProfile]:
         row = self.store.query_one("SELECT * FROM company_profiles WHERE tenant_id=?", (tenant_id,))

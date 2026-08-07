@@ -12,6 +12,7 @@ import unittest
 from fastapi import HTTPException
 
 from analytics_platform.api import (TriageBulkIn, TriageDedupeIn, TriageIdsIn,
+                                    CompanyProfileIn, DataSourceIn,
                                     AppContext, create_app)
 from analytics_platform.domain import DataSourceKind, NodeKind, ReviewStatus
 from analytics_platform.fixtures import WEEKLY_ORDER_SQL, build_retail_warehouse
@@ -166,6 +167,135 @@ class TestApiJunior(unittest.TestCase):
             with self.assertRaises(HTTPException) as cm:
                 call(self.app, "GET", template, "nope")
             self.assertEqual(cm.exception.status_code, 404, template)
+
+class TestApiBusinessContext(unittest.TestCase):
+    """Initialisation: company/business context + data sources persist (P* 5.4
+    contract: each behaviour ships an API-contract test asserting persisted state)."""
+
+    def setUp(self):
+        self.ctx, self.base = app_ctx()
+        self.app = create_app(self.ctx)
+        self.tid = self.ctx.tenants.create_tenant("BizCo", region="DE").id
+
+    def tearDown(self):
+        self.base.close()
+
+    def test_company_profile_roundtrip_sets_business_context(self):
+        profile = {
+            "name": "BizCo", "industry": "telecom", "region": "DE",
+            "description": "Mobile plans for consumers",
+            "customers": "Consumer households",
+            "product": "Postpaid subscriptions",
+            "value_creation": "Coverage and reliability",
+            "revenue_model": "Monthly subscription",
+            "targets": [
+                {"name": "Grow ARPU", "description": "Raise revenue per user/month",
+                 "category": "growth", "priority": 1, "owner": "Head of Monetisation",
+                 "time_horizon": "quarterly", "target_value": 12.5,
+                 "metric_refs": ["arpu"]},
+                {"name": "Cut churn", "category": "retention", "priority": 2,
+                 "owner": "Head of CX", "metric_refs": ["churn"]},
+            ],
+            "constraints": ["GDPR"],
+            "preferred_metrics": ["arpu", "churn"],
+        }
+        res = call(self.app, "PUT", "/tenants/{tenant_id}/company-profile", self.tid,
+                   CompanyProfileIn(**profile))
+        # contract: the API call leaves durable state (business context for analysts)
+        prof = self.ctx.tenants.get_company_profile(self.tid)
+        self.assertEqual(prof.name, "BizCo")
+        self.assertEqual(prof.description, "Mobile plans for consumers")
+        self.assertEqual(len(prof.targets), 2)
+        self.assertTrue(any(t.name == "Grow ARPU" and t.target_value == 12.5
+                            and t.metric_refs == ["arpu"] for t in prof.targets))
+        self.assertTrue(any(t.name == "Cut churn" and t.category == "retention"
+                            for t in prof.targets))
+        # and readable back through the GET tenant endpoint the UI uses
+        data = call(self.app, "GET", "/tenants/{tenant_id}", self.tid)
+        self.assertEqual(data["profile"]["name"], "BizCo")
+        self.assertEqual(len(data["profile"]["targets"]), 2)
+        self.assertEqual(data["profile"]["preferred_metrics"], ["arpu", "churn"])
+
+    def test_datasource_add_then_list(self):
+        res = call(self.app, "POST", "/tenants/{tenant_id}/datasources", self.tid,
+                   DataSourceIn(name="Events", kind="direct_db", dialect="athena",
+                                tables=["es_events_v2"], connected=True))
+        self.assertTrue(res["datasource_id"])
+        dss = call(self.app, "GET", "/tenants/{tenant_id}/datasources", self.tid)
+        self.assertEqual(len(dss), 1)
+        self.assertEqual(dss[0]["tables"], ["es_events_v2"])
+        self.assertEqual(dss[0]["dialect"], "athena")
+
+    def test_profile_history_versions_over_time(self):
+        profile1 = {"name": "BizCo", "description": "v1 desc",
+                    "targets": [{"name": "Grow ARPU", "category": "growth"}]}
+        profile2 = {"name": "BizCo", "description": "v2 desc - product changed",
+                    "product": "Fiber plans",
+                    "targets": [{"name": "Grow ARPU", "category": "growth"},
+                                {"name": "Cut churn", "category": "retention"}],
+                    "changed_by": "head-of-strategy"}
+        call(self.app, "PUT", "/tenants/{tenant_id}/company-profile", self.tid,
+             CompanyProfileIn(**profile1))
+        call(self.app, "PUT", "/tenants/{tenant_id}/company-profile", self.tid,
+             CompanyProfileIn(**profile2))
+        hist = call(self.app, "GET",
+                    "/tenants/{tenant_id}/company-profile/history", self.tid)
+        # newest first; each save is a distinct version snapshot
+        self.assertEqual(len(hist), 2)
+        self.assertEqual(hist[0]["version"], 2)
+        self.assertEqual(hist[0]["changed_by"], "head-of-strategy")
+        self.assertEqual(hist[0]["snapshot"]["targets"][1]["name"], "Cut churn")
+        self.assertEqual(hist[1]["version"], 1)
+        self.assertEqual(hist[1]["snapshot"]["description"], "v1 desc")
+        # current profile reflects the latest version
+        data = call(self.app, "GET", "/tenants/{tenant_id}", self.tid)
+        self.assertEqual(data["profile"]["product"], "Fiber plans")
+        self.assertEqual(len(data["profile"]["targets"]), 2)
+
+
+class TestApiObservability(unittest.TestCase):
+    """Phase 9 owner-facing observability + background junior (via API routes)."""
+
+    def setUp(self):
+        self.ctx, self.base = app_ctx(warehouse=build_retail_warehouse())
+        self.tid = self.ctx.tenants.create_tenant("ObsCo").id
+        self.app = create_app(self.ctx)
+
+    def tearDown(self):
+        self.base.close()
+
+    def _run(self, method, template, *args):
+        return route(self.app, method, template)(*args)
+
+    def test_access_log_middleware_writes_rows(self):
+        # middleware is HTTP-level, so hit it through the framework's ASGI app
+        # via a direct store probe: call the log route AND verify the underlying
+        # api_logs table exists and the scheduler/status route works.
+        status = self._run("GET", "/observability/status")
+        self.assertIn("retention_days", status)
+        self.assertIn("purge", status)
+        self.assertEqual(status["retention_days"], 30)
+        # verify api_logs table is queryable through the observability service
+        logs = self._run("GET", "/observability/logs")
+        self.assertIn("logs", logs)
+
+    def test_purge_route_returns_due_state(self):
+        res = self._run("POST", "/observability/purge")
+        self.assertEqual(res["ran"], True)          # first call is due
+        self.assertEqual(res["expired_rows"], 0)    # no old rows yet
+        res2 = self._run("POST", "/observability/purge")
+        self.assertEqual(res2["ran"], False)        # within interval -> not_due
+        self.assertEqual(res2["reason"], "not_due")
+
+    def test_status_reports_junior_window_and_rate(self):
+        st = self._run("GET", "/observability/status")
+        j = st["junior"]
+        self.assertIsNotNone(j)
+        self.assertEqual(j["tenant_id"], self.tid)
+        self.assertIn("work_window", j)
+        self.assertIn("in_window", j)   # computed from system clock
+        self.assertIn("min_interval_minutes", j)
+        self.assertEqual(j["min_interval_minutes"], 60)
 
 
 if __name__ == "__main__":

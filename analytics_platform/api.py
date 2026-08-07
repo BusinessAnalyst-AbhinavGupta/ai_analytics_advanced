@@ -12,7 +12,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, Header, Query
+from fastapi import FastAPI, HTTPException, Header, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -29,8 +29,10 @@ from .llm.client import make_client_from
 from .observability import Observability
 from .onboarding import OnboardingService
 from .pipeline import Pipeline
+from .junior_worker import JuniorWorker
 from .research import ResearchService
 from .retention import RetentionService
+from .scheduler import Scheduler
 from .stakeholder import StakeholderService
 from .tenancy import TenantService
 from .triage import TriageService
@@ -60,6 +62,7 @@ class CompanyProfileIn(BaseModel):
     risks: List[str] = []
     competitors: List[str] = []
     preferred_metrics: List[str] = []
+    changed_by: Optional[str] = None
 
 
 class DataSourceIn(BaseModel):
@@ -202,6 +205,9 @@ class AppContext:
     auth: Optional[AuthGate] = None
     billing: Optional[BillingService] = None
     retention: Optional[RetentionService] = None
+    scheduler: Optional[Any] = None
+    junior_worker: Optional[Any] = None
+    junior: Optional[Any] = None
 
 
 def make_context(settings: Optional[Settings] = None,
@@ -224,11 +230,42 @@ def make_context(settings: Optional[Settings] = None,
     auth = AuthGate(settings)
     billing = BillingService(store, settings=settings, observability=obs)
     retention = RetentionService(store, tenants=tenants, observability=obs)
+    junior = JuniorEngine(store, executor=executor, tenants=tenants,
+                          observability=obs, llm=make_client_from(settings))
+    junior_worker = _make_junior_worker(settings, store, junior, obs)
+    scheduler = Scheduler(store, observability=obs,
+                          retention_days=settings.log_retention_days,
+                          maintenance_interval_days=settings.maintenance_interval_days,
+                          junior_worker=junior_worker)
     return AppContext(settings=settings, store=store, tenants=tenants,
                       observability=obs, pipeline=pipeline, executor=executor,
                       onboarding=onboarding, stakeholder=stakeholder,
                       research=research, auth=auth, billing=billing,
-                      retention=retention)
+                      retention=retention, scheduler=scheduler,
+                      junior_worker=junior_worker, junior=junior)
+
+
+def _make_junior_worker(settings: Settings, store: Store, junior: Any,
+                        obs: Observability) -> Optional[JuniorWorker]:
+    """Build a background youth worker bound to a tenant.
+
+    The worker needs a concrete tenant. We pick the *oldest* active tenant as the
+    default background target; if none exists it returns None (no-op) so a fresh
+    DB never spins a worker with nowhere to go.
+    """
+    try:
+        tenants = TenantService(store).list_tenants()
+        if not tenants:
+            return None
+        target = sorted(tenants, key=lambda t: t.get("created_at", ""))[0]
+        return JuniorWorker(
+            store, junior, tenant_id=target["id"],
+            work_start=settings.junior_work_start,
+            work_end=settings.junior_work_end,
+            min_interval_minutes=settings.junior_min_interval_minutes,
+            observability=obs, default_tenant=target["id"])
+    except Exception:
+        return None
 
 
 def ensure_services(ctx: AppContext) -> AppContext:
@@ -250,6 +287,21 @@ def ensure_services(ctx: AppContext) -> AppContext:
     if ctx.retention is None:
         ctx.retention = RetentionService(ctx.store, tenants=ctx.tenants,
                                          observability=ctx.observability)
+    if ctx.junior is None:
+        from .junior import JuniorEngine
+        ctx.junior = JuniorEngine(ctx.store, executor=ctx.executor,
+                                  tenants=ctx.tenants,
+                                  observability=ctx.observability,
+                                  llm=make_client_from(ctx.settings))
+    if ctx.junior_worker is None:
+        ctx.junior_worker = _make_junior_worker(ctx.settings, ctx.store,
+                                                ctx.junior, ctx.observability)
+    if ctx.scheduler is None:
+        ctx.scheduler = Scheduler(
+            ctx.store, observability=ctx.observability,
+            retention_days=ctx.settings.log_retention_days,
+            maintenance_interval_days=ctx.settings.maintenance_interval_days,
+            junior_worker=ctx.junior_worker)
     return ctx
 
 
@@ -302,6 +354,38 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
     ctx = ensure_services(ctx)
     C = ctx  # closure shorthand
 
+    @app.middleware("http")
+    async def _access_log_middleware(request: Request, call_next):
+        import time as _t
+        from starlette.requests import ClientDisconnect
+        t0 = _t.perf_counter()
+        tenant_id = ""
+        # best-effort tenant from path (read-only; never derives secrets)
+        parts = request.url.path.split("/")
+        if "tenants" in parts:
+            i = parts.index("tenants") + 1
+            if i < len(parts) and not parts[i].startswith("{"):
+                tenant_id = parts[i]
+        try:
+            response = await call_next(request)
+        except ClientDisconnect:
+            response = None
+        except Exception:
+            import traceback as _tb
+            traceback_text = _tb.format_exc()[:300]
+            C.observability.log_access(method=request.method, path=request.url.path,
+                                       status=500, duration_ms=(_t.perf_counter() - t0) * 1000.0,
+                                       tenant_id=tenant_id, meta={"err": traceback_text})
+            raise
+        ms = (_t.perf_counter() - t0) * 1000.0
+        status = getattr(response, "status_code", 0) if response is not None else 0
+        C.observability.log_access(method=request.method, path=request.url.path,
+                                   status=status, duration_ms=ms, tenant_id=tenant_id)
+        if response is None:
+            from fastapi.responses import PlainTextResponse
+            return PlainTextResponse("", status_code=444)
+        return response
+
     def tenant_or_404(tenant_id: str) -> str:
         try:
             C.tenants.require_tenant(tenant_id)
@@ -335,9 +419,18 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
     @app.put("/tenants/{tenant_id}/company-profile")
     def set_profile(tenant_id: str, body: CompanyProfileIn) -> Dict[str, Any]:
         tenant_or_404(tenant_id)
-        p = C.tenants.set_company_profile(tenant_id, body.model_dump())
-        C.observability.event(tenant_id=tenant_id, stage="company_profile.updated", actor="owner")
+        payload = body.model_dump()
+        changed_by = payload.pop("changed_by", None) or "owner"
+        p = C.tenants.set_company_profile(tenant_id, payload, changed_by=changed_by)
+        C.observability.event(tenant_id=tenant_id, stage="company_profile.updated",
+                              actor=changed_by)
         return {"tenant_id": tenant_id, "profile": p.to_dict()}
+
+    @app.get("/tenants/{tenant_id}/company-profile/history")
+    def profile_history(tenant_id: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """Config panel: versioned history of business context changes over time."""
+        tenant_or_404(tenant_id)
+        return C.tenants.get_company_profile_history(tenant_id, limit=limit)
 
     @app.post("/tenants/{tenant_id}/datasources")
     def add_datasource(tenant_id: str, body: DataSourceIn) -> Dict[str, Any]:
@@ -443,6 +536,51 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
     @app.get("/metrics")
     def platform_metrics() -> Dict[str, Any]:
         return C.observability.metrics()
+
+    # -- Phase 9: owner-facing observability --------------------------------
+    @app.get("/observability/logs")
+    def observability_logs(tenant_id: str = "", limit: int = 200) -> Dict[str, Any]:
+        return {"logs": C.observability.logs(tenant_id=tenant_id, limit=limit)}
+
+    @app.get("/observability/status")
+    def observability_status() -> Dict[str, Any]:
+        s = C.scheduler
+        worker = C.junior_worker
+        status = {
+            "retention_days": C.settings.log_retention_days,
+            "maintenance_interval_days": C.settings.maintenance_interval_days,
+            "scheduler_enabled": C.settings.scheduler_enabled,
+            "purge": {"last_purge_ts": s.last_purge_ts() if s else None,
+                       "next_due_ts": None},
+            "junior": None,
+        }
+        if s and s.last_purge_ts():
+            status["purge"]["next_due_ts"] = (
+                s.last_purge_ts() + C.settings.maintenance_interval_days * 86400.0)
+        if worker is not None:
+            due = worker.due()
+            status["junior"] = {
+                "tenant_id": worker.tenant_id,
+                "work_window": f"{C.settings.junior_work_start}-{C.settings.junior_work_end}",
+                "min_interval_minutes": C.settings.junior_min_interval_minutes,
+                "in_window": due["in_window"], "rate_ok": due["rate_ok"],
+                "last_cycle_ts": s.junior_last_ts() if s else None,
+            }
+        return status
+
+    @app.post("/observability/purge")
+    def observability_purge() -> Dict[str, Any]:
+        result = C.scheduler.purge_logs_once()
+        return {"status": "ok", **result}
+
+    @app.post("/observability/junior/run")
+    def observability_junior_run(tenant_id: str = "") -> Dict[str, Any]:
+        """Manually trigger one serial junior cycle (still honours window/rate)."""
+        worker = C.junior_worker
+        if worker is None:
+            raise HTTPException(400, "no background junior worker configured")
+        tid = tenant_id or worker.tenant_id
+        return {"status": "ok", **worker.run_cycle(tid)}
 
     # -- onboarding wizard -----------------------------------------------
     @app.post("/onboarding")

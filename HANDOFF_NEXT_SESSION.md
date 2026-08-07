@@ -4,15 +4,25 @@ Prepared: 2026-08-07 · Repo: `/Users/abhinav.gupta/Documents/ai_analytics_advan
 Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANALYTICS_PLATFORM_PLAN.md`).
 
 ## State
-- **HEAD `5c10b87` (CP-P6/P7/P8), tree clean.** Original `AI analytics/` folder untouched.
-- **146/146 standalone tests pass** (all `tests/` modules except the legacy `test_ui_and_db`), plus the
-  **3 live tests (2 `MetabaseLive` + 1 `TestJuniorMetabaseLive`) PASS when `ANALYTICS_MB_LIVE=1`**
-  (skipped otherwise) — **live-CONFIRMED 2026-08-07, 3/3 OK in ~8s**. Run:
-  `cd <repo> && .venv/bin/python -m unittest tests.test_brain tests.test_browser_session tests.test_cli
-  tests.test_api tests.test_llm tests.test_ui_client tests.test_ingest tests.test_integration
-  tests.test_junior tests.test_metabase_live tests.test_migration tests.test_onboarding
-  tests.test_pipeline_e2e tests.test_policy tests.test_tenancy tests.test_triage
-  # -> 146 tests (3 live skipped)`
+- **HEAD `c966eca`, plus uncommitted Phase 9 WIP in the working tree.** The earlier Business-config
+  panel + P6–P8 work was **not** committed in the narration of prior sessions; `git status` at last
+  check shows `M analytics_platform/{api,config,database,observability,tenancy,ui_client}.py`,
+  `M standalone_ui.py`, `M tests/{test_api,test_ui_client}.py`, `?? junior_worker.py`, `?? scheduler.py`.
+  Original `AI analytics/` folder untouched.
+- When committed, Phase 9 (this work) adds: `api_logs` table + HTTP access-log middleware (30-day
+  retention), a weekly auto-purge `Scheduler` (`analytics_platform/scheduler.py`, persisted state),
+  an autonomous background `JuniorWorker` (`analytics_platform/junior_worker.py` — system-time
+  window 10:00–19:00, one problem per hour, serial single-flight queries), `/observability/{status,
+  logs,purge,junior/run}` routes, an Observability tab in the UI, and tests
+  (`tests/test_phase9.py`). **169/169 standalone tests pass** (all `tests/` modules except the
+  legacy `test_ui_and_db`).
+  Run: `cd <repo> && .venv/bin/python -m unittest tests.test_api tests.test_brain
+  tests.test_browser_session tests.test_cli tests.test_governance_auth
+  tests.test_governance_retention tests.test_ingest tests.test_integration tests.test_junior
+  tests.test_llm tests.test_migration tests.test_onboarding tests.test_phase9
+  tests.test_pipeline_e2e tests.test_policy tests.test_research tests.test_stakeholder
+  tests.test_tenancy tests.test_triage tests.test_ui_client
+  # -> 169 tests (3 live skipped)`
   **Caveat (pre-existing, environmental):** `unittest discover -s tests` hangs on this machine in
   `test_ui_and_db.test_pipeline_with_form_metadata` — `core.IngestionPipeline.run`'s Step-4 Cypher
   generation waits on a Neo4j that isn't reachable here. It is legacy `core.*` code, unrelated to
@@ -23,8 +33,10 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
    .venv/bin/python -m unittest tests.test_metabase_live -v`
   → 3/3 OK: session valid + read-only `SELECT 1` (`MetabaseLive`) and junior stage‑3
   reproduction/catalog over the live browser executor (`TestJuniorMetabaseLive`).
-- Live API verified; **36 routes**, incl. `/triage/*` (summary/queue/conflicts/approve/reject/bulk)
-  and `/junior/*` (stage/catalog/datasets/questions/reproduce).
+- Live API verified; **64 HTTP routes** (incl. `/triage/*`, `/junior/*`, and new `/observability/*`).
+  Phase 9 boot verified via uvicorn on `make_serve` (watcher on): access-log middleware records each
+  request; `/observability/status` reports retention=30 / interval=7 / scheduler enabled; startup
+  tick auto-purged once (persisted state).
 
 ## Progress (Brain v2 migration — in progress)
 - **CP1 — mapper (DONE)**: added `NodeKind.IDIOM`; new `analytics_platform/migration/mapper.py`
@@ -267,17 +279,49 @@ Deps frozen in `requirements-advanced.txt` (incl. `fastapi==0.141.1`).
   encode SQL/value-sets that aren't verified against real Metabase, so they stay CANDIDATE for a
   senior reviewer.*
 
-## Next steps (Brain v2 + Live-Metabase + Junior engine + Junior→live + API + LLM hook + thin UI + triage COMPLETE + P6/P7/P8 CORE DONE)
-1. **Triage is complete for the migrated tenant** (`tnt_56a8295f82c3`): 0 CANDIDATEs remain
-   (`APPROVED 536 / REJECTED 693`). To get junior value from it: set a CompanyProfile with targets
-   and point an executor at real data — approving QUERYs (done, 35) is what lifts `junior stage`
-   to 2→3.
-2. **P6–P8 core is in** (stakeholder analyst / external research / auth–billing–retention hardening),
+## Progress — Phase 9: Metric/Observability layer (current)
+- **CP-9 — owner-facing observability + background junior (DONE, this checkpoint).** This is the
+  "§9 Metric/Observability layer (owner-facing)" pending item.
+- **API logs + 30-day retention + weekly auto-purge**: new `api_logs` table; an HTTP access-log
+  middleware in `create_app` records every request (method/path/status/duration_ms/tenant, no
+  credentials); `Observability.purge_logs(retention_days=30, now=…)`; `analytics_platform/scheduler.py`
+  `Scheduler` runs the purge once per `maintenance_interval_days` (7) with **persisted** due-state
+  in `scheduler_state` (no re-run inside the interval across restarts). Start it via
+  `ANALYTICS_WATCHER=1` and `uvicorn analytics_platform.serve:make_serve --factory` (fanned out into
+  `serve.py::make_serve`). Settings: `log_retention_days`, `maintenance_interval_days`.
+- **Autonomous background junior**: `analytics_platform/junior_worker.py` `JuniorWorker` — runs only
+  between `junior_work_start`..`junior_work_end` (10:00–19:00 system time), at most one
+  problem statement per `junior_min_interval_minutes` (60), and executes **serially** (a lock makes it
+  single-flight — never two queries at once, so it can't blast the engine). Picks a goal-aligned
+  question from `JuniorEngine.suggest_questions`, resolves SQL (prefers an approved reproducible
+  query, else a safe single SELECT from the catalog), runs it via the injected executor, records an
+  `analysis_runs` row + observability events. `AppContext` now carries `scheduler`/`junior_worker`.
+- **API routes**: `/observability/status|logs|purge` and `/observability/junior/run` (manual single
+  cycle, still honours window/rate). **UI Observability tab** added to `standalone_ui.py`;
+  `ui_client` gains `observability_*` methods.
+- **Tests**: `tests/test_phase9.py` (8) — scheduler weekly due/not-due + purge-older-than-retention,
+  junior window / 1-per-hour rate / serial single-flight; API-contract tests in `test_api.py` and
+  `ui_client` tests incl. the connectivity scan. **169/169 standalone tests OK.**
+- Status: API-log retention + weekly purge + background-junior are the **core**; the layered
+  senior-analysis/promote-downgrade + OpenRouter config panel are the next phase (see Next steps).
+
+## Next steps (… + P6/P7/P8 CORE DONE + Phase 9 observability/background-junior IN)
+1. **Phase 9 core is in** — API-log retention (30d) + weekly auto-purge scheduler (supporting
+   env: `ANALYTICS_LOG_RETENTION_DAYS`, `ANALYTICS_MAINT_INTERVAL_DAYS`, `ANALYTICS_WATCHER=1`),
+   background `JuniorWorker` window/rate/serial (`ANALYTICS_JUNIOR_WORK_START/END`,
+   `ANALYTICS_JUNIOR_MIN_INTERVAL_MINUTES`), `/observability/*` routes, and the UI Observability tab.
+   Remaining/next: **(a)** senior-analyst review tab + human sign-off + promote/downgrade of the junior
+   (depth scales with senior approval; each analysis rendered to an MD file for human review), and
+   **(b)** an OpenRouter config panel — list provider models via a live ping, save config, log config
+   state/changes. Both build directly on this scheduler/junior-worker layer.
+2. **Triage complete for the migrated tenant** (`tnt_56a8295f82c3`): 0 CANDIDATEs remain
+   (`APPROVED 536 / REJECTED 693`). To get junior value from it: the tenant already has a
+   CompanyProfile with 3 targets; point an executor at real data (`ANALYTICS_MB_LIVE=1 …`) to lift
+   `junior stage` to 2→3.
+3. **P6–P8 core is in** (stakeholder analyst / external research / auth–billing–retention hardening),
    auth **off by default**. Remaining is the operator-side + live-gated tail: wire a real OIDC/SSO
    provider and per-tenant browser profiles (P8), connect approved external search providers (P7),
-   run the retention scheduler (cron/`retention purge`), then the security tail (threat model /
-   pen test / DR / SOC2 readiness) from the other ticket.
-3. Update `README.md` reference docs + the UI client tests as the remaining routes harden.
+   then the security tail (threat model / pen test / DR / SOC2 readiness) from the other ticket.
 
 Re-run migration into any tenant's Brain (idempotent, CANDIDATE-only):
 `ANALYTICS_DB_PATH=<db> .venv/bin/python -m analytics_platform.cli migrate <tid> --snapshot extracted_data/knowledge_graph_snapshot.json`

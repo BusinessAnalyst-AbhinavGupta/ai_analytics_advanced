@@ -96,3 +96,41 @@ class Observability:
             "by_stage": [{"stage": r["stage"], "count": r["c"], "avg_ms": round(r["a"], 2)} for r in by_stage],
             "by_status": [{"status": r["status"], "count": r["c"]} for r in by_status],
         }
+
+    # -- Phase 9: owner-facing API logs (30-day retention) -------------------
+    def log_access(self, *, tenant_id: str = "", method: str = "", path: str = "",
+                   status: int = 200, duration_ms: float = 0.0,
+                   actor: str = "system", meta: Optional[Dict[str, Any]] = None) -> None:
+        """Record one HTTP request in `api_logs` (owner-facing, never credentials)."""
+        try:
+            self._store.execute(
+                "INSERT INTO api_logs (ts,tenant_id,method,path,status,duration_ms,actor,meta) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), tenant_id,
+                 method, path, int(status), round(float(duration_ms), 2), actor,
+                 dump_json(meta or {})))
+        except Exception:
+            pass  # logging must never break the API
+
+    def logs(self, *, tenant_id: str = "", limit: int = 200) -> List[Dict[str, Any]]:
+        rows = self._store.query_all(
+            "SELECT * FROM api_logs WHERE (?='' OR tenant_id=?) ORDER BY id DESC LIMIT ?",
+            (tenant_id, tenant_id, limit))
+        out = [dict(r) for r in rows]
+        for r in out:
+            r["meta"] = load_json(r.get("meta"), {})
+        return out
+
+    def purge_logs(self, retention_days: int = 30, dry_run: bool = True,
+                   now: Optional[float] = None) -> Dict[str, Any]:
+        """Delete API logs older than `retention_days` (Phase 9 retention)."""
+        now = now if now is not None else time.time()
+        cutoff_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                    time.gmtime(now - retention_days * 86400.0))
+        cur = self._store.query_one(
+            "SELECT COUNT(*) c FROM api_logs WHERE ts < ?", (cutoff_iso,))
+        count = cur["c"] if cur else 0
+        if not dry_run and count:
+            self._store.execute("DELETE FROM api_logs WHERE ts < ?", (cutoff_iso,))
+        return {"dry_run": dry_run, "retention_days": retention_days,
+                "cutoff": cutoff_iso, "expired_rows": count}

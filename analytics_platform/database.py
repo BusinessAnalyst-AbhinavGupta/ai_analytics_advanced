@@ -83,6 +83,20 @@ CREATE TABLE IF NOT EXISTS audit_log (
     ts TEXT, tenant_id TEXT, actor TEXT, role TEXT, action TEXT,
     resource TEXT, outcome TEXT, detail TEXT
 );
+CREATE TABLE IF NOT EXISTS company_profile_history (
+    id TEXT PRIMARY KEY, tenant_id TEXT, version INTEGER,
+    snapshot TEXT, changed_by TEXT, created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS api_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT, tenant_id TEXT, method TEXT, path TEXT, status INTEGER,
+    duration_ms REAL, actor TEXT, meta TEXT
+);
+CREATE TABLE IF NOT EXISTS scheduler_state (
+    key TEXT PRIMARY KEY, value TEXT, updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_api_logs_ts ON api_logs(ts);
+CREATE INDEX IF NOT EXISTS idx_api_logs_tenant ON api_logs(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_kn_tenant ON knowledge_nodes(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_runs_tenant ON analysis_runs(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_tel_tenant ON telemetry(tenant_id);
@@ -90,6 +104,7 @@ CREATE INDEX IF NOT EXISTS idx_tel_trace ON telemetry(trace_id);
 CREATE INDEX IF NOT EXISTS idx_sa_tenant ON stakeholder_answers(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_rd_tenant ON research_docs(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_audit_tenant ON audit_log(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_cph_tenant ON company_profile_history(tenant_id);
 """
 
 

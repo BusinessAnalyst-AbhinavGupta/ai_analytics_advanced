@@ -136,11 +136,11 @@ def _conflicts_review(tenant):
                 rest = [i for i in ids if i != group]
                 _run_review(tenant, lambda: _client().triage_dedupe(tenant, keep=group,
                                                                     drop=rest,
-                                                                    by=\"senior\",
-                                                                    notes=\"dedupe group\"),
-                            f\"Cleared {len(rest)}\")
+                                                                    by="senior",
+                                                                    notes="dedupe group"),
+                            f"Cleared {len(rest)}")
             if b[1].button("Approve whole group", key=f"ap-{ids[0]}"):
-                _run_review(tenant, lambda: _client().triage_approve(tenant, ids, by=\"senior\"),
+                _run_review(tenant, lambda: _client().triage_approve(tenant, ids, by="senior"),
                             "Approved group")
 
 
@@ -273,6 +273,212 @@ def _governance_tab(tenant):
         st.json(usage.get("by_stage", []))
 
 
+def _observability_tab(tenant):
+    st.subheader("Observability (Phase 9) - owner-facing")
+    st.caption("API access logs are kept 30 days and purged weekly by the "
+               "scheduler; the background junior analyst runs serially, only "
+               "inside its work window, at most once per hour.")
+    status = _guarded(lambda: _client().observability_status()) or {}
+    st.markdown("**Scheduler / retention**")
+    cols = st.columns(4)
+    cols[0].metric("Log retention (days)", status.get("retention_days"))
+    cols[1].metric("Maintenance (days)", status.get("maintenance_interval_days"))
+    cols[2].metric("Scheduler enabled", status.get("scheduler_enabled"))
+    purge = status.get("purge") or {}
+    cols[3].metric("Last purge", "yes" if purge.get("last_purge_ts") else "never")
+
+    j = status.get("junior")
+    if j:
+        st.markdown("**Background junior**")
+        jc = st.columns(4)
+        jc[0].metric("Tenant", j.get("tenant_id", "")[:22])
+        jc[1].metric("Work window", j.get("work_window", ""))
+        jc[2].metric("Min interval (m)", j.get("min_interval_minutes"))
+        jc[3].metric("In window", "yes" if j.get("in_window") else "no")
+
+    if st.button("Run weekly log purge now", key=f"obs_purge_{tenant}"):
+        st.write(_guarded(lambda: _client().observability_purge()))
+    if st.button("Trigger one junior cycle (honours window/rate)",
+                 key=f"obs_jr_{tenant}"):
+        st.write(_guarded(lambda: _client().observability_junior_run(tenant)))
+
+    with st.expander("Recent API logs", expanded=False):
+        logs = _guarded(lambda: _client().observability_logs(tenant=tenant)) or {}
+        rows = logs.get("logs") or []
+        if rows:
+            st.dataframe(pd.DataFrame(rows), use_container_width=True)
+        else:
+            st.write("No API logs recorded yet.")
+    with st.expander("Platform metrics", expanded=False):
+        import requests as _req
+        try:
+            st.json(_req.get("http://localhost:8000/metrics", timeout=10).json())
+        except Exception:
+            st.write("(metrics endpoint not reachable here)")
+
+
+def _business_context_tab(tenant: str):
+    """Initialisation: the one business context every analyst reads.
+
+    Writes through the API (PUT company-profile / datasources) so the stored
+    context is the single source of truth for Junior, Stakeholder, Research.
+    """
+    import math
+
+    st.subheader("Business context / Onboarding")
+    data = _guarded(lambda: _client().get_tenant(tenant)) or {}
+    trow = data.get("tenant") or {}
+    profile = data.get("profile") or {}
+    targets = [dict(x) for x in (profile.get("targets") or [])]
+
+    st.info(
+        "**One source of truth for every analyst.** What the company does, the "
+        "product/process it runs, and the OKRs it optimises for (Junior goal "
+        "alignment, Stakeholder answers and Research targeting all read this). "
+        "Set it per tenant - the analysts inherit it."
+    )
+
+    lc, rc = st.columns(2)
+    name = lc.text_input("Company name", value=profile.get("name") or trow.get("name") or "",
+                         key=f"biz_name_{tenant}")
+    industry = lc.text_input("Industry", value=profile.get("industry", ""),
+                             key=f"biz_ind_{tenant}")
+    region = lc.text_input("Region", value=profile.get("region") or trow.get("region") or "",
+                           key=f"biz_reg_{tenant}")
+    product = lc.text_input("Product / what you sell", value=profile.get("product", ""),
+                            key=f"biz_prod_{tenant}")
+    revenue_model = lc.text_input("Revenue model (how you make money)",
+                                  value=profile.get("revenue_model", ""),
+                                  key=f"biz_rev_{tenant}")
+    customers = rc.text_input("Customers (who buys)", value=profile.get("customers", ""),
+                              key=f"biz_cust_{tenant}")
+    value_creation = rc.text_input("Value creation (the job you do for them)",
+                                   value=profile.get("value_creation", ""),
+                                   key=f"biz_val_{tenant}")
+    description = rc.text_area("What the company / business does",
+                               value=profile.get("description", ""),
+                               key=f"biz_desc_{tenant}")
+    constraints = st.text_input("Constraints (comma-separated)",
+                                value=", ".join(profile.get("constraints", [])),
+                                key=f"biz_cons_{tenant}")
+    risks = st.text_input("Risks (comma-separated)",
+                          value=", ".join(profile.get("risks", [])),
+                          key=f"biz_risk_{tenant}")
+    competitors = st.text_input("Competitors (comma-separated)",
+                                value=", ".join(profile.get("competitors", [])),
+                                key=f"biz_comp_{tenant}")
+    preferred = st.text_input("Preferred metrics (comma-separated)",
+                              value=", ".join(profile.get("preferred_metrics", [])),
+                              key=f"biz_pref_{tenant}")
+    changed_by = st.text_input("Changed by (recorded on this version)",
+                               value="owner", key=f"biz_changedby_{tenant}")
+    st.caption("Each save appends a dated snapshot to the Business Context history - "
+               "product, services and OKRs can evolve over time and are all tracked.")
+
+    st.divider()
+    st.markdown("**OKRs / Targets** - what the analysts optimise for (add/remove rows).")
+    cols = ["name", "description", "category", "priority", "owner",
+            "time_horizon", "target_value", "metric_refs", "constraints",
+            "last_reviewed"]
+    base_rows = []
+    for t in targets:
+        base_rows.append({
+            "name": t.get("name", ""), "description": t.get("description", ""),
+            "category": t.get("category", "growth"), "priority": t.get("priority", 1),
+            "owner": t.get("owner", ""), "time_horizon": t.get("time_horizon", "quarterly"),
+            "target_value": t.get("target_value"),
+            "metric_refs": ", ".join(t.get("metric_refs") or []),
+            "constraints": ", ".join(t.get("constraints") or []),
+            "last_reviewed": t.get("last_reviewed", ""),
+        })
+    if not base_rows:
+        base_rows = [{"name": "", "description": "", "category": "growth", "priority": 1,
+                      "owner": "", "time_horizon": "quarterly", "target_value": None,
+                      "metric_refs": "", "constraints": "", "last_reviewed": ""}]
+    ed = st.data_editor(
+        pd.DataFrame(base_rows, columns=cols),
+        num_rows="dynamic", key=f"biz_targets_{tenant}", use_container_width=True,
+        column_config={
+            "category": st.column_config.SelectboxColumn(
+                "Category", options=["growth", "margin", "funnel", "retention",
+                                     "risk", "efficiency", "satisfaction"]),
+            "priority": st.column_config.NumberColumn("Priority", min_value=1, step=1),
+            "target_value": st.column_config.NumberColumn("Target value"),
+        },
+    )
+
+    st.divider()
+    st.markdown("**Data sources** - the tables analysts query.")
+    dss = _guarded(lambda: _client().list_datasources(tenant)) or []
+    if dss:
+        for ds in dss:
+            st.markdown(f"- `{ds.get('name')}` · dialect `{ds.get('dialect')}` · "
+                        f"tables: {', '.join(ds.get('tables') or [])}")
+    else:
+        st.caption("No data sources registered yet.")
+    dc = st.columns(4)
+    ds_name = dc[0].text_input("Datasource name", key=f"biz_dsname_{tenant}")
+    ds_dialect = dc[1].text_input("Dialect", value="athena", key=f"biz_dsdial_{tenant}")
+    ds_tables = dc[2].text_input("Tables (comma-separated)", key=f"biz_dstab_{tenant}")
+    if dc[3].button("Add datasource", key=f"biz_dsadd_{tenant}"):
+        ds_tbls = [x.strip() for x in (ds_tables or "").split(",") if x.strip()]
+        res = _guarded(lambda: _client().add_datasource(
+            tenant, ds_name, dialect=ds_dialect, tables=ds_tbls))
+        if res:
+            st.success("Data source added")
+            st.rerun()
+
+    if st.button("Save business context + OKRs", type="primary",
+                 key=f"biz_save_{tenant}"):
+        def _lst(v):
+            return [x.strip() for x in (v or "").split(",") if x.strip()]
+
+        okrs = []
+        for r in ed.to_dict("records"):
+            n = (r.get("name") or "").strip()
+            if not n:
+                continue
+            tv = r.get("target_value")
+            if tv is None or (isinstance(tv, float) and math.isnan(tv)):
+                tv = None
+            okrs.append({
+                "name": n, "description": r.get("description") or "",
+                "category": r.get("category") or "growth",
+                "priority": int(r.get("priority") or 1) if r.get("priority") else 1,
+                "owner": r.get("owner") or "",
+                "time_horizon": r.get("time_horizon") or "quarterly",
+                "target_value": tv,
+                "metric_refs": _lst(r.get("metric_refs")),
+                "constraints": _lst(r.get("constraints")),
+                "last_reviewed": r.get("last_reviewed") or "",
+            })
+        payload = {
+            "name": name, "industry": industry, "region": region,
+            "description": description, "customers": customers, "product": product,
+            "value_creation": value_creation, "revenue_model": revenue_model,
+            "targets": okrs, "constraints": _lst(constraints), "risks": _lst(risks),
+            "competitors": _lst(competitors), "preferred_metrics": _lst(preferred),
+            "changed_by": changed_by or "owner",
+        }
+        res = _guarded(lambda: _client().set_profile(tenant, payload))
+        if res:
+            st.success(f"Business context saved as a new version · {len(okrs)} OKR/s")
+            st.rerun()
+
+    with st.expander("Version history (business context over time)", expanded=False):
+        hist = _guarded(lambda: _client().profile_history(tenant)) or []
+        if not hist:
+            st.caption("No saved versions yet - save the context above to create version 1.")
+        for h in hist:
+            snap = h.get("snapshot") or {}
+            ts = (h.get("created_at") or "")[:19]
+            st.markdown(
+                f"**v{h.get('version')}** · {ts} · by `{h.get('changed_by') or 'owner'}` · "
+                f"{len(snap.get('targets') or [])} OKR/s | "
+                f"{((snap.get('description') or '')[:110]) or snap.get('name') or '(no description)'}"
+            )
+
+
 def _tenants() -> list:
     client = _client()
     try:
@@ -302,8 +508,11 @@ with st.sidebar:
             st.success(f"Created {res.get('tenant_id')}")
 
 if tenant:
-    tabs = st.tabs(["Junior", "Triage", "Stakeholder", "Research", "Governance"])
+    tabs = st.tabs(["Business", "Junior", "Triage", "Stakeholder", "Research",
+                    "Governance", "Observability"])
     with tabs[0]:
+        _business_context_tab(tenant)
+    with tabs[1]:
         st.subheader("Junior maturity stage")
         st.json(_guarded(lambda: _client().junior_stage(tenant)) or {})
         st.subheader("Catalog (schema / EDA)")
@@ -311,7 +520,7 @@ if tenant:
         st.subheader("Suggested questions")
         st.json(_guarded(lambda: _client().junior_questions(tenant)) or {})
 
-    with tabs[1]:
+    with tabs[2]:
         summary = _guarded(lambda: _client().triage_summary(tenant)) or {}
         if summary:
             m = st.columns(4)
@@ -327,11 +536,13 @@ if tenant:
         with rt3:
             _conflicts_review(tenant)
 
-    with tabs[2]:
-        _stakeholder_tab(tenant)
     with tabs[3]:
-        _research_tab(tenant)
+        _stakeholder_tab(tenant)
     with tabs[4]:
+        _research_tab(tenant)
+    with tabs[5]:
         _governance_tab(tenant)
+    with tabs[6]:
+        _observability_tab(tenant)
 else:
     st.info("Select or create a tenant to begin.")
