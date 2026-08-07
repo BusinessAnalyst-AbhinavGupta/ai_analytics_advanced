@@ -30,14 +30,48 @@ from .base import ExecutionContext, QueryResult, QueryExecutor, SessionStatus
 Runner = Callable[[str], str]
 
 
-def osascript_runner(js: str, timeout_s: float = 30.0) -> str:
-    """Run JS in the active tab of Google Chrome via AppleScript; return stdout."""
-    cmd = [
+def build_osascript_command(js: str, host: str = "") -> List[str]:
+    """AppleScript to run `js` in a Chrome tab whose URL contains `host`.
+
+    When `host` is empty it falls back to the front window's active tab (the old
+    behaviour). Returns the osascript argv list; pure (no side effects).
+    """
+    quoted = _shell_quote(js)
+    if host:
+        safe_host = host.replace('"', "")
+        body = (
+            "set found to false\n"
+            "repeat with w in windows\n"
+            "  repeat with t in tabs of w\n"
+            f"    if URL of t contains \"{safe_host}\" then\n"
+            f"      execute t javascript {quoted}\n"
+            "      set found to true\n"
+            "      exit repeat\n"
+            "    end if\n"
+            "  end repeat\n"
+            "  if found then exit repeat\n"
+            "end repeat\n"
+            f"if not found then execute front window's active tab javascript {quoted}"
+        )
+        return ["osascript", "-e", f"tell application \"Google Chrome\"\n{body}\nend tell"]
+    return [
         "osascript", "-e",
         "tell application \"Google Chrome\" to execute front window's active tab javascript "
-        + _shell_quote(js),
+        + quoted,
     ]
+
+
+def osascript_runner(js: str, timeout_s: float = 30.0, host: str = "") -> str:
+    """Run JS in Chrome (optionally in a tab whose URL contains `host`); return stdout."""
+    cmd = build_osascript_command(js, host)
     return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s).stdout.strip()
+
+
+def make_osascript_runner(host: str = "", timeout_s: float = 30.0) -> Runner:
+    """Build a `Runner(js)` bound to a target Metabase host (default runner)."""
+    def run(js: str) -> str:
+        return osascript_runner(js, timeout_s=timeout_s, host=host)
+    return run
 
 
 def _shell_quote(js: str) -> str:
@@ -75,7 +109,10 @@ class BrowserSessionExecutor(QueryExecutor):
         self.config = BrowserExecutorConfig(database_id=database_id,
                                             expected_host=expected_host,
                                             timeout_s=timeout_s, max_rows=max_rows)
-        self._runner = runner or osascript_runner  # default = production AppleScript
+        self._default_runner = runner is None
+        self._timeout_s = timeout_s
+        self._runner = runner or make_osascript_runner(
+            host=self._metabase_host_fragment(), timeout_s=timeout_s)
 
     @classmethod
     def from_env(cls, runner: Optional[Runner] = None) -> "BrowserSessionExecutor":
@@ -91,6 +128,21 @@ class BrowserSessionExecutor(QueryExecutor):
             expected_host=os.environ.get("ANALYTICS_MB_EXPECTED_HOST", ""),
             runner=runner,
         )
+
+    def _metabase_host_fragment(self) -> str:
+        """Host strand used to find the Metabase tab in Chrome (URL contains)."""
+        from urllib.parse import urlsplit
+        if self.base_url:
+            host = urlsplit(self.base_url).hostname
+            if host:
+                return host
+        return self.config.expected_host
+
+    def rebind_runner(self) -> None:
+        """Recompute the default runner after `expected_host`/`base_url` changed."""
+        if self._default_runner:
+            self._runner = make_osascript_runner(
+                host=self._metabase_host_fragment(), timeout_s=self._timeout_s)
 
     def supports(self, ctx: ExecutionContext) -> bool:
         return True
@@ -208,4 +260,5 @@ def make_live_executor(settings: Optional["Settings"] = None) -> BrowserSessionE
 
 
 __all__ = ["BrowserSessionExecutor", "SessionUnavailable", "BrowserExecutorConfig",
-           "osascript_runner", "PROBE_JS", "make_live_executor"]
+           "osascript_runner", "build_osascript_command", "make_osascript_runner",
+           "PROBE_JS", "make_live_executor"]

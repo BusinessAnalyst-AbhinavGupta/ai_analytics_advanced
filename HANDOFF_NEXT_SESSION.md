@@ -43,6 +43,13 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
   **67/67 offline tests** (live test is skipped here). The final real E2E run happens on your
   machine: `ANALYTICS_MB_LIVE=1 ANALYTICS_MB_DATABASE_ID=.. ANALYTICS_MB_EXPECTED_HOST=.. \
   .venv/bin/python -m unittest discover -s tests -k MetabaseLive -v` (Chrome logged into Metabase).
+- **CP-L4 — tab-targeted runner (DONE)**: `browser_session.py` now finds the **Metabase tab by
+  URL** across Chrome windows/tabs (via `build_osascript_command(js, host)` + `make_osascript_runner`),
+  with active-tab fallback; `rebind_runner()` recomputes after `--host`/`--expected-host` overrides
+  (CLI calls it). This fixes the "wrong Chrome profile / wrong active tab → needs_login" case the
+  Telekom profile surfaced. Offline tests `TestOsascriptTargeting` (5) → **95 tests (2 skipped).**
+  Connection values (from `scripts/`): host `metabase.om.yo-digital.com`, `database_id 59` —
+  executor targets the URL-matching tab, no API token needed (cookie-only, same-origin).
 
 ## Progress — Triage (current)
 - **CP-T1 — service reads (DONE)**: `analytics_platform/triage.py` — `TriageService`

@@ -10,7 +10,9 @@ from analytics_platform.execution.base import ExecutionContext
 from analytics_platform.execution.browser_session import (
     BrowserSessionExecutor,
     SessionUnavailable,
+    build_osascript_command,
     make_live_executor,
+    make_osascript_runner,
 )
 
 
@@ -156,6 +158,42 @@ class TestBrowserFromEnv(unittest.TestCase):
         r = ex.execute("SELECT 1", ExecutionContext(tenant_id="t"))
         self.assertTrue(r.ok)
         self.assertEqual(r.row_count, 1)
+
+
+class TestOsascriptTargeting(unittest.TestCase):
+    def test_build_command_targets_host_tab_with_js(self):
+        cmd = build_osascript_command("console.log('x')", "metabase.om.yo-digital.com")
+        script = " ".join(cmd)
+        self.assertIn("URL of t contains \"metabase.om.yo-digital.com\"", script)
+        self.assertIn("execute t javascript", script)
+        self.assertIn("console.log('x')", script)
+        # fallback remains so a missing tab still reports instead of silently failing
+        self.assertIn("if not found then execute front window's active tab", script)
+
+    def test_build_command_no_host_uses_active_tab(self):
+        cmd = build_osascript_command("console.log('x')")
+        script = " ".join(cmd)
+        self.assertIn("front window's active tab", script)
+        self.assertNotIn("URL of t contains", script)
+
+    def test_make_osascript_runner_is_callable(self):
+        from analytics_platform.execution.browser_session import Runner
+        rn = make_osascript_runner(host="mb.example")
+        self.assertTrue(callable(rn))
+
+    def test_executor_default_runner_targets_expected_host(self):
+        ex = BrowserSessionExecutor(database_id=1, expected_host="mb.example.com")
+        self.assertTrue(ex._default_runner)
+        self.assertEqual(ex._metabase_host_fragment(), "mb.example.com")
+        # CLI-style override then rebind
+        ex.config.expected_host = "mb2.example.com"
+        ex.rebind_runner()
+        self.assertEqual(ex._metabase_host_fragment(), "mb2.example.com")
+
+    def test_host_fragment_prefers_base_url_netloc(self):
+        ex = BrowserSessionExecutor(database_id=1, metabase_base_url="https://mb.example.com:3000",
+                                    expected_host="mb.example.com")
+        self.assertEqual(ex._metabase_host_fragment(), "mb.example.com")
 
 
 if __name__ == "__main__":

@@ -119,6 +119,7 @@ def cmd_browser(args: argparse.Namespace) -> int:
         ex.config.expected_host = args.expected_host
     if args.host:
         ex.base_url = args.host.rstrip("/")
+    ex.rebind_runner()  # pick up any host/base_url overrides for tab targeting
     _print("Live Metabase executor", {
         "database_id": ex.config.database_id,
         "expected_host": ex.config.expected_host,
