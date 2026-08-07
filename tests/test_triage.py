@@ -87,6 +87,21 @@ class TestTriage(unittest.TestCase):
         add_candidates(self.brain, NodeKind.QUERY, ["same title"])
         self.assertEqual(len(self.svc.conflicts(self.tid)), 1)
 
+    def test_conflicts_exclude_rejected_and_clear_on_reject(self):
+        add_candidates(self.brain, NodeKind.QUERY, ["dup title"])
+        add_candidates(self.brain, NodeKind.QUERY, ["dup title"])
+        add_candidates(self.brain, NodeKind.QUERY, ["dup title"],
+                       status=ReviewStatus.REJECTED)
+        # the already-rejected ghost must not count: 2 kept -> 1 conflict
+        groups = self.svc.conflicts(self.tid)
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["count"], 2)
+        # rejecting one of the two kept duplicates resolves the group
+        kept = [n.id for n in self.brain.all(limit=10) if n.status in ACTIONABLE]
+        res = self.svc.reject(self.tid, kept[:1], notes="dedupe")
+        self.assertEqual(res["rejected"], kept[:1])
+        self.assertEqual(self.svc.conflicts(self.tid), [])
+
     def test_actionable_contains_candidate_and_under_review(self):
         self.assertIn(ReviewStatus.CANDIDATE, ACTIONABLE)
         self.assertIn(ReviewStatus.UNDER_REVIEW, ACTIONABLE)

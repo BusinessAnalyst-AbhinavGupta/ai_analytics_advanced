@@ -160,11 +160,22 @@ class CompanyBrain:
         params.append(limit)
         return [self._row_to_node(r) for r in self.store.query_all(sql, tuple(params))]
 
+    # statuses that no longer participate in title-conflict detection (discarded).
+    _DISCARDED_CONFLICT_STATUSES = ("REJECTED", "STALE", "SUPERSEDED")
+
     def conflicts(self) -> List[Dict[str, Any]]:
-        """Candidate nodes sharing a title (conflicting/duplicate definitions)."""
+        """Nodes sharing a title (>1 kept) are conflicting/duplicate candidates.
+
+        Discarded statuses (REJECTED/STALE/SUPERSEDED) are excluded so that
+        resolving a group (reject/revise away the duplicates) actually clears it
+        instead of leaving ghosts behind.
+        """
+        placeholders = ",".join("?" * len(self._DISCARDED_CONFLICT_STATUSES))
         rows = self.store.query_all(
             "SELECT title, COUNT(*) c, GROUP_CONCAT(id) ids FROM knowledge_nodes "
-            "WHERE tenant_id=? GROUP BY title HAVING c > 1", (self.tenant_id,))
+            f"WHERE tenant_id=? AND status NOT IN ({placeholders}) "
+            "GROUP BY title HAVING c > 1",
+            (self.tenant_id, *self._DISCARDED_CONFLICT_STATUSES))
         return [{"title": r["title"], "count": r["c"], "ids": (r["ids"] or "").split(",")}
                 for r in rows]
 
