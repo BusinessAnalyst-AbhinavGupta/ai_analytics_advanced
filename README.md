@@ -122,11 +122,11 @@ curl -s localhost:8000/tenants/$TID/metrics
   (QUERY + derived DEFINITION, IDIOM, BUSINESS_RULE) as **CANDIDATE**, idempotently via
   `cli migrate`. Verified on the real snapshot: **1229 nodes** (158 QUERY / 598 DEFINITION /
   180 IDIOM / 293 BUSINESS_RULE), **0 auto-approved**; needs senior review to become usable.
-- **Live Metabase bind: DONE (wiring + gated test)** — `Settings`/`from_env` + executor
+- **Live Metabase bind: DONE + E2E CONFIRMED** — `Settings`/`from_env` + executor
   `from_env`/`make_live_executor` (`ANALYTICS_MB_*`), CLI `analytics-platform browser`
   (fail-with-pause session check + read-only execute), and a `MetabaseLive` E2E test
-  gated by `ANALYTICS_MB_LIVE=1`. Final real run happens on your machine (logged-in Chrome on
-  Metabase; see "Run it" above).
+  gated by `ANALYTICS_MB_LIVE=1`. **Live run green** on `metabase.om.yo-digital.com` DB 59
+  (session valid + read-only query).
 - **Triage: DONE** — `analytics_platform/triage.py` (`TriageService`: queue/summary/conflicts +
   approve/reject/bulk by kind) and CLI `analytics-platform review <tenant>` (submit-then-approve;
   only CANDIDATE/UNDER_REVIEW/REVISION_REQUIRED are touched). Verified E2E on the migrated
@@ -136,13 +136,14 @@ curl -s localhost:8000/tenants/$TID/metrics
   queries + targets), `reproduce_metrics()` (runs approved queries via the injectable executor),
   `catalog()` (schema/EDA of registered tables), `suggest_questions()` (Company
   `Profile.targets` ↔ approved definitions/queries). CLI `analytics-platform junior <tenant>`.
-- **Junior wired to live Metabase: DONE** — `analytics-platform junior` runs the *same*
+- **Junior wired to live Metabase: DONE + LIVE-CONFIRMED** — `analytics-platform junior` runs the *same*
   `JuniorEngine` over the live `BrowserSessionExecutor` when `ANALYTICS_MB_LIVE=1`
   (host-guarded, cookie stays in the browser, read-only) and falls back to the offline
   `SamplerExecutor` otherwise. The seam is unit-tested offline in `tests/test_junior.py` /
   `tests/test_cli.py`, and the real-Metabase path is covered by the gated
-  `TestJuniorMetabaseLive` (skipped unless `ANALYTICS_MB_LIVE=1`).
+  `TestJuniorMetabaseLive` (skipped unless `ANALYTICS_MB_LIVE=1`) — **3/3 live tests OK** on
+  `metabase.om.yo-digital.com` DB 59 (incl. junior stage-3 reproduction + catalog).
 
-Next per plan: keep triaging the ~871 remaining CANDIDATEs; option to expose review/junior via the
-FastAPI. Finishing the live-Metabase E2E runs (`MetabaseLive` + `TestJuniorMetabaseLive`) needs your
-`ANALYTICS_MB_DATABASE_ID`/`EXPECTED_HOST` and a logged-in Metabase tab in Chrome.
+Next per plan: keep triaging the ~871 remaining CANDIDATEs; expose review/junior via the FastAPI;
+and build the standalone UI (today: legacy Streamlit `app.py` as reference + FastAPI `/docs` Swagger;
+plan says React/Next.js later, Streamlit as a thin API client meanwhile).

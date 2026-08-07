@@ -4,10 +4,10 @@ Prepared: 2026-08-07 · Repo: `/Users/abhinav.gupta/Documents/ai_analytics_advan
 Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANALYTICS_PLATFORM_PLAN.md`).
 
 ## State
-- **HEAD `b64262c` (CP-L7), tree clean.** Original `AI analytics/` folder untouched.
+- **HEAD (CP-L8), tree clean.** Original `AI analytics/` folder untouched.
 - **95/95 standalone tests pass** (all `tests/` modules except the legacy `test_ui_and_db`), plus the
-  **4 live tests (2 `MetabaseLive` + 2 `TestJuniorMetabaseLive`) PASS when `ANALYTICS_MB_LIVE=1`**
-  (skipped otherwise). Run:
+  **3 live tests (2 `MetabaseLive` + 1 `TestJuniorMetabaseLive`) PASS when `ANALYTICS_MB_LIVE=1`**
+  (skipped otherwise) — **live-CONFIRMED 2026-08-07, 3/3 OK in ~8s**. Run:
   `cd <repo> && .venv/bin/python -m unittest tests.test_brain tests.test_browser_session tests.test_cli
   tests.test_ingest tests.test_integration tests.test_junior tests.test_metabase_live tests.test_migration
   tests.test_onboarding tests.test_pipeline_e2e tests.test_policy tests.test_tenancy tests.test_triage
@@ -16,10 +16,12 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
   `test_ui_and_db.test_pipeline_with_form_metadata` — `core.IngestionPipeline.run`'s Step-4 Cypher
   generation waits on a Neo4j that isn't reachable here. It is legacy `core.*` code, unrelated to
   `analytics_platform/`, and was left untouched.
-- **Live Metabase E2E CONFIRMED (CP-L6)** — host `metabase.om.yo-digital.com`, DB `59`, browser-
-  cookie only (no token). Verify anytime:
+- **Live Metabase E2E CONFIRMED (CP-L6 + CP-L8)** — host `metabase.om.yo-digital.com`, DB `59`, browser-
+  cookie only (no token). **The junior live path is now confirmed too** (verify anytime):
   `ANALYTICS_MB_LIVE=1 ANALYTICS_MB_DATABASE_ID=59 ANALYTICS_MB_EXPECTED_HOST=metabase.om.yo-digital.com \
-   .venv/bin/python -m unittest discover -s tests -k MetabaseLive -v`
+   .venv/bin/python -m unittest tests.test_metabase_live -v`
+  → 3/3 OK: session valid + read-only `SELECT 1` (`MetabaseLive`) and junior stage‑3
+  reproduction/catalog over the live browser executor (`TestJuniorMetabaseLive`).
 - Live API (offline demo) verified earlier; 23 routes.
 
 ## Progress (Brain v2 migration — in progress)
@@ -121,6 +123,12 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
     roadmap bullet "Junior wired to live Metabase: DONE". *Honest note: not run live here — the
     live path is gated and needs your logged-in Chrome; the offline seam + CLI selection are
     unit-tested and green.*
+- **CP-L8 — live run CONFIRMED (DONE)**: with `ANALYTICS_MB_LIVE=1` + `ANALYTICS_MB_DATABASE_ID=59` +
+  `ANALYTICS_MB_EXPECTED_HOST=metabase.om.yo-digital.com` and a logged-in Metabase tab,
+  `tests.test_metabase_live` ran **3/3 OK (~8s)** — `MetabaseLive` (session valid, read-only
+  `SELECT 1`) **and** `TestJuniorMetabaseLive` (an approved query was reproduced and a mapped table
+  catalogued through the live browser executor). The CP-L7 junior→live wiring is validated
+  end-to-end on real Metabase.
 
 ## How to run (all in repo root)
 ```bash
@@ -155,17 +163,15 @@ Deps frozen in `requirements-advanced.txt` (incl. `fastapi==0.141.1`).
 - `api.py` — `create_app(ctx)`; `make_context()`; onboarding endpoints; 23 routes.
 - `fixtures/` — synthetic retail warehouse + golden queries (athena-dialect SQL; transpiled at runtime).
 
-## Next steps (Brain v2 + Live-Metabase wired; Triage + Junior engine + Junior→live DONE)
-1. **Run the live-Metabase E2E on your Chrome (both paths).** With `ANALYTICS_MB_LIVE=1` +
-   `ANALYTICS_MB_DATABASE_ID=59` + `ANALYTICS_MB_EXPECTED_HOST=metabase.om.yo-digital.com` and a
-   Metabase tab logged in, run `.venv/bin/python -m unittest -k MetabaseLive -v` and
-   `.venv/bin/python -m unittest -k JuniorMetabaseLive -v`, and/or
-   `analytics-platform junior <tenant>` for the real stage-3 assessment. Optional flavors:
-   `.venv/bin/python -m unittest -k BrowserSession -v`.
-2. **Keep triaging the remaining ~871 CANDIDATEs.** `cli review` — bulk approve by kind,
+## Next steps (Brain v2 + Live-Metabase + Junior engine + Junior→live DONE; live E2E confirmed)
+1. **Keep triaging the remaining ~871 CANDIDATEs.** `cli review` — bulk approve by kind,
    `--conflicts` to dedupe the value-set Definition candidates.
-3. (optional) Expose `triage`/`junior` as FastAPI endpoints; add an LLM hook for richer
-   stage-3 questions (NullClient today → `GatewayClient`).
+2. (optional) Expose `triage`/`junior` as FastAPI endpoints + add an LLM hook for richer stage-3
+   questions (NullClient today → `GatewayClient`).
+3. (optional) **Standalone UI is not built yet.** Today's surfaces: legacy Streamlit `app.py`
+   (the working reference, `run_dashboard.command`), and the standalone FastAPI Swagger at
+   `serve 8000` → `/docs` (23 routes). Plan: "Frontend (later): React/Next.js; until then Streamlit
+   as a thin API client" (see `STANDALONE_ANALYTICS_PLATFORM_PLAN.md` §5).
 
 Re-run migration into any tenant's Brain (idempotent, CANDIDATE-only):
 `ANALYTICS_DB_PATH=<db> .venv/bin/python -m analytics_platform.cli migrate <tid> --snapshot extracted_data/knowledge_graph_snapshot.json`
