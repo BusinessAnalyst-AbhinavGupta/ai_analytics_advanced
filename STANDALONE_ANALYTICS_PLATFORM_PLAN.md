@@ -97,6 +97,7 @@ Replace senior analysts entirely · execute production data changes · make auto
 | 6 | **Observability paranoia:** every operation tagged with tenant + trace + stage, and every component emits an event/span → the owner can answer "what fired, did it work, what did it cost" as if everything were an API. | Explicit user requirement for owner metrics. |
 | 7 | **The LLM is not the query authority.** SQL AST validation, policy engine, schemas, tests, and execution results are the deterministic controls. | Prevents plausible-but-wrong SQL. |
 | 8 | **Approval status is a hard gate;** confidence scores only *rank* retrieval. | Prevents weights from being mistaken for truth. |
+| 9 | **Test through the API; every front-end control is wired to an API endpoint.** Every behaviour ships with an API-contract test (registered route + request model → service → persisted state). Streamlit is a thin API client that never touches the DB/services directly; each interactive control maps to an `ui_client` method backed by a covered route, and is verified to change server state (or surface a visible error). | Guarantees the UI actually works when clicked and catches regressions at the contract boundary. |
 
 ---
 ## 5. Target Architecture
@@ -216,6 +217,16 @@ analytics-platform/
 | `core/llm_gateway.py` | `packages/llm/` (interfaces + providers) |
 | `core/table_fetcher.py`, `core/metabase_executor.py` | `packages/execution/browser_session_executor/` |
 | `core/parser.py`, `core/schema_validator.py` | `packages/query_planning/` (sqlglot-backed) |
+
+### 5.4 Testing contract (required)
+
+The **public HTTP API is the only integration seam**; the Streamlit UI is a thin API client.
+
+1. **Test through the API.** Every feature/behaviour ships with an **API-contract test** that goes through the registered FastAPI routes with the real request models and asserts the **persisted server-state change** — not just a return value. When starlette `TestClient`/`httpx` is unavailable, invoke the registered route handlers directly (the exact closures the framework calls, as `tests/test_api.py` does) so path/method wiring, tenant gating (404), request parsing, and endpoint→service→state are all exercised.
+2. **Service-layer unit tests are supplementary, never a substitute** for the API test. They stay for fast/precise coverage, but correctness at the contract boundary is what ships.
+3. **Every interactive front-end element is wired to an API endpoint.** `standalone_ui.py` must call `ui_client` (API client) methods only — never the `Store`, services, or DB directly. Each control maps to a `ui_client` method that maps to a route covered by an API test.
+4. **No silent no-ops.** Mutating controls must change server state; failures surface visibly (guarded, `st.error`, or an explicit count). A control whose action would be entirely skipped by the governance gate (e.g. reject-on-`APPROVED`) must either be disabled or visibly explain *why*, so a user never sees "nothing happened."
+5. **Definition of done for any feature/tab:** (a) API-contract test asserting state change; (b) an `ui_client` method; (c) a UI element that calls that method; (d) a UI-connectivity check (every `_client().<method>` used in the UI exists on `APIClient` and its route is registered and mutates state).
 
 ---
 ## 6. Company Initialization Workflow (the "we're told about the company" flow)

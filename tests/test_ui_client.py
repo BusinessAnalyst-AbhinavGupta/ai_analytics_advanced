@@ -62,6 +62,36 @@ class TestAPIClient(unittest.TestCase):
             with self.assertRaises(HTTPError):
                 APIClient("http://x").triage_summary("nope")
 
+    def test_triage_dedupe_posts_keep_drop(self):
+        with self._patch({"superseded": ["b"], "rejected": ["c"]}) as m:
+            out = APIClient("http://x").triage_dedupe("t1", keep="a",
+                                                       drop=["b", "c"],
+                                                       by="senior",
+                                                       notes="dedupe group")
+        self.assertEqual(out, {"superseded": ["b"], "rejected": ["c"]})
+        self.assertEqual(m.call_args[0][0], "POST")
+        self.assertEqual(m.call_args[0][1], "http://x/triage/t1/dedupe")
+        self.assertEqual(m.call_args[1]["json"],
+                         {"keep": "a", "drop": ["b", "c"],
+                          "by": "senior", "notes": "dedupe group"})
+
+
+class TestUIAPIConnectivity(unittest.TestCase):
+    """Requirement 5.4: every front-end control is wired to an API client method."""
+
+    def test_all_ui_client_calls_exist_on_apiclient(self):
+        """Every `_client().<method>(` used in standalone_ui.py must exist on APIClient,
+        so no control can silently dangle (no-op from a missing method)."""
+        import re as _re
+        import pathlib
+
+        src = pathlib.Path(__file__).resolve().parents[1] / "standalone_ui.py"
+        text = src.read_text()
+        methods = set(_re.findall(r"_client\(\)\.(\w+)\(", text))
+        self.assertTrue(len(methods) >= 10, f"expected many UI endpoints, got {methods}")
+        missing = sorted(m for m in methods if not hasattr(APIClient, m))
+        self.assertEqual(missing, [], f"UI uses undeclared APIClient methods: {missing}")
+
 
 if __name__ == "__main__":
     unittest.main()

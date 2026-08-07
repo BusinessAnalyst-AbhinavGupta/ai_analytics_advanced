@@ -11,7 +11,8 @@ import unittest
 
 from fastapi import HTTPException
 
-from analytics_platform.api import TriageBulkIn, TriageIdsIn, AppContext, create_app
+from analytics_platform.api import (TriageBulkIn, TriageDedupeIn, TriageIdsIn,
+                                    AppContext, create_app)
 from analytics_platform.domain import DataSourceKind, NodeKind, ReviewStatus
 from analytics_platform.fixtures import WEEKLY_ORDER_SQL, build_retail_warehouse
 from analytics_platform.onboarding import OnboardingService
@@ -88,16 +89,40 @@ class TestApiTriage(unittest.TestCase):
         self.assertIsInstance(call(self.app, "GET", "/triage/{tenant_id}/conflicts",
                                    self.tid), list)
 
+    def test_dedupe_via_api(self):
+        """API-contract test: the route mutates persisted state (reject/supersede)."""
+        brain = self.ctx.pipeline.brain(self.tid)
+        keep = brain.create(NodeKind.BUSINESS_RULE, "dup rule",
+                            status=ReviewStatus.APPROVED)
+        drop_appr = brain.create(NodeKind.BUSINESS_RULE, "dup rule",
+                                 status=ReviewStatus.APPROVED)
+        drop_cand = brain.create(NodeKind.BUSINESS_RULE, "dup rule")  # CANDIDATE
+        self.assertEqual(len(call(self.app, "GET", "/triage/{tenant_id}/conflicts",
+                                  self.tid)), 1)
+        res = call(self.app, "POST", "/triage/{tenant_id}/dedupe", self.tid,
+                   TriageDedupeIn(keep=keep.id, drop=[drop_appr.id, drop_cand.id],
+                                  by="senior"))
+        self.assertEqual(set(res["superseded"]), {drop_appr.id})
+        self.assertEqual(res["rejected"], [drop_cand.id])
+        self.assertEqual(call(self.app, "GET", "/triage/{tenant_id}/conflicts",
+                              self.tid), [])
+        # kept node is untouched and still APPROVED
+        self.assertEqual(brain.get(keep.id).status, ReviewStatus.APPROVED)
+
     def test_unknown_tenant_404(self):
         for method, template in [("GET", "/triage/{tenant_id}/summary"),
                                  ("GET", "/triage/{tenant_id}/queue"),
                                  ("POST", "/triage/{tenant_id}/approve"),
-                                 ("POST", "/triage/{tenant_id}/bulk")]:
+                                 ("POST", "/triage/{tenant_id}/bulk"),
+                                 ("POST", "/triage/{tenant_id}/dedupe")]:
             with self.assertRaises(HTTPException) as cm:
                 if template.endswith("/approve"):
                     call(self.app, method, template, "nope", TriageIdsIn(ids=[]))
                 elif template.endswith("/bulk"):
                     call(self.app, method, template, "nope", TriageBulkIn())
+                elif template.endswith("/dedupe"):
+                    call(self.app, method, template, "nope",
+                         TriageDedupeIn(keep="k", drop=[]))
                 else:
                     call(self.app, method, template, "nope")
             self.assertEqual(cm.exception.status_code, 404, template)
