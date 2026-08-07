@@ -1,0 +1,55 @@
+{
+  "intents": [
+    {"b": {"id": "intent-1", "card_id": "28369", "journey_stage": "Shipping",
+           "name": "Shipping Page Business Error Impact Analysis",
+           "business_goal": "Quantify impact of errors on shipping.",
+           "reasoning_summary": "Segments sessions by error recovery.",
+           "dialect": "AWS Athena / Presto", "updated_at": "2026-08-05T10:05:07.9+00:00"}},
+    {"b": {"id": "intent-2", "card_id": "109", "journey_stage": "Buy",
+           "name": "Checkout conversion by month",
+           "business_goal": "Measure checkout conversion.",
+           "reasoning_summary": "Funnel drop-off analysis.",
+           "dialect": "AWS Athena / Presto", "updated_at": "2026-08-05T10:05:08.1+00:00"}}
+  ],
+  "golden_queries": [
+    {"g": {"dialect": "AWS Athena / Presto", "journey_stage": "Shipping",
+           "name": "Shipping Page Business Error Impact Analysis",
+           "table_name": "eshop_data.es_events_v2",
+           "intent": "Quantify impact of errors on shipping.", "card_id": "28369",
+           "last_verified": "2026-08-05T10:05:08.1+00:00",
+           "sql": "SELECT COUNT(DISTINCT identifiers_sessionid) AS total_error_sessions FROM eshop_data.es_events_v2 WHERE identifiers_page_name = 'checkout/shipping' AND attr_error_type = 'warning + confirmation'"}},
+    {"g": {"dialect": "AWS Athena / Presto", "journey_stage": "Buy",
+           "name": "Checkout conversion by month",
+           "table_name": "silver_layer.t_link_journey_checkout_com",
+           "intent": "Measure checkout conversion.", "card_id": "109",
+           "last_verified": "2026-08-05T10:05:08.1+00:00",
+           "sql": "SELECT date_format(CAST(created_at AS TIMESTAMP), '%Y-%m') AS month, COUNT_IF(action = 'apptCompleted') AS completed FROM silver_layer.t_link_journey_checkout_com WHERE action = 'apptBooked' AND status = 'PENDING' GROUP BY 1"}}
+  ],
+  "idioms": [
+    {"i": {"sql_skeleton": "CASE WHEN next_action IS NULL AND label LIKE '%error%' THEN 'Technical Error' END",
+           "name": "Last-Event Error Attribution",
+           "description": "Categorizes exits as technical or business errors.",
+           "when_to_use": "Analyzing why users abandon without navigating."}},
+    {"i": {"sql_skeleton": "ROW_NUMBER() OVER(PARTITION BY session ORDER BY ts) AS rn",
+           "name": "Row-number session index",
+           "description": "Indexes events per session.",
+           "when_to_use": "Isolate the most recent event per session."}}
+  ],
+  "rules": [
+    {"r": {"rule_type": "DISAMBIGUATION", "reasoning": "Internal testing traffic can skew metrics.",
+           "description": "Always filter out internal employees."}},
+    {"r": {"rule_type": "EXCLUSION", "reasoning": "addonManagement skews the funnel.",
+           "description": "Exclude addonManagement category."}},
+    {"r": {"rule_type": "DENOMINATOR", "reasoning": "Use all order events as the denominator.",
+           "description": "Completion % denominator counts all order events."}}
+  ],
+  "stages": [
+    {"st": {"name": "Shipping"}},
+    {"st": {"name": "Buy"}}
+  ],
+  "tables": [
+    {"t": {"database": "Athena", "last_updated": "2026-08-05T10:05:01.4+00:00",
+           "column_count": 44, "name": "silver_layer.t_link_journey_checkout_com",
+           "row_count": 10000}}
+  ]
+}

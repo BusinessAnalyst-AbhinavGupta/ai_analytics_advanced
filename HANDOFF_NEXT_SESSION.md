@@ -4,9 +4,20 @@ Prepared: 2026-08-07 · Repo: `/Users/abhinav.gupta/Documents/ai_analytics_advan
 Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANALYTICS_PLATFORM_PLAN.md`).
 
 ## State
-- Git clean at `7d7bf4b` (3 commits: import → platform → P2+P3). **Original `AI analytics/` folder is untouched.**
+- Git clean at `9321854` (handoff committed). **Original `AI analytics/` folder is untouched.**
 - **40/40 tests pass**: `cd <repo> && .venv/bin/python -m unittest discover -s tests`
 - Live API verified (provision→tables→legacy→review→readiness smoke). 23 routes.
+
+## Progress (Brain v2 migration — in progress)
+- **CP1 — mapper (DONE)**: added `NodeKind.IDIOM`; new `analytics_platform/migration/mapper.py`
+  (pure: snapshot dict → `list[NodeSpec]`; QUERY + derived DEFINITIONs via `ingest.extract`,
+  IDIOM, BUSINESS_RULE, stage/table DEFINITIONs; enriches query reasoning from `intents` by
+  `card_id`; all default `CANDIDATE`; stable `source_ref` keys for idempotency). Seed fixture
+  `tests/fixtures/snapshot_seed.json` + 9 mapper tests. **49/49 tests pass.**
+- **CP2 — loader + CLI `migrate` (PENDING)**: `migration/loader.py` (`migrate_specs`,
+  `migrate_from_snapshot`, idempotency guard via `source_ref`, provenance/confidence, tenant
+  scoping) + `cli.py migrate` subcommand + loader/integration tests.
+- **CP3 — real migrate + handoff (PENDING)**: run against `extracted_data/knowledge_graph_snapshot.json`, verify, refresh this doc.
 
 ## How to run (all in repo root)
 ```bash

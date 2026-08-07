@@ -50,6 +50,7 @@ class NodeKind(str, Enum):
     QUERY = "QUERY"
     JOIN_RULE = "JOIN_RULE"
     BUSINESS_RULE = "BUSINESS_RULE"
+    IDIOM = "IDIOM"       # reusable SQL pattern/skeleton (from the prototype knowledge graph)
 
 
 class AnswerMode(str, Enum):
