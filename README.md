@@ -180,7 +180,21 @@ ANALYTICS_API_URL=http://localhost:8001 .venv/bin/streamlit run standalone_ui.py
   metrics, a **Definitions** review tab (grouped by column; shows each value-set + its source SQL
   before you approve/reject), per-row approve/reject via `st.data_editor`, bulk by kind, a node
   inspector, and a **Conflicts** tab (keep-one/reject-rest dedupe). Fixed a latent UI bug
-  (GET `/tenants` returns `id`, POST returns `tenant_id`).
+  (GET `/tenants` returns `id`, POST returns `tenant_id`). Tabs now: Junior / Triage /
+  **Stakeholder** / **Research** / **Governance**.
+- **P6 Stakeholder analyst: DONE** — `stakeholder.py` (`StakeholderService`): classify →
+  approved-knowledge-first → refresh/cite → low-cost route → escalate high-risk → feedback +
+  quality. `/stakeholder/{tid}/*`. `tests/test_stakeholder.py`.
+- **P7 External research: DONE** — `research.py` (`ResearchService`): allow/block sources +
+  credibility; cited, `origin="external"` claims; capture; promote writes a `NodeKind.EXTERNAL`
+  node that starts **CANDIDATE** (senior gate only). `/research/{tid}/*`. `tests/test_research.py`.
+- **P8 Commercial hardening: DONE (auth off by default)** — `auth.py` (signed tokens, role RBAC,
+  cross-tenant isolation, OIDC seam; on only with `ANALYTICS_AUTH_SECRET` +
+  `ANALYTICS_AUTH_ENABLED=1`), `billing.py` (per-tenant usage + USD cost from telemetry),
+  `retention.py` (per-tenant purge + full tenant deletion with audit). `/auth`, `/billing/*`,
+  `/retention/*`, `DELETE /tenants/{tid}`. `tests/test_governance_auth.py` +
+  `tests/test_governance_retention.py`.
 
-Next per plan: keep triaging the ~871 remaining CANDIDATEs (`cli review` / `/triage`), then P6
-stakeholder workflow, P7 external research, P8 commercial hardening.
+Next per plan: wire the operator tail for P6–P8 (live OIDC/SSO + per-tenant browser profile, real
+approved search providers, retention scheduler), then the security tail (threat model / pen test /
+DR / SOC2 readiness). Senior review of the migrated Brain is complete (536 approved / 693 rejected).

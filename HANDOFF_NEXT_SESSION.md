@@ -197,6 +197,26 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
   titles) so the "randomly keep one per conflict" step had nothing to apply. Final matrix:
   `APPROVED 536 (QUERY 35 / DEFINITION 28 / IDIOM 180 / BUSINESS_RULE 293)`, `REJECTED 693 (QUERY 123 /
   DEFINITION 570)`. The migrated Brain for this tenant is now fully governed — no CANDIDATE nodes.
+- **CP-P6 — Stakeholder analyst (DONE)**: `stakeholder.py` (`StakeholderService`) — classify →
+  retrieve **approved** knowledge first → refresh an approved query (reuse) → low-cost LLM route →
+  escalate high-risk questions → citations + freshness + caveats; `record_feedback` + `quality`
+  (acceptance/escalation/reuse/cost). Tables `stakeholder_answers` + `stakeholder_feedback`.
+  Endpoints `/stakeholder/{tid}/answer|feedback|quality`; UI tab. Verified: reuse-with-citation,
+  definition fall-through, escalation, cannot-answer, feedback/quality (see `tests/test_stakeholder.py`).
+- **CP-P7 — External research (DONE)**: `research.py` (`ResearchService`) — allow/block source
+  list + credibility classification; **cited** search with `origin="external"` flagged; captures
+  docs; promotion writes a **`NodeKind.EXTERNAL` node that starts CANDIDATE** (only the senior
+  triage gate can ever APPROVE it — research can never silently become company fact). Endpoints
+  `/research/{tid}/sources|search|capture|docs|promote|overview`; UI tab. See `tests/test_research.py`.
+- **CP-P8 — Commercial hardening (DONE, auth off by default)**: `auth.py` (`Role`/`AuthGate`/
+  `issue`/`verify`) — signed tokens, role+rank RBAC, **cross-tenant isolation** enforced in the
+  auth layer, OIDC/SSO seam (`oauth_issuer`), **off unless `ANALYTICS_AUTH_SECRET` +
+  `ANALYTICS_AUTH_ENABLED=1`** so existing routes/tests stay open. `billing.py` (`BillingService`) —
+  per-tenant usage + USD cost from telemetry. `retention.py` (`RetentionService`) — per-tenant
+  purge by `retention_days` (dry-run/review) + **full tenant deletion** with an append-only audit
+  record. Endpoints `/auth/login|me`, `/billing/{tid}/usage`, `/billing/report`,
+  `/retention/review|purge`, `DELETE /tenants/{tid}`. See `tests/test_governance_auth.py` +
+  `tests/test_governance_retention.py`.
 
 ## How to run (all in repo root)
 ```bash
@@ -247,13 +267,17 @@ Deps frozen in `requirements-advanced.txt` (incl. `fastapi==0.141.1`).
   encode SQL/value-sets that aren't verified against real Metabase, so they stay CANDIDATE for a
   senior reviewer.*
 
-## Next steps (Brain v2 + Live-Metabase + Junior engine + Junior→live + API exposure + LLM hook + thin UI + triage COMPLETE)
+## Next steps (Brain v2 + Live-Metabase + Junior engine + Junior→live + API + LLM hook + thin UI + triage COMPLETE + P6/P7/P8 CORE DONE)
 1. **Triage is complete for the migrated tenant** (`tnt_56a8295f82c3`): 0 CANDIDATEs remain
    (`APPROVED 536 / REJECTED 693`). To get junior value from it: set a CompanyProfile with targets
-   and point an executor at real data — approving QUERYs (done, 35) is what lifts `junior stage` to 2→3.
-   Note: this review gated junior value but never blocked the orthogonal P6–P8 work below.
-2. (later) Plan phases P6 stakeholder workflow (evidence/freshness/escalation), P7 external
-   research, P8 commercial hardening (SSO/RBAC, per-tenant browser profile).
+   and point an executor at real data — approving QUERYs (done, 35) is what lifts `junior stage`
+   to 2→3.
+2. **P6–P8 core is in** (stakeholder analyst / external research / auth–billing–retention hardening),
+   auth **off by default**. Remaining is the operator-side + live-gated tail: wire a real OIDC/SSO
+   provider and per-tenant browser profiles (P8), connect approved external search providers (P7),
+   run the retention scheduler (cron/`retention purge`), then the security tail (threat model /
+   pen test / DR / SOC2 readiness) from the other ticket.
+3. Update `README.md` reference docs + the UI client tests as the remaining routes harden.
 
 Re-run migration into any tenant's Brain (idempotent, CANDIDATE-only):
 `ANALYTICS_DB_PATH=<db> .venv/bin/python -m analytics_platform.cli migrate <tid> --snapshot extracted_data/knowledge_graph_snapshot.json`

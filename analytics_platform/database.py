@@ -54,10 +54,42 @@ CREATE TABLE IF NOT EXISTS telemetry (
     resource TEXT, status TEXT, duration_ms REAL, bytes_in INTEGER,
     tokens_in INTEGER, tokens_out INTEGER, meta TEXT
 );
+CREATE TABLE IF NOT EXISTS stakeholder_answers (
+    id TEXT PRIMARY KEY, tenant_id TEXT, question TEXT, user_id TEXT,
+    category TEXT, answer TEXT, answer_mode TEXT, status TEXT,
+    trace_id TEXT, created_at TEXT, source_node_ids TEXT, citations TEXT,
+    facts TEXT, caveats TEXT, freshness REAL, tokens_in INTEGER,
+    tokens_out INTEGER, cost REAL, escalated INTEGER
+);
+CREATE TABLE IF NOT EXISTS stakeholder_feedback (
+    id TEXT PRIMARY KEY, tenant_id TEXT, answer_id TEXT, user_id TEXT,
+    rating TEXT, comment TEXT, created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS research_sources (
+    id TEXT PRIMARY KEY, tenant_id TEXT, name TEXT, url TEXT,
+    kind TEXT, credibility TEXT, policy TEXT, created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS research_docs (
+    id TEXT PRIMARY KEY, tenant_id TEXT, query TEXT, url TEXT, title TEXT,
+    source_id TEXT, credibility TEXT, snippet TEXT, claims TEXT, origin TEXT,
+    status TEXT, created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS auth_principals (
+    id TEXT PRIMARY KEY, tenant_id TEXT, role TEXT, name TEXT, email TEXT,
+    scopes TEXT, created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT, tenant_id TEXT, actor TEXT, role TEXT, action TEXT,
+    resource TEXT, outcome TEXT, detail TEXT
+);
 CREATE INDEX IF NOT EXISTS idx_kn_tenant ON knowledge_nodes(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_runs_tenant ON analysis_runs(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_tel_tenant ON telemetry(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_tel_trace ON telemetry(trace_id);
+CREATE INDEX IF NOT EXISTS idx_sa_tenant ON stakeholder_answers(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_rd_tenant ON research_docs(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_audit_tenant ON audit_log(tenant_id);
 """
 
 

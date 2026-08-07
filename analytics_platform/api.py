@@ -12,11 +12,13 @@ import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from .analysis import evaluate_rules, profile_df
+from .auth import AuthGate, Role, issue
+from .billing import BillingService
 from .brain.store import CompanyBrain
 from .config import Settings
 from .database import Store
@@ -27,6 +29,9 @@ from .llm.client import make_client_from
 from .observability import Observability
 from .onboarding import OnboardingService
 from .pipeline import Pipeline
+from .research import ResearchService
+from .retention import RetentionService
+from .stakeholder import StakeholderService
 from .tenancy import TenantService
 from .triage import TriageService
 
@@ -135,6 +140,44 @@ class TriageBulkIn(BaseModel):
     limit: int = 500
 
 
+class StakeholderIn(BaseModel):
+    question: str
+    user_id: str = ""
+
+
+class FeedbackIn(BaseModel):
+    answer_id: str
+    user_id: str = ""
+    rating: str = "up"          # up | down
+    comment: str = ""
+
+
+class ResearchBatchIn(BaseModel):
+    query: str = ""
+    results: List[Dict[str, Any]] = []   # what an approved provider returned
+
+
+class PromoteIn2(BaseModel):
+    doc_id: str
+    by: str = "analyst"
+    note: str = ""
+
+
+class SourcePolicyIn(BaseModel):
+    policy: str                 # allow | block
+
+
+class LoginIn(BaseModel):
+    tenant_id: str = ""
+    role: str = "stakeholder"
+    sub: str = ""
+
+
+class PurgeIn(BaseModel):
+    tenant_id: Optional[str] = None
+    dry_run: bool = True
+
+
 # --------------------------------------------------------------------------- #
 # Application context
 # --------------------------------------------------------------------------- #
@@ -147,6 +190,11 @@ class AppContext:
     pipeline: Pipeline
     executor: SamplerExecutor
     onboarding: OnboardingService
+    stakeholder: Optional[StakeholderService] = None
+    research: Optional[ResearchService] = None
+    auth: Optional[AuthGate] = None
+    billing: Optional[BillingService] = None
+    retention: Optional[RetentionService] = None
 
 
 def make_context(settings: Optional[Settings] = None,
@@ -160,9 +208,42 @@ def make_context(settings: Optional[Settings] = None,
                         executor=executor, observability=obs)
     onboarding = OnboardingService(store, tenants=tenants, pipeline=pipeline,
                                    observability=obs)
+    stakeholder = StakeholderService(store, tenants=tenants, executor=executor,
+                                     observability=obs,
+                                     llm=make_client_from(settings),
+                                     cost_per_1k_input=settings.cost_per_1k_input,
+                                     cost_per_1k_output=settings.cost_per_1k_output)
+    research = ResearchService(store, observability=obs)
+    auth = AuthGate(settings)
+    billing = BillingService(store, settings=settings, observability=obs)
+    retention = RetentionService(store, tenants=tenants, observability=obs)
     return AppContext(settings=settings, store=store, tenants=tenants,
                       observability=obs, pipeline=pipeline, executor=executor,
-                      onboarding=onboarding)
+                      onboarding=onboarding, stakeholder=stakeholder,
+                      research=research, auth=auth, billing=billing,
+                      retention=retention)
+
+
+def ensure_services(ctx: AppContext) -> AppContext:
+    """Backfill the P6-P8 services when an AppContext was built manually
+    (e.g. by test helpers) with only the core P1-P3 fields."""
+    if ctx.stakeholder is None:
+        ctx.stakeholder = StakeholderService(
+            ctx.store, tenants=ctx.tenants, executor=ctx.executor,
+            observability=ctx.observability, llm=make_client_from(ctx.settings),
+            cost_per_1k_input=ctx.settings.cost_per_1k_input,
+            cost_per_1k_output=ctx.settings.cost_per_1k_output)
+    if ctx.research is None:
+        ctx.research = ResearchService(ctx.store, observability=ctx.observability)
+    if ctx.auth is None:
+        ctx.auth = AuthGate(ctx.settings)
+    if ctx.billing is None:
+        ctx.billing = BillingService(ctx.store, settings=ctx.settings,
+                                     observability=ctx.observability)
+    if ctx.retention is None:
+        ctx.retention = RetentionService(ctx.store, tenants=ctx.tenants,
+                                         observability=ctx.observability)
+    return ctx
 
 
 def bootstrap_demo(ctx: AppContext) -> str:
@@ -211,6 +292,7 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
                        allow_headers=["*"])
     app.state.ctx = ctx
+    ctx = ensure_services(ctx)
     C = ctx  # closure shorthand
 
     def tenant_or_404(tenant_id: str) -> str:
@@ -454,6 +536,128 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
     @app.get("/junior/{tenant_id}/reproduce")
     def junior_reproduce(tenant_id: str, limit: int = 200) -> Dict[str, Any]:
         return _junior(tenant_id).reproduce_metrics(tenant_id, limit=limit)
+
+    # -- P6 stakeholder analyst -------------------------------------------
+    @app.post("/stakeholder/{tenant_id}/answer")
+    def stakeholder_answer(tenant_id: str, body: StakeholderIn) -> Dict[str, Any]:
+        tenant_or_404(tenant_id)
+        return C.stakeholder.answer(tenant_id, body.question, user_id=body.user_id)
+
+    @app.post("/stakeholder/{tenant_id}/feedback")
+    def stakeholder_feedback(tenant_id: str, body: FeedbackIn) -> Dict[str, Any]:
+        tenant_or_404(tenant_id)
+        return C.stakeholder.record_feedback(tenant_id, body.answer_id,
+                                             user_id=body.user_id, rating=body.rating,
+                                             comment=body.comment)
+
+    @app.get("/stakeholder/{tenant_id}/quality")
+    def stakeholder_quality(tenant_id: str) -> Dict[str, Any]:
+        tenant_or_404(tenant_id)
+        return C.stakeholder.quality(tenant_id)
+
+    # -- P7 external research ---------------------------------------------
+    @app.post("/research/{tenant_id}/sources/seed")
+    def research_seed(tenant_id: str) -> List[Dict[str, Any]]:
+        tenant_or_404(tenant_id)
+        return C.research.seed_sources(tenant_id)
+
+    @app.get("/research/{tenant_id}/sources")
+    def research_sources(tenant_id: str) -> List[Dict[str, Any]]:
+        tenant_or_404(tenant_id)
+        return C.research.list_sources(tenant_id)
+
+    @app.post("/research/{tenant_id}/sources/{source_id}/policy")
+    def research_policy(tenant_id: str, source_id: str, body: SourcePolicyIn) -> Dict[str, Any]:
+        tenant_or_404(tenant_id)
+        return C.research.set_source_policy(tenant_id, source_id, body.policy)
+
+    @app.post("/research/{tenant_id}/search")
+    def research_search(tenant_id: str, body: ResearchBatchIn) -> List[Dict[str, Any]]:
+        tenant_or_404(tenant_id)
+        return C.research.search(tenant_id, body.query, results=body.results)
+
+    @app.post("/research/{tenant_id}/capture")
+    def research_capture(tenant_id: str, body: ResearchBatchIn) -> List[Dict[str, Any]]:
+        tenant_or_404(tenant_id)
+        return C.research.capture(tenant_id, body.query, body.results)
+
+    @app.get("/research/{tenant_id}/docs")
+    def research_docs(tenant_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+        tenant_or_404(tenant_id)
+        return C.research.list_docs(tenant_id, limit)
+
+    @app.post("/research/{tenant_id}/promote")
+    def research_promote(tenant_id: str, body: PromoteIn2) -> Dict[str, Any]:
+        tenant_or_404(tenant_id)
+        node = C.research.promote(tenant_id, body.doc_id, by=body.by, note=body.note)
+        if node is None:
+            raise HTTPException(404, "document not found")
+        return node
+
+    @app.get("/research/{tenant_id}/overview")
+    def research_overview(tenant_id: str) -> Dict[str, Any]:
+        tenant_or_404(tenant_id)
+        return C.research.overview(tenant_id)
+
+    # -- P8 auth / billing / retention ------------------------------------
+    @app.post("/auth/login")
+    def auth_login(body: LoginIn) -> Dict[str, Any]:
+        role = Role(body.role) if body.role in Role.__members__.values() else Role.STAKEHOLDER
+        if not C.settings.auth_secret:
+            return {"error": "auth disabled: set ANALYTICS_AUTH_SECRET"}
+        token = issue(C.settings.auth_secret, body.tenant_id, role.value, sub=body.sub)
+        return {"token": token, "tenant_id": body.tenant_id, "role": role.value}
+
+    @app.get("/auth/me")
+    def auth_me(authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+        return C.auth.principal(authorization)
+
+    def _unauth(exc: AuthError) -> None:
+        raise HTTPException(exc.status, str(exc))
+
+    @app.get("/billing/{tenant_id}/usage")
+    def billing_usage(tenant_id: str,
+                      authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+        try:
+            C.auth.require(authorization, tenant_id, [Role.OWNER, Role.TENANT_ADMIN,
+                                                       Role.AUDITOR, Role.SENIOR])
+        except AuthError as e:
+            _unauth(e)
+        return C.billing.usage(tenant_id)
+
+    @app.get("/billing/report")
+    def billing_report(authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+        try:
+            C.auth.require(authorization, "", [Role.OWNER])
+        except AuthError as e:
+            _unauth(e)
+        return C.billing.platform_report()
+
+    @app.get("/retention/review")
+    def retention_review(authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+        try:
+            C.auth.require(authorization, "", [Role.OWNER, Role.TENANT_ADMIN])
+        except AuthError as e:
+            _unauth(e)
+        return C.retention.review()
+
+    @app.post("/retention/purge")
+    def retention_purge(body: PurgeIn,
+                        authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+        try:
+            C.auth.require(authorization, body.tenant_id or "", [Role.OWNER, Role.TENANT_ADMIN])
+        except AuthError as e:
+            _unauth(e)
+        return C.retention.purge_expired(tenant_id=body.tenant_id, dry_run=body.dry_run)
+
+    @app.delete("/tenants/{tenant_id}")
+    def delete_tenant(tenant_id: str,
+                      authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+        try:
+            C.auth.require(authorization, tenant_id, [Role.OWNER])
+        except AuthError as e:
+            _unauth(e)
+        return C.retention.delete_tenant(tenant_id)
 
     return app
 

@@ -70,5 +70,50 @@ class APIClient:
                          json={"kind": kind or None, "action": action, "by": by,
                                "limit": limit, "notes": notes})
 
+    # -- P6 stakeholder ----------------------------------------------------
+    def stakeholder_answer(self, tenant: str, question: str,
+                           user_id: str = "") -> Dict[str, Any]:
+        return self._req("POST", f"/stakeholder/{tenant}/answer",
+                         json={"question": question, "user_id": user_id})
+
+    def stakeholder_feedback(self, tenant: str, answer_id: str, rating: str = "up",
+                             user_id: str = "", comment: str = "") -> Dict[str, Any]:
+        return self._req("POST", f"/stakeholder/{tenant}/feedback",
+                         json={"answer_id": answer_id, "rating": rating,
+                               "user_id": user_id, "comment": comment})
+
+    def stakeholder_quality(self, tenant: str) -> Dict[str, Any]:
+        return self._req("GET", f"/stakeholder/{tenant}/quality")
+
+    # -- P7 research -------------------------------------------------------
+    def research_seed(self, tenant: str) -> List[Dict[str, Any]]:
+        return self._req("POST", f"/research/{tenant}/sources/seed")
+
+    def research_sources(self, tenant: str) -> List[Dict[str, Any]]:
+        return self._req("GET", f"/research/{tenant}/sources")
+
+    def research_search(self, tenant: str, query: str,
+                        results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return self._req("POST", f"/research/{tenant}/search",
+                         json={"query": query, "results": results})
+
+    def research_capture(self, tenant: str, query: str,
+                         results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return self._req("POST", f"/research/{tenant}/capture",
+                         json={"query": query, "results": results})
+
+    def research_docs(self, tenant: str, limit: int = 50) -> List[Dict[str, Any]]:
+        return self._req("GET", f"/research/{tenant}/docs", params={"limit": limit})
+
+    def research_promote(self, tenant: str, doc_id: str) -> Dict[str, Any]:
+        return self._req("POST", f"/research/{tenant}/promote", json={"doc_id": doc_id})
+
+    def research_overview(self, tenant: str) -> Dict[str, Any]:
+        return self._req("GET", f"/research/{tenant}/overview")
+
+    # -- P8 governance -----------------------------------------------------
+    def billing_usage(self, tenant: str) -> Dict[str, Any]:
+        return self._req("GET", f"/billing/{tenant}/usage")
+
 
 __all__ = ["APIClient"]

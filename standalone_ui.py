@@ -198,6 +198,74 @@ def _definitions_review(tenant):
         st.code(sql or "(no source_sql)", language="sql")
 
 
+def _stakeholder_tab(tenant):
+    st.subheader("Stakeholder analyst (P6)")
+    st.caption("Low-cost, approved-knowledge-first answers. High-risk questions escalate; "
+               "answers carry citations + freshness + cost.")
+    q = st.text_input("Ask the stakeholder analyst", key="sk_q")
+    if st.button("Answer", key="sk_ask") and q.strip():
+        res = _guarded(lambda: _client().stakeholder_answer(tenant, q.strip()))
+        if res:
+            st.write(res.get("answer") or "(escalated / no answer)")
+            st.json(res)
+            st.session_state["sk_last"] = res.get("answer_id")
+    last = st.session_state.get("sk_last")
+    c1, c2 = st.columns([1, 1])
+    c1.button("👍 helpful", key="sk_up",
+              on_click=lambda: _client().stakeholder_feedback(tenant, last, rating="up")
+              if last else None)
+    c2.button("👎 not helpful", key="sk_down",
+              on_click=lambda: _client().stakeholder_feedback(tenant, last, rating="down")
+              if last else None)
+    st.subheader("Answer quality")
+    st.json(_guarded(lambda: _client().stakeholder_quality(tenant)) or {})
+
+
+def _research_tab(tenant):
+    st.subheader("External research (P7)")
+    _guarded(lambda: _client().research_seed(tenant))
+    st.caption("Cited, source-credit-classified external claims — they land as EXTERNAL "
+               "CANDIDATE nodes and only the senior gate can promote them.")
+    cols = st.columns([3, 2])
+    query = cols[0].text_input("Search topic", key="rs_q")
+    url = cols[1].text_input("Source URL", key="rs_url")
+    if st.button("Search + capture (via approved providers)", key="rs_go"):
+        results = [{"source_name": "Official documentation",
+                    "title": query, "url": url or "https://docs.example.com/1",
+                    "kind": "official", "snippet": f"External claim on {query}."}]
+        found = _guarded(lambda: _client().research_search(tenant, query, results)) or []
+        _guarded(lambda: _client().research_capture(tenant, query, found))
+    ov = _guarded(lambda: _client().research_overview(tenant)) or {}
+    st.json(ov)
+    docs = _guarded(lambda: _client().research_docs(tenant)) or []
+    if docs:
+        df = pd.DataFrame([{"id": d.get("id"), "credibility": d.get("credibility"),
+                            "origin": d.get("origin"), "title": (d.get("title") or "")[:60],
+                            "url": d.get("url")} for d in docs])
+        st.dataframe(df, hide_index=True, width="stretch")
+        pick = st.selectbox("Promote to Brain (stays CANDIDATE until senior approves)",
+                            [d.get("id") for d in docs],
+                            format_func=lambda i: i)
+        if st.button("Promote", key="rs_promote") and pick:
+            n = _guarded(lambda: _client().research_promote(tenant, pick))
+            if n:
+                st.success(f"{n['status']} node {n['id']} — awaiting senior approval")
+
+
+def _governance_tab(tenant):
+    st.subheader("Governance (P8)")
+    st.caption("RBAC + SSO seam and cross-tenant isolation are enabled by setting "
+               "ANALYTICS_AUTH_SECRET / ANALYTICS_AUTH_ENABLED=1.")
+    usage = _guarded(lambda: _client().billing_usage(tenant)) or {}
+    if usage:
+        m = st.columns(4)
+        m[0].metric("Spans", usage.get("spans", 0))
+        m[1].metric("Failed spans", usage.get("failed_spans", 0))
+        m[2].metric("Tokens", usage.get("tokens_in", 0))
+        m[3].metric("Cost (USD)", usage.get("cost_usd", {}).get("total", 0.0))
+        st.json(usage.get("by_stage", []))
+
+
 def _tenants() -> list:
     client = _client()
     try:
@@ -227,7 +295,7 @@ with st.sidebar:
             st.success(f"Created {res.get('tenant_id')}")
 
 if tenant:
-    tabs = st.tabs(["Junior", "Triage"])
+    tabs = st.tabs(["Junior", "Triage", "Stakeholder", "Research", "Governance"])
     with tabs[0]:
         st.subheader("Junior maturity stage")
         st.json(_guarded(lambda: _client().junior_stage(tenant)) or {})
@@ -251,5 +319,12 @@ if tenant:
             _queue_review(tenant)
         with rt3:
             _conflicts_review(tenant)
+
+    with tabs[2]:
+        _stakeholder_tab(tenant)
+    with tabs[3]:
+        _research_tab(tenant)
+    with tabs[4]:
+        _governance_tab(tenant)
 else:
     st.info("Select or create a tenant to begin.")

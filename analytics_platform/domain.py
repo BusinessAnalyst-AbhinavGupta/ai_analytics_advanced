@@ -51,6 +51,7 @@ class NodeKind(str, Enum):
     JOIN_RULE = "JOIN_RULE"
     BUSINESS_RULE = "BUSINESS_RULE"
     IDIOM = "IDIOM"       # reusable SQL pattern/skeleton (from the prototype knowledge graph)
+    EXTERNAL = "EXTERNAL" # external-research claim (never auto-promotes to company fact)
 
 
 class AnswerMode(str, Enum):

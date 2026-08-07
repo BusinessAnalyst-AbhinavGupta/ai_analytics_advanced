@@ -30,6 +30,12 @@ class Settings:
     metabase_base_url: str = ""        # Metabase URL (informational; same-origin fetch uses the tab)
     metabase_database_id: Any = ""     # Metabase DB id (str or int) to query
     metabase_expected_host: str = ""   # hostname guard (anti-tenant-bleed)
+    # P8 governance ---------------------------------------------------------
+    auth_secret: str = ""              # HMAC secret for issue/verify (env ANALYTICS_AUTH_SECRET)
+    auth_enabled: bool = False         # when True, guarded routes require an Authorization token
+    oidc_issuer: str = ""              # optional OIDC issuer to trust (verify-sig seam; no secret at rest)
+    cost_per_1k_input: float = 0.30    # USD per 1k tokens for usage metering
+    cost_per_1k_output: float = 1.20
 
     def resolve_db_path(self) -> str:
         if self.db_path:
@@ -51,6 +57,11 @@ class Settings:
             metabase_base_url=os.environ.get("ANALYTICS_MB_HOST", ""),
             metabase_database_id=os.environ.get("ANALYTICS_MB_DATABASE_ID", ""),
             metabase_expected_host=os.environ.get("ANALYTICS_MB_EXPECTED_HOST", ""),
+            auth_secret=os.environ.get("ANALYTICS_AUTH_SECRET", ""),
+            auth_enabled=os.environ.get("ANALYTICS_AUTH_ENABLED") == "1",
+            oidc_issuer=os.environ.get("ANALYTICS_OIDC_ISSUER", ""),
+            cost_per_1k_input=float(os.environ.get("ANALYTICS_COST_PER_1K_IN", "0.30")),
+            cost_per_1k_output=float(os.environ.get("ANALYTICS_COST_PER_1K_OUT", "1.20")),
         )
 
     def to_dict(self) -> Dict[str, Any]:
