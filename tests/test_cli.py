@@ -68,5 +68,50 @@ class TestCliBrowser(unittest.TestCase):
         self.assertEqual(stub.base_url, "https://cli.example")
 
 
+    def test_parser_resolves_review(self):
+        args = build_parser().parse_args(["review", "t1"])
+        from analytics_platform.cli import cmd_review
+        self.assertIs(args.func, cmd_review)
+
+    def _temp_ctx(self):
+        import os
+        import tempfile
+        from unittest import mock
+        from analytics_platform.api import make_context
+        from analytics_platform.domain import NodeKind
+        self._tmp = tempfile.TemporaryDirectory()
+        db = os.path.join(self._tmp.name, "t.db")
+        patcher = mock.patch.dict(os.environ, {"ANALYTICS_DB_PATH": db})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        ctx = make_context()
+        self.addCleanup(ctx.store.close)
+        return ctx, NodeKind
+
+    def test_cmd_review_summary_lists_queue(self):
+        from analytics_platform.cli import cmd_review
+        ctx, NodeKind = self._temp_ctx()
+        tid = ctx.tenants.create_tenant("T").id
+        ctx.pipeline.brain(tid).create(NodeKind.QUERY, "q1")
+        ctx.pipeline.brain(tid).create(NodeKind.IDIOM, "i1")
+        rc = cmd_review(argparse.Namespace(tenant_id=tid, kind="", limit=50,
+            approve="", reject="", bulk_approve=False, bulk_reject=False,
+            by="senior", notes="", conflicts=False, conflict_limit=20, quiet=False))
+        self.assertEqual(rc, 0)
+
+    def test_cmd_review_approve_updates_status(self):
+        from analytics_platform.cli import cmd_review
+        from analytics_platform.domain import ReviewStatus
+        ctx, NodeKind = self._temp_ctx()
+        tid = ctx.tenants.create_tenant("T").id
+        brain = ctx.pipeline.brain(tid)
+        n = brain.create(NodeKind.QUERY, "q1")
+        rc = cmd_review(argparse.Namespace(tenant_id=tid, kind="", limit=50,
+            approve=n.id, reject="", bulk_approve=False, bulk_reject=False,
+            by="senior", notes="", conflicts=False, conflict_limit=20, quiet=True))
+        self.assertEqual(rc, 0)
+        self.assertEqual(brain.get(n.id).status, ReviewStatus.APPROVED)
+
+
 if __name__ == "__main__":
     unittest.main()

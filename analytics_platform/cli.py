@@ -148,6 +148,51 @@ def cmd_browser(args: argparse.Namespace) -> int:
     return 0
 
 
+def _parse_kind(raw: str):
+    from .domain import NodeKind
+    if not raw:
+        return None
+    return NodeKind(raw.upper())
+
+
+def cmd_review(args: argparse.Namespace) -> int:
+    ctx = make_context()
+    from .triage import TriageService
+    try:
+        ctx.tenants.require_tenant(args.tenant_id)
+    except KeyError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    svc = TriageService(ctx.store, ctx.observability)
+    kind = _parse_kind(args.kind)
+
+    if args.approve:
+        ids = [s.strip() for s in args.approve.split(",") if s.strip()]
+        _print("Triage approve", svc.approve(args.tenant_id, ids, by=args.by, notes=args.notes))
+    if args.reject:
+        ids = [s.strip() for s in args.reject.split(",") if s.strip()]
+        _print("Triage reject", svc.reject(args.tenant_id, ids, by=args.by, notes=args.notes))
+    if args.bulk_approve:
+        _print("Triage bulk approve", svc.bulk(args.tenant_id, kind=kind,
+                                               action="approve", by=args.by))
+    if args.bulk_reject:
+        _print("Triage bulk reject", svc.bulk(args.tenant_id, kind=kind,
+                                              action="reject", by=args.by))
+
+    if args.conflicts:
+        conflicts = svc.conflicts(args.tenant_id)
+        _print(f"Conflicts ({len(conflicts)})", conflicts[:args.conflict_limit])
+        if not (args.approve or args.reject or args.bulk_approve or args.bulk_reject):
+            return 0
+    if not args.quiet:
+        _print("Triage summary", svc.summary(args.tenant_id))
+        queue = svc.queue(args.tenant_id, kind=kind, limit=args.limit)
+        _print(f"Queue ({len(queue)}): {args.kind or 'all kinds'}",
+               [{"id": n.id, "kind": n.kind.value, "status": n.status.value,
+                 "title": n.title} for n in queue])
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="analytics-platform")
     sub = p.add_subparsers(dest="command", required=True)
@@ -177,6 +222,20 @@ def build_parser() -> argparse.ArgumentParser:
     br.add_argument("--host", default="", help="override Metabase base URL")
     br.add_argument("--head", type=int, default=10, help="rows to print from the result")
     br.set_defaults(func=cmd_browser)
+    rv = sub.add_parser("review", help="Triage/senior-review the Brain's CANDIDATE nodes")
+    rv.add_argument("tenant_id")
+    rv.add_argument("--kind", default="", help="NodeKind filter (QUERY|DEFINITION|IDIOM|BUSINESS_RULE|...)")
+    rv.add_argument("--limit", type=int, default=50, help="queue rows to show")
+    rv.add_argument("--approve", default="", help="comma-separated node ids to approve")
+    rv.add_argument("--reject", default="", help="comma-separated node ids to reject")
+    rv.add_argument("--bulk-approve", action="store_true", help="approve all actionable of --kind")
+    rv.add_argument("--bulk-reject", action="store_true", help="reject all actionable of --kind")
+    rv.add_argument("--by", default="senior", help="reviewer identity")
+    rv.add_argument("--notes", default="")
+    rv.add_argument("--conflicts", action="store_true", help="show title-conflict candidates")
+    rv.add_argument("--conflict-limit", type=int, default=20)
+    rv.add_argument("--quiet", action="store_true", help="suppress summary/queue output")
+    rv.set_defaults(func=cmd_review)
     return p
 
 

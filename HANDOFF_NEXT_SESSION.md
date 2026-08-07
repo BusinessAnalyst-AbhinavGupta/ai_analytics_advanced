@@ -48,9 +48,10 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
 - **CP-T1 — service reads (DONE)**: `analytics_platform/triage.py` — `TriageService`
   (`queue`, `summary`, `conflicts` read-only inbox over the Brain; `ACTIONABLE` =
   CANDIDATE/UNDER_REVIEW/REVISION_REQUIRED). `tests/test_triage.py` (9). **78 tests (2 skipped).**
-- **CP-T2 — approve/reject/bulk + CLI `review` (PENDING)**: service `approve/reject/bulk` +
-  `cli.py` `analytics-platform review <tenant> [--kind K] [--limit N] [--approve/--reject
-  id,..] [--bulk-approve/--bulk-reject] [--by] [--conflicts]`.
+- **CP-T2 — approve/reject/bulk + CLI `review` (DONE)**: `cli.py` `analytics-platform review
+  <tenant> [--kind K] [--limit N] [--approve/--reject id,..] [--bulk-approve/--bulk-reject]
+  [--by senior] [--conflicts] [--quiet]`. Service `approve/reject/bulk` (approve = submit-then-
+  approve; only ACTIONABLE touched). CLI tests in `tests/test_cli.py` (3) → **81 tests (2 skipped).**
 - **CP-T3 — docs/API (PENDING)**: README + handoff refresh; optional API review endpoints.
 
 ## How to run (all in repo root)
