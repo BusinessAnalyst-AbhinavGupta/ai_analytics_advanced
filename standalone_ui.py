@@ -54,6 +54,7 @@ def _run_review(tenant, fn, confirm_msg):
     if res:
         st.success(f"{confirm_msg}: approved={len(res.get('approved', []))} "
                    f"rejected={len(res.get('rejected', []))} "
+                   f"superseded={len(res.get('superseded', []))} "
                    f"skipped={len(res.get('skipped', []))}")
         st.rerun()
 
@@ -115,25 +116,31 @@ def _queue_review(tenant):
 def _conflicts_review(tenant):
     st.subheader("Conflicts (probable value-set dups)")
     conflicts = _guarded(lambda: _client().triage_conflicts(tenant)) or []
-    st.caption(f"{len(conflicts)} title-conflicts — pick one per group to keep, "
-               "reject the rest to dedupe.")
+    # status map so each group can show WHY a node will be superseded vs rejected
+    rows = _guarded(lambda: _client().triage_queue(tenant, limit=2000)) or []
+    status_by_id = {r.get("id"): r.get("status", "?") for r in rows}
+    st.caption(f"{len(conflicts)} conflict groups — pick one per group to keep. "
+               "Dropping others: CANDIDATE/UNDER_REVIEW are rejected, APPROVED are "
+               "superseded (kept node wins).")
     if not conflicts:
         st.info("No conflicts.")
         return
     for cf in conflicts:
         ids = cf.get("ids", [])
         with st.expander(f"`{cf.get('title')}` — {cf.get('count')} nodes"):
-            st.code("\n".join(ids))
+            st.code("\n".join(f"{i}  [{status_by_id.get(i, '?')}]" for i in ids))
             b = st.columns([1, 1, 3])
             group = st.radio("Keep / drop group", ids, label_visibility="collapsed",
                              key=f"keep-{ids[0]}") if len(ids) > 1 else None
-            if b[0].button("Reject other(s) (keep one)", key=f"r-{ids[0]}") and group:
+            if b[0].button("Drop other(s) (keep one)", key=f"r-{ids[0]}") and group:
                 rest = [i for i in ids if i != group]
-                _run_review(tenant, lambda: _client().triage_reject(tenant, rest, by="senior",
-                                                                    notes="dedupe group"),
-                            f"Rejected {len(rest)}")
+                _run_review(tenant, lambda: _client().triage_dedupe(tenant, keep=group,
+                                                                    drop=rest,
+                                                                    by=\"senior\",
+                                                                    notes=\"dedupe group\"),
+                            f\"Cleared {len(rest)}\")
             if b[1].button("Approve whole group", key=f"ap-{ids[0]}"):
-                _run_review(tenant, lambda: _client().triage_approve(tenant, ids, by="senior"),
+                _run_review(tenant, lambda: _client().triage_approve(tenant, ids, by=\"senior\"),
                             "Approved group")
 
 

@@ -118,5 +118,33 @@ class TriageService:
             return self.reject(tenant_id, target, by=by, notes=notes)
         return self.approve(tenant_id, target, by=by, notes=notes)
 
+    def dedupe(self, tenant_id: str, keep: str, drop: List[str], *,
+               by: str = "senior", notes: str = "") -> Dict[str, Any]:
+        """Keep one node, discard the rest of a title-conflict group.
+
+        Reject resolves only actionable statuses (the review gate); APPROVED /
+        APPROVED_WITH_CAVEATS nodes are instead superseded (a legal transition)
+        so "keep one" works even on approved duplicates. Already-discarded nodes
+        are skipped.
+        """
+        brain = self.brain(tenant_id)
+        rejected, superseded, skipped = [], [], []
+        for nid in drop:
+            node = brain.get(nid)
+            if node is None:
+                skipped.append((nid, "unknown"))
+            elif node.status in ACTIONABLE:
+                brain.reject(nid, by=by, notes=notes or f"dedupe, keeping {keep}")
+                rejected.append(nid)
+            elif node.status in (ReviewStatus.APPROVED, ReviewStatus.APPROVED_WITH_CAVEATS):
+                brain.supersede(nid, keep, by=by)
+                superseded.append(nid)
+            else:
+                skipped.append((nid, node.status.value))
+        self.obs.event(tenant_id=tenant_id, stage="triage.dedupe", actor=by,
+                       meta={"keep": keep, "rejected": rejected,
+                             "superseded": superseded, "skipped": skipped})
+        return {"rejected": rejected, "superseded": superseded, "skipped": skipped}
+
 
 __all__ = ["TriageService", "ACTIONABLE"]

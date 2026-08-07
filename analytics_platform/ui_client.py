@@ -70,6 +70,12 @@ class APIClient:
                          json={"kind": kind or None, "action": action, "by": by,
                                "limit": limit, "notes": notes})
 
+    def triage_dedupe(self, tenant: str, keep: str, drop: List[str],
+                      by: str = "senior", notes: str = "") -> Dict[str, Any]:
+        """Keep one conflict node; reject/supersede the rest of the group."""
+        return self._req("POST", f"/triage/{tenant}/dedupe",
+                         json={"keep": keep, "drop": drop, "by": by, "notes": notes})
+
     # -- P6 stakeholder ----------------------------------------------------
     def stakeholder_answer(self, tenant: str, question: str,
                            user_id: str = "") -> Dict[str, Any]:

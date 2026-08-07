@@ -102,6 +102,27 @@ class TestTriage(unittest.TestCase):
         self.assertEqual(res["rejected"], kept[:1])
         self.assertEqual(self.svc.conflicts(self.tid), [])
 
+    def test_dedupe_keeps_one_supersedes_approved_rejects_actionable(self):
+        add_candidates(self.brain, NodeKind.BUSINESS_RULE, ["dup rule"],
+                       status=ReviewStatus.APPROVED)
+        add_candidates(self.brain, NodeKind.BUSINESS_RULE, ["dup rule"],
+                       status=ReviewStatus.APPROVED)
+        add_candidates(self.brain, NodeKind.BUSINESS_RULE, ["dup rule"])  # CANDIDATE
+        self.assertEqual(len(self.svc.conflicts(self.tid)), 1)
+        nodes = self.brain.all(limit=10)
+        approved = [n.id for n in nodes if n.status == ReviewStatus.APPROVED]
+        candidate = next(n.id for n in nodes if n.status == ReviewStatus.CANDIDATE)
+        keep = approved[0]
+        res = self.svc.dedupe(self.tid, keep, drop=approved[1:] + [candidate],
+                              by="senior")
+        # the second approved was superseded; the candidate was rejected
+        self.assertEqual(res["superseded"], approved[1:])
+        self.assertEqual(res["rejected"], [candidate])
+        # the kept node is the only non-discarded one with that title
+        self.assertEqual(self.svc.conflicts(self.tid), [])
+        kept_node = self.brain.get(keep)
+        self.assertEqual(kept_node.status, ReviewStatus.APPROVED)
+
     def test_actionable_contains_candidate_and_under_review(self):
         self.assertIn(ReviewStatus.CANDIDATE, ACTIONABLE)
         self.assertIn(ReviewStatus.UNDER_REVIEW, ACTIONABLE)

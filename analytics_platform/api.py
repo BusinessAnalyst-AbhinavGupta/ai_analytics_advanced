@@ -140,6 +140,13 @@ class TriageBulkIn(BaseModel):
     limit: int = 500
 
 
+class TriageDedupeIn(BaseModel):
+    keep: str
+    drop: List[str]
+    by: str = "senior"
+    notes: str = ""
+
+
 class StakeholderIn(BaseModel):
     question: str
     user_id: str = ""
@@ -509,6 +516,11 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
         return _triage(tenant_id).bulk(tenant_id, kind=_coerce_kind(body.kind),
                                        action=body.action, by=body.by, notes=body.notes,
                                        limit=body.limit)
+
+    @app.post("/triage/{tenant_id}/dedupe")
+    def triage_dedupe(tenant_id: str, body: TriageDedupeIn) -> Dict[str, Any]:
+        return _triage(tenant_id).dedupe(tenant_id, body.keep, body.drop,
+                                         by=body.by, notes=body.notes)
 
     # -- junior (maturity + schema EDA + goal-aligned questions) -----------
     def _junior(tenant_id: str) -> JuniorEngine:
