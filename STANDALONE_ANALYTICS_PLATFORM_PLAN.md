@@ -9,9 +9,9 @@
 
 ## Plan Status & Progress (living spine)
 
-> **This section is the spine of the repo — keep it updated as work lands.** Last updated: 2026-08-08 · HEAD `59000c7` **CP-12** (`main`).
+> **This section is the spine of the repo — keep it updated as work lands.** Last updated: 2026-08-08 · HEAD `f427179` **CP-13** (`main`).
 
-**Overall:** implementation **in progress — core complete**. Phases **P0–P9 are DONE (core)**; the platform ships as a supervised analytics copilot. CP-11 landed the config panel + junior depth + senior review depth (per-analysis MD renderings, human-promoted/demoted question depth, human-signoff window, provider model ping, worker enable-gate). **CP-12 takes the junior live**: background analyses now carry full insight/actionables/assumptions (profiler + rules + **OpenRouter-narrated insight**), the **1-analysis-per-hour and 3-per-day caps are persisted in SQLite** (survive app restarts), an on-demand `POST /tenants/{tid}/junior/run` trigger (serial + disable-gate always honoured; window/rate relaxed only when `force`), the scheduler runs while the app is live (`ANALYTICS_WATCHER=1`), and the live deployment runs against the real Deutsche Telekom funnel (`data/migration.db` tenant `tnt_56a8295f82c3`, live Metabase DB 59, `eshop_data.es_events_v2`). Remaining work = operator/security tail (live OIDC/SSO, per-tenant browser profiles, threat model/pen-test/DR/SOC2) + junior Stage-4/5 autonomy. No knowledge is lost; everything below is committed.
+**Overall:** implementation **in progress — core complete**. Phases **P0–P9 are DONE (core)**; the platform ships as a supervised analytics copilot. CP-11 (config panel + junior depth + MD renderings) and **CP-12 (live junior)** landed: background analyses carry full insight/actionables/assumptions (profiler + rules + OpenRouter narration), the **1/hr + 3/day junior caps are persisted in SQLite**, the scheduler runs while the app is live, and the deployment runs against the real Deutsche Telekom funnel (`data/migration.db` tenant `tnt_56a8295f82c3`, live Metabase DB 59). **CP-13 is the LLM bill guard**: LLM enrichment is cached **process-wide** (at most once per 60 min per tenant, regardless of UI reruns/schedulers), a **persisted daily LLM budget** (`llm_daily:*`, default 20 generations/tenant/day) is the hard stop, and the UI caches junior reads (`@st.cache_data`) so checkbox/button ticks cost nothing. Remaining work = operator/security tail (live OIDC/SSO, per-tenant browser profiles, threat model/pen-test/DR/SOC2) + junior Stage-4/5 autonomy. No knowledge is lost; everything below is committed.
 
 ### Completed stages (vs. §11 Delivery Roadmap)
 
@@ -29,7 +29,7 @@
 | **P9 — Owner observability + background junior** | ✅ DONE (core) | `api_logs` + HTTP access-log middleware (30-day retention), weekly auto-purge `Scheduler`, background `JuniorWorker` (10:00–19:00 window, 1/hr, serial single-flight), `/observability/*`, UI **Observability** tab |
 | **Brain migration + triage** | ✅ DONE | migrated tenant triaged to completion: **APPROVED 536 / REJECTED 693 / 0 CANDIDATEs** (CP-X1–X10) |
 
-**Test status:** 185/185 standalone tests pass (all `tests/` modules except legacy `test_ui_and_db`, which hangs only because it targets an unreachable Neo4j). Live Metabase tests: 3/3; live DT funnel drive: 3/3 junior analyses (conversion, error-rate, funnel volumes) with MD review files.
+**Test status:** 189/189 standalone tests pass (all `tests/` modules except legacy `test_ui_and_db`, which hangs only because it targets an unreachable Neo4j). Live Metabase tests: 3/3; live DT funnel drive: 3/3 junior analyses (conversion, error-rate, funnel volumes) with MD review files.
 
 ### Built beyond the plan (additions)
 
@@ -47,6 +47,7 @@
 | **On-demand junior trigger + live roll-out (CP-12)** | `api.py` `POST /tenants/{tid}/junior/run`, `ui_client.py`, `standalone_ui.py` | Self-picked reproducible approved funnel query → live read-only Metabase → full analysis + MD; `force` relaxes window/rate for tests only; scheduler runs while live (`ANALYTICS_WATCHER=1`) |
 | **LLM analysis adapter fix (CP-12)** | `llm/client.py` | `GatewayClient` now maps `ollama_url`/`timeout` to the real gateway signature — previously every live call raised, silently suppressing all LLM insight/hypothesis enrichment |
 | **Reproducible-query selection (CP-12)** | `junior_worker.py`, `brain/store.py` (`usable_queries`), `junior.py` | `approved_queries` now scans the full Brain in SQL (newest-first), and the worker picks template/brace-free approved queries it hasn't just answered — no stale/`{{tag}}`/JSON-escape SQL hits Metabase |
+| **LLM bill guard (CP-13)** | `junior.py` (`_LLM_ENRICH_CACHE`, `_llm_budget_*`), `config.py` (`junior_llm_cache_ttl_minutes`, `llm_daily_cap`), `standalone_ui.py` (`@st.cache_data`) | Process-wide TTL cache (60 min) for LLM-enriched questions/hypotheses so UI reruns/schedulers fire **at most one OpenRouter generation per tenant per TTL**; persisted per-UTC-day budget (`llm_daily:*:<date>`, default 20) is the hard stop; UI caches junior reads so checkbox/button ticks cost nothing |
 | **Senior review inbox at run level → governed FINDING** | `senior.py`, `pipeline.promote_finding` | `analysis_runs.review_status` lifecycle; the human plays senior when the senior AI is off (**human-on-top**) |
 | **Triage Conflicts dedupe (keep-one)** | `api.py` `POST /triage/{tid}/dedupe`, UI | reject (actionable) + supersede (approved) per conflict group |
 | **Definitions review tab** | `standalone_ui.py` | Grouped value-set review showing source SQL before approve/reject |

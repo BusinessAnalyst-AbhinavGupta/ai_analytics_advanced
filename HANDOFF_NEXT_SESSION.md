@@ -8,31 +8,37 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
 > snapshot on top of it — keep the plan's spine updated when work lands.
 
 ## State
-- **HEAD `59000c7` **CP-12** (`main`) — clean tree; everything committed.** P0–P9 core + CP-10 + CP-11 +
-  CP-12 + triage + launcher/docs are all in `git log`. Original `AI analytics/` folder untouched.
-  Latest checkpoints: `59000c7` **CP-12** (live junior + persisted caps) · `49af43f` **CP-11**
-  (config panel + junior depth + MD) · `e874406` **CP-10** (senior tool).
+- **HEAD `f427179` **CP-13** (`main`) — clean tree; everything committed.** P0–P9 core + CP-10 + CP-11 +
+  CP-12 + CP-13 + triage + launcher/docs are all in `git log`. Original `AI analytics/` folder untouched.
+  Latest checkpoints: `f427179` **CP-13** (LLM bill guard) · `59000c7` **CP-12** (live junior + caps)
+  · `49af43f` **CP-11** (config panel + junior depth + MD).
+- **CP-13 (LLM bill guard) is IN** — the OpenRouter enrichment for suggested questions/hypotheses is
+  now throttled **process-wide** (module-level TTL cache, default 60 min per tenant), so Streamlit
+  reruns (any checkbox/button tick) or any API caller fires at most **one** LLM generation per tenant
+  per TTL; a **persisted daily LLM budget** (`llm_daily:{tid}:{date}` in `scheduler_state`, default 20
+  generations/tenant/day) is the hard stop and survives app restarts; the UI caches junior reads with
+  `@st.cache_data` (stage capped at 3 repro queries). Verified live: 3× `/junior/{tid}/questions` →
+  exactly **1** OpenRouter call (`OK`), the rest `CACHED`, budget counter stays at 1.
 - **CP-12 (live junior) is IN** — background analyses are now real: profiler + rules +
-  **OpenRouter-narrated insight** (adapter fixed; LLM was silently disabled before), explicit
-  **assumptions** + **actionables**, MD written per analysis, `CANDIDATE` review status. The
-  **1-per-hour and 3-per-UTC-day caps are persisted in SQLite `scheduler_state`** (`junior_last:*`,
-  `junior_daily:*:<date>`) so closing/restarting the app never resets them; `POST
-  /tenants/{tid}/junior/run` drives a self-picked reproducible approved funnel query on-demand
-  (`force` relaxes window/rate only for tests; serial + disable-gate always hold). The live
+  **OpenRouter-narrated insight**, explicit **assumptions** + **actionables**, MD written per analysis,
+  `CANDIDATE` review status. The **1-per-hour and 3-per-UTC-day caps are persisted in SQLite
+  `scheduler_state`** (`junior_last:*`, `junior_daily:*:<date>`) so closing/restarting the app never
+  resets them; `POST /tenants/{tid}/junior/run` drives a self-picked reproducible approved funnel query
+  on-demand (`force` relaxes window/rate only for tests; serial + disable-gate always hold). The live
   deployment runs on `data/migration.db` tenant `tnt_56a8295f82c3` (DT funnel profile + 3 approved
   funnel queries) over live Metabase DB 59 with the scheduler on (`ANALYTICS_WATCHER=1`).
 - **CP-11 senior tool + config panel is IN** — per-analyst AI config (junior/senior/stakeholder
   toggles + model, versioned per tenant in `analyst_configs` + `analyst_config_history`); senior
   review inbox (`approve`/`reject`/`revise` → FINDING; human-on-top); junior depth + human-signoff
   window; per-analysis `.md` review files; config tab + model ping.
-- **185/185 standalone tests pass** (all `tests/` modules except the legacy `test_ui_and_db`).
+- **189/189 standalone tests pass** (all `tests/` modules except the legacy `test_ui_and_db`).
   Run: `cd <repo> && .venv/bin/python -m unittest tests.test_api tests.test_brain
   tests.test_browser_session tests.test_cli tests.test_governance_auth
   tests.test_governance_retention tests.test_ingest tests.test_junior
-  tests.test_llm tests.test_migration tests.test_onboarding tests.test_phase9
+  tests.test_llm tests.test_llm_cache tests.test_migration tests.test_onboarding tests.test_phase9
   tests.test_pipeline_e2e tests.test_policy tests.test_research tests.test_senior_depth
   tests.test_stakeholder tests.test_tenancy tests.test_config_panel tests.test_triage tests.test_ui_client
-  # -> 185 tests (3 live skipped)`
+  # -> 189 tests (3 live skipped)`
   **Caveat (pre-existing, environmental):** `unittest discover -s tests` hangs on this machine in
   `test_ui_and_db.test_pipeline_with_form_metadata` — `core.IngestionPipeline.run`'s Step-4 Cypher
   generation waits on a Neo4j that isn't reachable here. It is legacy `core.*` code, unrelated to
