@@ -6,3 +6,5 @@ runs.db
 logs/
 checkpoints/
 data/*.db
+data/*.db-shm
+data/*.db-wal

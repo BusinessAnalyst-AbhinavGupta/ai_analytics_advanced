@@ -4,7 +4,7 @@ Prepared: 2026-08-07 · Repo: `/Users/abhinav.gupta/Documents/ai_analytics_advan
 Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANALYTICS_PLATFORM_PLAN.md`).
 
 ## State
-- **HEAD (CP-L8), tree clean.** Original `AI analytics/` folder untouched.
+- **HEAD `f6d74b3` (CP-L8), tree clean.** Original `AI analytics/` folder untouched.
 - **95/95 standalone tests pass** (all `tests/` modules except the legacy `test_ui_and_db`), plus the
   **3 live tests (2 `MetabaseLive` + 1 `TestJuniorMetabaseLive`) PASS when `ANALYTICS_MB_LIVE=1`**
   (skipped otherwise) — **live-CONFIRMED 2026-08-07, 3/3 OK in ~8s**. Run:
