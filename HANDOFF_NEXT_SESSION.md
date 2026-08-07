@@ -192,6 +192,11 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
   *Note: during this op one DEFINITION (`kn_4550f49aca16`) was seen REJECTED with the UI-default note
   "rejected in triage" (timestamped in this window) — a concurrent UI Conflicts-tab action, not from
   the QUERY-approve (which only ran `approve`).*
+- **CP-X10 — reject all remaining (review complete) (DONE)**: the 48 remaining CANDIDATE DEFINITIONs
+  were all rejected → **actionable is now 0**. There were **0 conflict groups** among them (all unique
+  titles) so the "randomly keep one per conflict" step had nothing to apply. Final matrix:
+  `APPROVED 536 (QUERY 35 / DEFINITION 28 / IDIOM 180 / BUSINESS_RULE 293)`, `REJECTED 693 (QUERY 123 /
+  DEFINITION 570)`. The migrated Brain for this tenant is now fully governed — no CANDIDATE nodes.
 
 ## How to run (all in repo root)
 ```bash
@@ -242,14 +247,11 @@ Deps frozen in `requirements-advanced.txt` (incl. `fastapi==0.141.1`).
   encode SQL/value-sets that aren't verified against real Metabase, so they stay CANDIDATE for a
   senior reviewer.*
 
-## Next steps (Brain v2 + Live-Metabase + Junior engine + Junior→live + API exposure + LLM hook + thin UI + first triage DONE)
-1. **Review the remaining 48 CANDIDATE DEFINITIONs** in the UI review panel
-   (`http://localhost:8501` → review API `:8001` → `data/migration.db`, tenant `tnt_56a8295f82c3`);
-   QUERY is fully resolved (35 approved / 123 rejected), the value-set conflicts are deduped
-   (0 actionable title-conflicts) — approval stays the hard gate.
-   Note: approving QUERYs (and setting company-profile targets) is what lifts `junior stage` to 2→3;
-   DEFINITION approvals drive `defined_terms`/essential-term coverage. This review is a gate to junior
-   value, but not to the orthogonal P6–P8 feature milestones below — they can proceed in parallel.
+## Next steps (Brain v2 + Live-Metabase + Junior engine + Junior→live + API exposure + LLM hook + thin UI + triage COMPLETE)
+1. **Triage is complete for the migrated tenant** (`tnt_56a8295f82c3`): 0 CANDIDATEs remain
+   (`APPROVED 536 / REJECTED 693`). To get junior value from it: set a CompanyProfile with targets
+   and point an executor at real data — approving QUERYs (done, 35) is what lifts `junior stage` to 2→3.
+   Note: this review gated junior value but never blocked the orthogonal P6–P8 work below.
 2. (later) Plan phases P6 stakeholder workflow (evidence/freshness/escalation), P7 external
    research, P8 commercial hardening (SSO/RBAC, per-tenant browser profile).
 
