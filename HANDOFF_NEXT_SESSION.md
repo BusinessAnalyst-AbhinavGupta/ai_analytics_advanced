@@ -50,6 +50,12 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
   Telekom profile surfaced. Offline tests `TestOsascriptTargeting` (5) → **95 tests (2 skipped).**
   Connection values (from `scripts/`): host `metabase.om.yo-digital.com`, `database_id 59` —
   executor targets the URL-matching tab, no API token needed (cookie-only, same-origin).
+- **CP-L5 — async roundtrip fix (DONE)**: the live check exposed that Chrome's AppleScript
+  `execute javascript` never awaits promises, so our `(async()=>...)()` returned empty
+  ("Active tab is not Metabase ()"). Fixed like `scripts/download_base_tables.py`: async results
+  are stashed in `window.__mb` and read back with separate synchronous calls
+  (`PROBE_KICK_JS`/`_build_execute_kick_js`, `READ_STATE_JS`, `RESET_JS`, `_run_roundtrip()`).
+  Offline stub `make_runner` now mirrors reset→kick→read. **95 tests (2 skipped).**
 
 ## Progress — Triage (current)
 - **CP-T1 — service reads (DONE)**: `analytics_platform/triage.py` — `TriageService`

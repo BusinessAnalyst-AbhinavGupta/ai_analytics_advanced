@@ -79,18 +79,47 @@ def _shell_quote(js: str) -> str:
     return '"' + js.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-PROBE_JS = """
-(async () => {
-  const loc = location.hostname.toLowerCase();
-  const isMeta = loc.includes('metabase');
-  const isLogin = !!document.querySelector('#login-group') ||
-    /login/i.test(location.pathname) ||
-    document.title.toLowerCase().includes('sign in');
-  const isLoggedOut = !!document.body.innerText.includes('Sign in to Metabase');
-  return JSON.stringify({host: loc, metabase: isMeta, login: isLogin || isLoggedOut,
-                         title: document.title});
-})();
-"""
+# Chrome's AppleScript `execute javascript` returns SYNCHRONOUSLY and does NOT
+# await promises — an `(async ()=>...)()` return value comes back empty. So, like
+# the proven scripts/download_base_tables.py, we stash async results in a window
+# global (__mb) and read them back with separate synchronous calls.
+PROBE_KICK_JS = (
+    "window.__mb = {payload:null, ready:false};"
+    "(function(){try{(async()=>{try{"
+    "const loc=location.hostname.toLowerCase();"
+    "const isMeta=loc.includes('metabase');"
+    "const isLogin=!!document.querySelector('#login-group')"
+    "||/login/i.test(location.pathname)||document.title.toLowerCase().includes('sign in');"
+    "const isLoggedOut=!!document.body.innerText.includes('Sign in to Metabase');"
+    "window.__mb.payload=JSON.stringify({host:loc,metabase:isMeta,login:isLogin||isLoggedOut,title:document.title});"
+    "}catch(e){window.__mb.payload=JSON.stringify({error:String(e)});}"
+    "window.__mb.ready=true;"
+    "})();return 'kick';}catch(e){window.__mb={payload:JSON.stringify({error:String(e)}),ready:true};return 'kick';}})();"
+)
+# backwards-compat name
+PROBE_JS = PROBE_KICK_JS
+
+READ_STATE_JS = "(window.__mb && window.__mb.ready ? window.__mb.payload : '')"
+RESET_JS = "window.__mb = {payload:null, ready:false}; 'reset'"
+
+
+def _build_execute_kick_js(payload: str) -> str:
+    """JS that kicks off the same-origin `/api/dataset` fetch, stashing into __mb."""
+    return (
+        "window.__mb = {payload:null, ready:false};"
+        "(function(){try{(async()=>{try{"
+        "const r=await fetch('/api/dataset',{method:'POST',"
+        "headers:{'content-type':'application/json'},body:"
+        + json.dumps(payload) +
+        "});const j=await r.json();"
+        "if(j.error){window.__mb.payload=JSON.stringify({ok:false,error:j.error||'metabase_error'});}"
+        "else{const cols=(j.data&&j.data.cols||[]).map(c=>c.name);"
+        "const rows=(j.data&&j.data.rows||[]).map(r=>r.slice());"
+        "window.__mb.payload=JSON.stringify({ok:true,cols:cols,rows:rows});}"
+        "}catch(e){window.__mb.payload=JSON.stringify({ok:false,error:String(e)});}"
+        "window.__mb.ready=true;"
+        "})();return 'kick';}catch(e){window.__mb={payload:JSON.stringify({ok:false,error:String(e)}),ready:true};return 'kick';}})();"
+    )
 
 
 @dataclass
@@ -154,10 +183,26 @@ class BrowserSessionExecutor(QueryExecutor):
         except Exception as e:  # noqa: BLE001
             raise RuntimeError(f"Chrome/AppleScript unavailable: {e}") from e
 
+    def _run_roundtrip(self, kick_js: str, timeout_s: float) -> str:
+        """Kick async JS that stashes results in `window.__mb`, then poll the global
+        synchronously (Chrome's `execute javascript` never awaits promises)."""
+        import time as _time
+        self._run(RESET_JS)
+        self._run(kick_js)
+        deadline = _time.monotonic() + max(timeout_s, 1.0)
+        last = ""
+        while _time.monotonic() < deadline:
+            out = self._run(READ_STATE_JS) or ""
+            if out:
+                last = out
+                break
+            _time.sleep(0.1)
+        return last
+
     # -- session gate ---------------------------------------------------------
     def session_status(self, tenant_id: str) -> SessionStatus:
         try:
-            out = self._run(PROBE_JS)
+            out = self._run_roundtrip(PROBE_KICK_JS, self._timeout_s)
             info = json.loads(out) if out else {}
         except Exception as e:  # noqa: BLE001
             return SessionStatus(state="unknown", tenant_id=tenant_id, browser_ok=False,
@@ -200,27 +245,14 @@ class BrowserSessionExecutor(QueryExecutor):
         except SessionUnavailable as e:
             return QueryResult(ok=False, error=f"needs_login:{e.status.detail}")
 
-        payload = json.dumps({
+        payload = {
             "database": self.config.database_id,
             "type": "native",
             "native": {"query": sql},
             "parameters": [],
-        })
-        js = (
-            "(async () => {"
-            "  const r = await fetch('/api/dataset', {method:'POST',"
-            "    headers:{'content-type':'application/json'},"
-            f"    body: {json.dumps(payload)}"
-            "  });"
-            "  const j = await r.json();"
-            "  if (j.error) return JSON.stringify({ok:false, error:j.error || 'metabase_error'});"
-            "  const cols = (j.data && j.data.cols || []).map(c => c.name);"
-            "  const rows = (j.data && j.data.rows || []).map(r => r.slice());"
-            "  return JSON.stringify({ok:true, cols:cols, rows:rows});"
-            "})();"
-        )
+        }
         try:
-            out = self._run(js)
+            out = self._run_roundtrip(_build_execute_kick_js(payload), self._timeout_s)
             res = json.loads(out) if out else {}
         except Exception as e:  # noqa: BLE001
             return QueryResult(ok=False, error=f"Browser execution failed: {e}")
@@ -261,4 +293,5 @@ def make_live_executor(settings: Optional["Settings"] = None) -> BrowserSessionE
 
 __all__ = ["BrowserSessionExecutor", "SessionUnavailable", "BrowserExecutorConfig",
            "osascript_runner", "build_osascript_command", "make_osascript_runner",
-           "PROBE_JS", "make_live_executor"]
+           "PROBE_JS", "PROBE_KICK_JS", "READ_STATE_JS", "RESET_JS",
+           "_build_execute_kick_js", "make_live_executor"]

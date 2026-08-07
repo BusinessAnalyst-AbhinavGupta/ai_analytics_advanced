@@ -27,11 +27,21 @@ def exec_payload(ok=True, rows=None, cols=None, error=""):
 
 
 def make_runner(probe, exec_resp):
-    """Runner returns the probe JSON for session probes, else the execute JSON."""
+    """Stateful fake of the reset -> kick -> read protocol used by _run_roundtrip."""
+    state = {"payload": "", "ready": False}
+
     def runner(js: str) -> str:
-        if "location.hostname" in js:      # PROBE_JS
-            return probe
-        return exec_resp
+        if "'reset'" in js:                 # RESET_JS
+            state["payload"] = ""
+            state["ready"] = False
+            return "reset"
+        if "__mb.ready ?" in js:            # READ_STATE_JS
+            return state["payload"] if state["ready"] else ""
+        # a kick: probe kick contains location.hostname; execute kick contains fetch
+        state["payload"] = probe if "location.hostname" in js else exec_resp
+        state["ready"] = True
+        return "kick"
+
     return runner
 
 
