@@ -1,0 +1,4650 @@
+{
+  "table_name": "eshop_data.es_events_v2",
+  "database_id": 59,
+  "row_count": 10000,
+  "column_count": 423,
+  "columns": {
+    "event_type": {
+      "name": "event_type",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 5,
+      "sample_values": [
+        "debug",
+        "user",
+        "event",
+        "cart",
+        "service"
+      ]
+    },
+    "de_ingestion_id": {
+      "name": "de_ingestion_id",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 9991,
+      "sample_values": [
+        "efa08586-18df-45cd-b695-2d91c3d108ae",
+        "2b648fe1-7239-48f4-9299-1e951d9eca13",
+        "eef8c0a3-2995-4efc-95b0-fad06a9c137e",
+        "6aff4227-e0fd-4b7f-805f-ccea93fb61cd",
+        "1680d873-1db6-40cb-b5f6-62cded5a8adc",
+        "606716cc-173a-403b-bd37-df4419cf9f70",
+        "2e95ad62-ce03-4eb6-90c0-614b06aee1f6",
+        "9a21ecef-46e6-4f7c-a907-83ee9b4d08a8",
+        "a80c98e5-a85a-452f-b2b9-f74cf975804f",
+        "c17f64b7-bd65-4083-8e1f-c6f4b4ba81d5"
+      ]
+    },
+    "category": {
+      "name": "category",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 12,
+      "sample_values": [
+        "error",
+        "acquisition",
+        "deviceDetailed",
+        "campaign",
+        "tariffChange",
+        "MNP",
+        "service",
+        "contractProlongation",
+        "prepaidToPostpaidMigration",
+        "firstPageLoad"
+      ]
+    },
+    "action": {
+      "name": "action",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 76,
+      "sample_values": [
+        "errorEvent",
+        "USER_ATTRIBUTE",
+        "configurationViewed",
+        "PageView",
+        "magentaeinsEligibilityCheck",
+        "popupAppears",
+        "tariffSelection",
+        "headerClicks",
+        "optimize.activate",
+        "addToCart"
+      ]
+    },
+    "identifiers_guest_id": {
+      "name": "identifiers_guest_id",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 3483,
+      "sample_values": [
+        "f746be5c-de6f-4129-aa4c-6748e1bd7d38",
+        "6e4d8db9-a6df-41e2-9d5a-b70aa234f1db",
+        "3266e49d-2856-4507-a6b0-65c5cd949aaa",
+        "71faaa27-da90-473e-9e60-369c590a5ae2",
+        "fbe72a3f-3333-4184-b591-0189def597f7",
+        "b751b85b-f33b-4a64-810f-ed38d9eed459",
+        "3182b4c2-1567-498b-a4d0-39392ddcd0b9",
+        "f1ae5596-b1b1-4eb0-afe9-a6d5e1c41edb",
+        "08dc51ff-d828-4a77-ab4c-b463fdf332aa",
+        "aa428d4c-5603-442c-9524-43646b34d3ec"
+      ]
+    },
+    "identifiers_user_type": {
+      "name": "identifiers_user_type",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 2,
+      "sample_values": [
+        "guest",
+        "loggedin"
+      ]
+    },
+    "identifiers_page_name": {
+      "name": "identifiers_page_name",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 77,
+      "sample_values": [
+        "Tariff/tarife-ohne-handy",
+        "HOME",
+        "NOT FOUND/err/Wir k\u00f6nnen die gesuchte Seite leider nicht finden.",
+        "checkout/PersonalInfo",
+        "BASKET",
+        "NOT FOUND",
+        "deviceListing/telefony",
+        "deviceDetailed",
+        "HOME/err/Es hat leider nicht geklappt.",
+        "Tariff/mobilni-tarify"
+      ]
+    },
+    "identifiers_environment": {
+      "name": "identifiers_environment",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 1,
+      "sample_values": [
+        "prod"
+      ]
+    },
+    "identifiers_natcocode": {
+      "name": "identifiers_natcocode",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 2,
+      "sample_values": [
+        "at",
+        "cz"
+      ]
+    },
+    "identifiers_natcokey": {
+      "name": "identifiers_natcokey",
+      "dtype": "str",
+      "null_count": 505,
+      "null_pct": 5.05,
+      "distinct_count": 2,
+      "sample_values": [
+        "xZywSYjaBmYr1ygrSZNIOEcA5YONdCtY",
+        "oxGTZU0jf4zYCWCNFspYHr8Q5LHPBH7A"
+      ]
+    },
+    "identifiers_channel": {
+      "name": "identifiers_channel",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 1,
+      "sample_values": [
+        "OneShop"
+      ]
+    },
+    "identifiers_log_time": {
+      "name": "identifiers_log_time",
+      "dtype": "int64",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 9955,
+      "sample_values": [
+        "1770727491648",
+        "1750670327942",
+        "1750670365306",
+        "1750670372984",
+        "1750670354175",
+        "1750670459547",
+        "1770278694791",
+        "1770278702444",
+        "1770278705715",
+        "1770278705720"
+      ]
+    },
+    "identifiers_osname": {
+      "name": "identifiers_osname",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 2,
+      "sample_values": [
+        "desktop",
+        "phone"
+      ]
+    },
+    "meta_useragent": {
+      "name": "meta_useragent",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 883,
+      "sample_values": [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.7444.175 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.7444.162 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:138.0) Gecko/20100101 Firefox/138.0",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+      ]
+    },
+    "meta_osname": {
+      "name": "meta_osname",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 2,
+      "sample_values": [
+        "desktop",
+        "phone"
+      ]
+    },
+    "meta_browser": {
+      "name": "meta_browser",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 5,
+      "sample_values": [
+        "Chrome",
+        "Firefox",
+        "Netscape",
+        "Safari",
+        "Opera"
+      ]
+    },
+    "meta_browserversion": {
+      "name": "meta_browserversion",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 127,
+      "sample_values": [
+        "139",
+        "137",
+        "144",
+        "142",
+        "138",
+        "131",
+        "140",
+        "51",
+        "125",
+        "130"
+      ]
+    },
+    "meta_operatingsystem": {
+      "name": "meta_operatingsystem",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 10,
+      "sample_values": [
+        "Win32",
+        "MacIntel",
+        "Linux x86_64",
+        "iPhone",
+        "Linux aarch64",
+        "Linux armv81",
+        "Linux armv8l",
+        "Linux armv7l",
+        "iPad",
+        "Windows"
+      ]
+    },
+    "meta_segment": {
+      "name": "meta_segment",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 2,
+      "sample_values": [
+        "B2C",
+        "B2B"
+      ]
+    },
+    "_timestamp": {
+      "name": "_timestamp",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 5119,
+      "sample_values": [
+        "2026-02-10T13:44:51",
+        "2025-06-23T11:18:48",
+        "2025-06-23T11:19:26",
+        "2025-06-23T11:19:34",
+        "2025-06-23T11:19:15",
+        "2025-06-23T11:21:06",
+        "2026-02-05T09:04:56",
+        "2026-02-05T09:05:02",
+        "2026-02-05T09:05:06",
+        "2025-12-02T10:30:47"
+      ]
+    },
+    "label": {
+      "name": "label",
+      "dtype": "str",
+      "null_count": 3365,
+      "null_pct": 33.65,
+      "distinct_count": 491,
+      "sample_values": [
+        "server error",
+        "Configure Your Plan EN",
+        "Tariff/tarife-ohne-handy",
+        "not eligible",
+        "404 Page Not Found",
+        "magenta 1 benefit removed",
+        "switchTile",
+        "Mobilfunk",
+        "HOME",
+        "plan only"
+      ]
+    },
+    "attr_useragent": {
+      "name": "attr_useragent",
+      "dtype": "str",
+      "null_count": 9272,
+      "null_pct": 92.72,
+      "distinct_count": 249,
+      "sample_values": [
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.7444.175 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.7444.162 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.79 Safari/537.36 Edge/14.14393",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+      ]
+    },
+    "attr_osname": {
+      "name": "attr_osname",
+      "dtype": "str",
+      "null_count": 9272,
+      "null_pct": 92.72,
+      "distinct_count": 2,
+      "sample_values": [
+        "desktop",
+        "phone"
+      ]
+    },
+    "attr_browser": {
+      "name": "attr_browser",
+      "dtype": "str",
+      "null_count": 9272,
+      "null_pct": 92.72,
+      "distinct_count": 5,
+      "sample_values": [
+        "Chrome",
+        "Firefox",
+        "Safari",
+        "Netscape",
+        "Opera"
+      ]
+    },
+    "attr_browserversion": {
+      "name": "attr_browserversion",
+      "dtype": "str",
+      "null_count": 9272,
+      "null_pct": 92.72,
+      "distinct_count": 61,
+      "sample_values": [
+        "137",
+        "144",
+        "142",
+        "138",
+        "131",
+        "51",
+        "130",
+        "125",
+        "147",
+        "143"
+      ]
+    },
+    "attr_operatingsystem": {
+      "name": "attr_operatingsystem",
+      "dtype": "str",
+      "null_count": 9272,
+      "null_pct": 92.72,
+      "distinct_count": 10,
+      "sample_values": [
+        "MacIntel",
+        "Win32",
+        "Linux x86_64",
+        "Linux armv81",
+        "iPhone",
+        "Linux aarch64",
+        "Linux armv8l",
+        "Linux armv7l",
+        "iPad",
+        "Windows"
+      ]
+    },
+    "attr_segment": {
+      "name": "attr_segment",
+      "dtype": "str",
+      "null_count": 9272,
+      "null_pct": 92.72,
+      "distinct_count": 2,
+      "sample_values": [
+        "B2C",
+        "B2B"
+      ]
+    },
+    "attr_natcocode": {
+      "name": "attr_natcocode",
+      "dtype": "str",
+      "null_count": 9272,
+      "null_pct": 92.72,
+      "distinct_count": 2,
+      "sample_values": [
+        "at",
+        "cz"
+      ]
+    },
+    "attr_id": {
+      "name": "attr_id",
+      "dtype": "str",
+      "null_count": 8979,
+      "null_pct": 89.79,
+      "distinct_count": 804,
+      "sample_values": [
+        "6e4d8db9-a6df-41e2-9d5a-b70aa234f1db",
+        "3266e49d-2856-4507-a6b0-65c5cd949aaa",
+        "71faaa27-da90-473e-9e60-369c590a5ae2",
+        "fbe72a3f-3333-4184-b591-0189def597f7",
+        "b751b85b-f33b-4a64-810f-ed38d9eed459",
+        "3182b4c2-1567-498b-a4d0-39392ddcd0b9",
+        "f1ae5596-b1b1-4eb0-afe9-a6d5e1c41edb",
+        "020d7c20-e548-4cee-b753-3bbad3b60e75",
+        "c4132801-8269-4424-99ce-0588093eec8b",
+        "24b2b104-32df-4157-8702-737e86896fde"
+      ]
+    },
+    "attr_page_name": {
+      "name": "attr_page_name",
+      "dtype": "str",
+      "null_count": 7533,
+      "null_pct": 75.33,
+      "distinct_count": 984,
+      "sample_values": [
+        "Tariff/tarife-ohne-handy",
+        "https://ui-at.eshop.yo-digital.com/shop/handytarife/internet-zuhause",
+        "HOME",
+        "https://ui-at.eshop.yo-digital.com/",
+        "checkout/PersonalInfo",
+        "BASKET",
+        "https://www.magenta.at/shop/handytarife/tarife-ohne-handy",
+        "NOT FOUND",
+        "https://ui-at.eshop.yo-digital.com/shop/magenta.at/shop/handytarife/tarife-ohne-handy",
+        "https://www.magenta.at/shop/basket"
+      ]
+    },
+    "attributelist": {
+      "name": "attributelist",
+      "dtype": "str",
+      "null_count": 6868,
+      "null_pct": 68.68,
+      "distinct_count": 3131,
+      "sample_values": [
+        "2e95ad62-ce03-4eb6-90c0-614b06aee1f6attributeList",
+        "19e36649-0215-4278-9cae-ea3e81d05e48attributeList",
+        "6637d199-b3b9-45de-9b23-bbaa200cc198attributeList",
+        "a672bcc6-7e95-4579-93e9-08639646369eattributeList",
+        "3f97e0d8-d5ba-4496-b2dd-54c23de75c36attributeList",
+        "39fc10a4-3429-4ca5-bd74-77f742e49d3aattributeList",
+        "cd6e381e-0c25-4080-9b75-2d82c9fda58dattributeList",
+        "667543f7-90a0-4449-ad7b-39d1b7ce8d3battributeList",
+        "6484f99b-4374-427d-85b9-483a6df3cc5dattributeList",
+        "2bd29d4f-57ed-4017-a038-e566d1ac0b16attributeList"
+      ]
+    },
+    "identifiers_user_id": {
+      "name": "identifiers_user_id",
+      "dtype": "float64",
+      "null_count": 8234,
+      "null_pct": 82.34,
+      "distinct_count": 423,
+      "sample_values": [
+        "6017352600.0",
+        "6007911128.0",
+        "6003684201.0",
+        "6014790105.0",
+        "6019132437.0",
+        "6010754610.0",
+        "6017261655.0",
+        "20405977.0",
+        "6019532383.0",
+        "6019983380.0"
+      ]
+    },
+    "attr_name": {
+      "name": "attr_name",
+      "dtype": "str",
+      "null_count": 9206,
+      "null_pct": 92.06,
+      "distinct_count": 163,
+      "sample_values": [
+        "select device",
+        "Zur Kasse",
+        "Back",
+        "Mobile Sim Only S",
+        "Mobile Sim Only Unlimited",
+        "dtLogoIcon",
+        "Mobile Sim Only M",
+        "Next neomezen\u011b XL s v\u00fdhodou",
+        "Next Data 5 GB s v\u00fdhodou",
+        "radioButtonClicks"
+      ]
+    },
+    "attr_header_name": {
+      "name": "attr_header_name",
+      "dtype": "str",
+      "null_count": 9825,
+      "null_pct": 98.25,
+      "distinct_count": 49,
+      "sample_values": [
+        "Mobilfunk",
+        "logo",
+        "hamburger clicked",
+        "Already a Telekom Customer?",
+        "login",
+        "Internet/PEVN\u00dd INTERNET",
+        "Internet/PEVN\u00dd INTERNET/Internet na doma",
+        "Internet/MOBILN\u00cd INTERNET/Internet v mobilu",
+        "Telefony a jin\u00e9/TELEFONY/V\u0161echny telefony",
+        "Magenta 1"
+      ]
+    },
+    "attr_variant": {
+      "name": "attr_variant",
+      "dtype": "str",
+      "null_count": 9904,
+      "null_pct": 99.04,
+      "distinct_count": 53,
+      "sample_values": [
+        "Next neomezen\u011b XL s v\u00fdhodou",
+        "Honor 200 5G 256GB - zelen\u00fd",
+        "Apple iPhone 16 Pro Max 256GB - \u010dern\u00fd titan",
+        "Motorola Edge 50 Neo - \u0161ed\u00fd",
+        "Sony PlayStation 5 slim + bonus Fortnite",
+        "TCL HH132 \u2013 b\u00edl\u00fd",
+        "Samsung Galaxy S25 128GB (S931B) - zelen\u00fd",
+        "Apple iPhone 16 Pro 128GB - \u010dern\u00fd titan",
+        "Xiaomi Redmi 13C 5G 128GB \u010dern\u00fd + Xiaomi Smart Band 9 Active",
+        "Xiaomi Redmi Note 12 5G 128GB - modr\u00fd"
+      ]
+    },
+    "attr_list": {
+      "name": "attr_list",
+      "dtype": "str",
+      "null_count": 9035,
+      "null_pct": 90.35,
+      "distinct_count": 5,
+      "sample_values": [
+        "tariff list section",
+        "device-only list section",
+        "device + tariff list section",
+        "search results",
+        "configurator list section"
+      ]
+    },
+    "attr_position": {
+      "name": "attr_position",
+      "dtype": "float64",
+      "null_count": 9861,
+      "null_pct": 98.61,
+      "distinct_count": 21,
+      "sample_values": [
+        "1.0",
+        "3.0",
+        "18.0",
+        "4.0",
+        "5.0",
+        "2.0",
+        "9.0",
+        "6.0",
+        "14.0",
+        "8.0"
+      ]
+    },
+    "attr_inventory": {
+      "name": "attr_inventory",
+      "dtype": "str",
+      "null_count": 9904,
+      "null_pct": 99.04,
+      "distinct_count": 1,
+      "sample_values": [
+        "in stock"
+      ]
+    },
+    "attr_price": {
+      "name": "attr_price",
+      "dtype": "float64",
+      "null_count": 9976,
+      "null_pct": 99.76,
+      "distinct_count": 8,
+      "sample_values": [
+        "945.0",
+        "756.0",
+        "1685.0",
+        "574.38",
+        "449.0",
+        "708.75",
+        "803.25",
+        "745.0"
+      ]
+    },
+    "attr_brand": {
+      "name": "attr_brand",
+      "dtype": "str",
+      "null_count": 9904,
+      "null_pct": 99.04,
+      "distinct_count": 9,
+      "sample_values": [
+        "telekom",
+        "Honor",
+        "Apple",
+        "Motorola",
+        "Sony",
+        "TCL",
+        "Samsung",
+        "Xiaomi",
+        "T-Mobile"
+      ]
+    },
+    "attr_product_category": {
+      "name": "attr_product_category",
+      "dtype": "str",
+      "null_count": 9904,
+      "null_pct": 99.04,
+      "distinct_count": 5,
+      "sample_values": [
+        "tariffMobilePostpaid",
+        "Mobile",
+        "modemy",
+        "tariffMobilePostpaid-b2b",
+        "internet"
+      ]
+    },
+    "attr_product_id": {
+      "name": "attr_product_id",
+      "dtype": "str",
+      "null_count": 9901,
+      "null_pct": 99.01,
+      "distinct_count": 52,
+      "sample_values": [
+        "MOBILE_PRODUCT_8856_EPC",
+        "flamingo14",
+        "MOBILE_PRODUCT_8857_EPC",
+        "MOBILE_PRODUCT_8858_EPC",
+        "honor_200_5g",
+        "apple_iphone_16_pro_max",
+        "motorola_edge_50_neo",
+        "ps5_slim_fortnite",
+        "tcl_hh132",
+        "samsung_galaxy_s25"
+      ]
+    },
+    "attr_currency_code": {
+      "name": "attr_currency_code",
+      "dtype": "str",
+      "null_count": 9885,
+      "null_pct": 98.85,
+      "distinct_count": 2,
+      "sample_values": [
+        "EUR",
+        "CZK"
+      ]
+    },
+    "attr_cart_count": {
+      "name": "attr_cart_count",
+      "dtype": "float64",
+      "null_count": 9896,
+      "null_pct": 98.96,
+      "distinct_count": 3,
+      "sample_values": [
+        "1.0",
+        "0.0",
+        "2.0"
+      ]
+    },
+    "attr_cart_value": {
+      "name": "attr_cart_value",
+      "dtype": "float64",
+      "null_count": 9896,
+      "null_pct": 98.96,
+      "distinct_count": 41,
+      "sample_values": [
+        "17.0",
+        "3590.0",
+        "714.0",
+        "150.0",
+        "2440.0",
+        "748.0",
+        "0.0",
+        "200.0",
+        "23.0",
+        "1696.0"
+      ]
+    },
+    "attr_items": {
+      "name": "attr_items",
+      "dtype": "str",
+      "null_count": 9881,
+      "null_pct": 98.81,
+      "distinct_count": 119,
+      "sample_values": [
+        "f3ce1fef-b881-4d71-a940-71df0c7d752eattr_items",
+        "b91467c5-7616-4cc1-bd45-da8b779048e0attr_items",
+        "b8f67d2d-0507-4275-972f-ff36e94b94acattr_items",
+        "32386c4f-7db2-4e1f-8555-f7e368305194attr_items",
+        "9627c013-47da-49ec-9137-0207bd9e914dattr_items",
+        "9068ee3b-a8b5-4436-b1d3-77a1c74175b7attr_items",
+        "1026708d-4a1b-4c28-a02a-fd157d511df3attr_items",
+        "2e98e487-85fa-4923-8713-f4c45d4cbf6aattr_items",
+        "6c1e618a-4214-4045-9b59-1059409212f0attr_items",
+        "3d3671da-e603-40c2-be18-0083e035b42battr_items"
+      ]
+    },
+    "attr_error_type": {
+      "name": "attr_error_type",
+      "dtype": "str",
+      "null_count": 9863,
+      "null_pct": 98.63,
+      "distinct_count": 3,
+      "sample_values": [
+        "server error",
+        "404 Page Not Found",
+        "warning + confirmation"
+      ]
+    },
+    "attr_error_description": {
+      "name": "attr_error_description",
+      "dtype": "str",
+      "null_count": 9863,
+      "null_pct": 98.63,
+      "distinct_count": 26,
+      "sample_values": [
+        "Offer with code: MOBILE_DATA_70GB_8876, given in request, does not exist or is not valid",
+        "Wir k\u00f6nnen die gesuchte Seite leider nicht finden.",
+        "Es hat leider nicht geklappt.",
+        "Offer with code: MOBILE_DATA_50GB_8875, given in request, does not exist or is not valid",
+        "V\u00e1mi zadan\u00e9 \u010d\u00edslo nen\u00ed z na\u0161\u00ed s\u00edt\u011b nebo je chybn\u00e9.",
+        "Zkontrolujte sv\u00e9 rodn\u00e9 \u010d\u00edslo (zadejte bez lom\u00edtka, d\u00e9lka 9 a\u017e 10 znak\u016f)",
+        "Zadejte 9-ti m\u00edstn\u00e9 telefonn\u00ed \u010d\u00edslo bez mezer",
+        "Zadejte \u010d\u00edslo ob\u010dansk\u00e9ho pr\u016fkazu vydan\u00e9ho v \u010cR",
+        "Zadejte pros\u00edm e-mail",
+        "Zkontrolujte rodn\u00e9 \u010d\u00edslo (zadejte bez lom\u00edtka, d\u00e9lka 9 a\u017e 10 znak\u016f)"
+      ]
+    },
+    "attr_toggle_switch": {
+      "name": "attr_toggle_switch",
+      "dtype": "str",
+      "null_count": 9976,
+      "null_pct": 99.76,
+      "distinct_count": 4,
+      "sample_values": [
+        "enable",
+        "off",
+        "on",
+        "disable"
+      ]
+    },
+    "attr_toggle_name": {
+      "name": "attr_toggle_name",
+      "dtype": "str",
+      "null_count": 9979,
+      "null_pct": 99.79,
+      "distinct_count": 4,
+      "sample_values": [
+        "non HW",
+        "address toggle",
+        "I would like a new device as well",
+        "esim - Family Card | undefined"
+      ]
+    },
+    "attr_form_name": {
+      "name": "attr_form_name",
+      "dtype": "str",
+      "null_count": 9861,
+      "null_pct": 98.61,
+      "distinct_count": 6,
+      "sample_values": [
+        "personal info",
+        "Shipping Info",
+        "login - enter password",
+        "login - enter username",
+        "check fixed service availability",
+        "insurance plans"
+      ]
+    },
+    "attr_field_name": {
+      "name": "attr_field_name",
+      "dtype": "str",
+      "null_count": 9877,
+      "null_pct": 98.77,
+      "distinct_count": 13,
+      "sample_values": [
+        "oibNumber",
+        "phoneNumber",
+        "Ulice*",
+        "idNumber",
+        "email",
+        "pesel",
+        "password",
+        "email address / phone number",
+        "firstName",
+        "postCode"
+      ]
+    },
+    "attr_brand_filter": {
+      "name": "attr_brand_filter",
+      "dtype": "str",
+      "null_count": 9951,
+      "null_pct": 99.51,
+      "distinct_count": 13,
+      "sample_values": [
+        "TCL,T-Mobile",
+        "Apple",
+        "T-Mobile,Apple",
+        "Samsung",
+        "Honor",
+        "Samsung,Xiaomi",
+        "Xiaomi",
+        "Xiaomi,Apple",
+        "Apple,Samsung",
+        "T-Mobile"
+      ]
+    },
+    "attr_filter_count": {
+      "name": "attr_filter_count",
+      "dtype": "float64",
+      "null_count": 9941,
+      "null_pct": 99.41,
+      "distinct_count": 5,
+      "sample_values": [
+        "2.0",
+        "1.0",
+        "3.0",
+        "6.0",
+        "4.0"
+      ]
+    },
+    "attr_targetpage": {
+      "name": "attr_targetpage",
+      "dtype": "str",
+      "null_count": 9860,
+      "null_pct": 98.6,
+      "distinct_count": 74,
+      "sample_values": [
+        "https://www.magenta.at/shop/checkout/personal-info",
+        "https://www.magenta.at/shop/handytarife/tarife-ohne-handy",
+        "https://ui-at.eshop.yo-digital.com/shop/handytarife/tarife-ohne-handy",
+        "https://eshop.t-mobile.cz/category/Devices-Mobile/list/product_listing/product/t_tablet?autoLogin=true&error=guest_access&state=cddecd92-5997-49ec-a45f-d446f879877b&variantId=POQ675&tariffId=-1&hardwareOnlySale=true",
+        "https://eshop.t-mobile.cz/checkout/personal-info",
+        "listing",
+        "https://eshop.t-mobile.cz/aplikace?loginStep=enterCredentials",
+        "https://eshop.t-mobile.cz/tarify/mobilni-tarify?campaign=194_111_BRAND-EXACT&gad_source=1&gbraid=0AAAAA9S170ACWuJ1dTWKEyHrxYuiLhzqc&gclid=Cj0KCQiAyoi8BhDvARIsAO_CDsAOZqK_13CRwKVA6fPNxklaJJCSy06tY7tle8nmkmNmw0tMY1EPrHYaAiX0EALw_wcB&autoLogin=true&error=guest_access&state=a39f08ee-1ac1-4c6b-9d1f-141e42afa3f6&loginStep=enterCredentials",
+        "https://www.magenta.at/shop/handytarife/tarife-ohne-handy?e=t",
+        "https://www.magenta.at/shop/handytarife/tarife-ohne-handy?e=t&loginStep=enterCredentials"
+      ]
+    },
+    "attr_label": {
+      "name": "attr_label",
+      "dtype": "str",
+      "null_count": 9968,
+      "null_pct": 99.68,
+      "distinct_count": 2,
+      "sample_values": [
+        "Hugo_Folie_202502",
+        "Pojisteni zdarma 202507_08"
+      ]
+    },
+    "attr_campaign_id": {
+      "name": "attr_campaign_id",
+      "dtype": "float64",
+      "null_count": 9968,
+      "null_pct": 99.68,
+      "distinct_count": 2,
+      "sample_values": [
+        "44637.0",
+        "61264.0"
+      ]
+    },
+    "attr_popup_name": {
+      "name": "attr_popup_name",
+      "dtype": "str",
+      "null_count": 9198,
+      "null_pct": 91.98,
+      "distinct_count": 16,
+      "sample_values": [
+        "magenta 1 benefit removed",
+        "simonly_s_1",
+        "mnp",
+        "N\u011bco jste si rozmysleli?",
+        "Clear Basket",
+        "tariff-detail-popup",
+        "routing",
+        "Your Flow is Changing",
+        "fix-tarif-detail-popup",
+        "P\u0159idat novou kartu"
+      ]
+    },
+    "attr_footer_name": {
+      "name": "attr_footer_name",
+      "dtype": "str",
+      "null_count": 9999,
+      "null_pct": 99.99,
+      "distinct_count": 1,
+      "sample_values": [
+        "Kontakty"
+      ]
+    },
+    "attr_detail_type": {
+      "name": "attr_detail_type",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "identifiers_service_id": {
+      "name": "identifiers_service_id",
+      "dtype": "str",
+      "null_count": 9957,
+      "null_pct": 99.57,
+      "distinct_count": 43,
+      "sample_values": [
+        "40259aee552b3a4f02f424b1bd0be45792d29b0a9ceb99f89b3c788cefd43e80",
+        "276e8f52a5e4fa266db6054f69dead978f74e5f4f68f91237d4e766b9a5f203f",
+        "50805565f03fadea940a7207364204fb88e8624c198b262970b6fbd53dc8f8c4",
+        "36037d0e02bb446f5c7bf8ebbebbc39f1e473b5ef22f56994274200c9a03f096",
+        "b5faeb033b34010cbf11dcd3b11e8442ba6caff6322b53c9df753c3cf5df10dc",
+        "719f864489d57c1b7975b15a279944650ed30fb5e1be8fd54a70b0a0fac95719",
+        "5e053fc3d9aab99941eabcde85b674da1516da5aa0db6174f096d0ccbc1f8ed6",
+        "ac06728c3214605c5ca60d3e0475b91ceb3490ee1f083352d5a644b34fa6916a",
+        "6f7ff3dddefbf0374f36593a330d30922a5732b41a7a0e826d76ae3bebaa5659",
+        "acdd9aae434c65d55744eabaae01903f9af9f8a1e8de7e48b23cec210550b236"
+      ]
+    },
+    "attr_msisdn_id": {
+      "name": "attr_msisdn_id",
+      "dtype": "str",
+      "null_count": 9951,
+      "null_pct": 99.51,
+      "distinct_count": 47,
+      "sample_values": [
+        "103ed027a25971f3a6049e7659f31ee81181c372a30a7ae3ff03b8e6920969e9",
+        "36badea679e6f5c113367c9447352aa8f1ada9c5bebcf5aae00c85bd8aeac42a",
+        "cf76160285222c967d77989ad645c397555f716d45dc1258f3e2a5f63ca4e908",
+        "4c2db66aac495cf8dba423d2c6dcaaddcf132d4631debb145826eda53823689d",
+        "decafcf6e682ba66d3bd54c8de84fca07a2283ac204e9f9b937d53f237ccae52",
+        "3d1df7b5e4f638302b127300d8a490dd7cfb7707d80903e43e4a602fe979b364",
+        "54d6aba019f5683cae6a15c2275242333b9e45daa75bef379e5be28bea6589f4",
+        "9dc9af7d6a934f88df1d29f1dc0e958d4ae89d0580f50a03e0db9e15da584767",
+        "d2e284dd42b2ab9a765404472aa9987968cb5e3378ee1e610a669a7fc24e5e3c",
+        "8de186b0fa96c828bdd33d82f70a90e8fcad20ea77e38d04344b31f6adf0ca8e"
+      ]
+    },
+    "attr_contractprolongation": {
+      "name": "attr_contractprolongation",
+      "dtype": "object",
+      "null_count": 9957,
+      "null_pct": 99.57,
+      "distinct_count": 2,
+      "sample_values": [
+        "True",
+        "False"
+      ]
+    },
+    "attr_tariffchange": {
+      "name": "attr_tariffchange",
+      "dtype": "object",
+      "null_count": 9957,
+      "null_pct": 99.57,
+      "distinct_count": 2,
+      "sample_values": [
+        "True",
+        "False"
+      ]
+    },
+    "attr_prepaidtopostpaidmigration": {
+      "name": "attr_prepaidtopostpaidmigration",
+      "dtype": "object",
+      "null_count": 9957,
+      "null_pct": 99.57,
+      "distinct_count": 2,
+      "sample_values": [
+        "False",
+        "True"
+      ]
+    },
+    "attr_tariff_id": {
+      "name": "attr_tariff_id",
+      "dtype": "str",
+      "null_count": 9986,
+      "null_pct": 99.86,
+      "distinct_count": 13,
+      "sample_values": [
+        "CURRENT_PON011_SU_131774333_COVER___NOTPERS_CG___CDATA__CVOICE__REL-CAT_",
+        "CURRENT_PON013_SU_31642134_COVER___NOTPERS_CG___CDATA__CVOICE__REL-CAT_",
+        "CURRENT_PON065_SU_125761568_COVER___NOTPERS_CG___CDATA__CVOICE__REL-CAT_",
+        "CURRENT_PON063_SU_106713840_COVER___NOTPERS_CG___CDATA__CVOICE__REL-CAT_",
+        "CURRENT_PON062_SU_135255641_COVER___NOTPERS_CG___CDATA__CVOICE__REL-CAT_",
+        "CURRENT_POT146_SU_134167545_COVER___NOTPERS_CG___CDATA__CVOICE__REL-CAT_",
+        "CURRENT_PON016_SU_16625152_COVER___NOTPERS_CG___CDATA__CVOICE__REL-CAT_",
+        "CURRENT_POT120_SU_106298641_COVER___NOTPERS_CG___CDATA__CVOICE__REL-CAT_",
+        "CURRENT_PON061_SU_124668867_COVER___NOTPERS_CG___CDATA__CVOICE__REL-CAT_",
+        "CURRENT_POT253_SU_132361584_COVER___NOTPERS_CG___CDATA__CVOICE__REL-CAT_"
+      ]
+    },
+    "attr_tooltip_value": {
+      "name": "attr_tooltip_value",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_numberofservices": {
+      "name": "attr_numberofservices",
+      "dtype": "float64",
+      "null_count": 9986,
+      "null_pct": 99.86,
+      "distinct_count": 5,
+      "sample_values": [
+        "1.0",
+        "3.0",
+        "2.0",
+        "6.0",
+        "5.0"
+      ]
+    },
+    "attr_emailid": {
+      "name": "attr_emailid",
+      "dtype": "str",
+      "null_count": 9989,
+      "null_pct": 99.89,
+      "distinct_count": 11,
+      "sample_values": [
+        "aa25eb9d5effa4618eddcce8ad68f73036399956241019381ed3062858d546f4",
+        "0575727ad307109d4053803dac442159663cb87f262adeb003cc8ff9d98c4eba",
+        "b724734412630975e15b5adb364eec40acdaa001f14911f4bae78336de0e5e68",
+        "8380acf3ea2575bebe23cb23cf059edfb0a427471e948d5bca0f0acf8b5126a5",
+        "45d7d9397e6127e3c23864b989114c4fcd1a225fbd7807461e881ab0cab0acec",
+        "d90a205f888d8327a955844ba24a8b3a32ca87c7c0ddaf60f64d1372fcd6ec60",
+        "39cc81ad555ca3ad84f07db9b85ad98070137772e51de5c99b431abe66da5fb8",
+        "15d4d4633eedb6351ea5bf7b4801be50f3a961b38b58c7e95b38a9a53aa99251",
+        "9d91050b2e2fc376ffabdc1184ca5df1d16d27bf6c4cbbeb161d53f2fe0c5635",
+        "a64891ff3ae32798941aec34946bd41b5a2db633d1e6ee9725ecdef4481d4b9f"
+      ]
+    },
+    "attr_phonenumber": {
+      "name": "attr_phonenumber",
+      "dtype": "str",
+      "null_count": 9999,
+      "null_pct": 99.99,
+      "distinct_count": 1,
+      "sample_values": [
+        "1350e8b1673df3fffd28460f1d86d65bb89d245d79342dfc6a7547c312bd4fa5"
+      ]
+    },
+    "attr_mobilenumber": {
+      "name": "attr_mobilenumber",
+      "dtype": "str",
+      "null_count": 9986,
+      "null_pct": 99.86,
+      "distinct_count": 14,
+      "sample_values": [
+        "3d1df7b5e4f638302b127300d8a490dd7cfb7707d80903e43e4a602fe979b364",
+        "2313e073fa1d1da5aaaa203330ad9e6409ac74ec938c43cf5445edc9fac0fc79",
+        "c3c837f2d0cb502c8bd34e7838589c59b4b1b75b14916e7d92450a4e3c3e35aa",
+        "c31e2650cf787c6060d9fcf78f7725395a909f890ed19118a8237a35c38562a1",
+        "a71b9e19f668f71ff1d9d49f0a3f08ec5e25b09400788b0735ae6c4a9fa49b71",
+        "bc9051caf476d236a22f6e2e7137beed09c18199b6c9ab53a0fc60456e4e5c4d",
+        "284ea974fee8cdeb38db7e153a2e93d50ed1380421831a7aa44c7fd7db989424",
+        "892be7b9501085487f6c9ee6a0b622595e104c8c3e623fc14b743cc3773fed4e",
+        "3753b7d84e7df19530c8b8aef58025ac529b074508986038016b836e92bdd509",
+        "82b7aac6f7d0cff48d9a021e6db73f9fbcca0aa583babe007f4a542c47077375"
+      ]
+    },
+    "attr_haseligibleservices": {
+      "name": "attr_haseligibleservices",
+      "dtype": "object",
+      "null_count": 9986,
+      "null_pct": 99.86,
+      "distinct_count": 1,
+      "sample_values": [
+        "True"
+      ]
+    },
+    "attr_customerimpersonation": {
+      "name": "attr_customerimpersonation",
+      "dtype": "object",
+      "null_count": 9986,
+      "null_pct": 99.86,
+      "distinct_count": 1,
+      "sample_values": [
+        "False"
+      ]
+    },
+    "attr_household": {
+      "name": "attr_household",
+      "dtype": "object",
+      "null_count": 9986,
+      "null_pct": 99.86,
+      "distinct_count": 1,
+      "sample_values": [
+        "False"
+      ]
+    },
+    "attr_status": {
+      "name": "attr_status",
+      "dtype": "str",
+      "null_count": 9943,
+      "null_pct": 99.43,
+      "distinct_count": 3,
+      "sample_values": [
+        "active",
+        "inactive",
+        "validated"
+      ]
+    },
+    "attr_buying_option": {
+      "name": "attr_buying_option",
+      "dtype": "str",
+      "null_count": 9931,
+      "null_pct": 99.31,
+      "distinct_count": 3,
+      "sample_values": [
+        "plan only",
+        "bundle",
+        "device only"
+      ]
+    },
+    "attr_order_type": {
+      "name": "attr_order_type",
+      "dtype": "str",
+      "null_count": 9979,
+      "null_pct": 99.79,
+      "distinct_count": 5,
+      "sample_values": [
+        "activation",
+        "hw only, activation",
+        "hw only",
+        "hw only, activation, prolongation",
+        "Tariff Change"
+      ]
+    },
+    "attr_sortby_filter": {
+      "name": "attr_sortby_filter",
+      "dtype": "str",
+      "null_count": 9999,
+      "null_pct": 99.99,
+      "distinct_count": 1,
+      "sample_values": [
+        "launchDate"
+      ]
+    },
+    "attr_categorydevice_filter": {
+      "name": "attr_categorydevice_filter",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_lowestprice_dropdown": {
+      "name": "attr_lowestprice_dropdown",
+      "dtype": "str",
+      "null_count": 9995,
+      "null_pct": 99.95,
+      "distinct_count": 1,
+      "sample_values": [
+        "Nejni\u017e\u0161\u00ed cena"
+      ]
+    },
+    "attr_payment_mode": {
+      "name": "attr_payment_mode",
+      "dtype": "str",
+      "null_count": 9996,
+      "null_pct": 99.96,
+      "distinct_count": 2,
+      "sample_values": [
+        "manualPayment",
+        "card"
+      ]
+    },
+    "attr_delivery_option": {
+      "name": "attr_delivery_option",
+      "dtype": "str",
+      "null_count": 9997,
+      "null_pct": 99.97,
+      "distinct_count": 2,
+      "sample_values": [
+        "parcelLocker",
+        "pickUpPoints"
+      ]
+    },
+    "attr_order_id": {
+      "name": "attr_order_id",
+      "dtype": "str",
+      "null_count": 9995,
+      "null_pct": 99.95,
+      "distinct_count": 5,
+      "sample_values": [
+        "5a5190e8-c995-4182-9d80-75a5a4a819f2",
+        "f81f25b1-d317-4468-8a2c-79af9b2d2d97",
+        "caffc6a5-a7bf-4780-b18d-ee2eb7d063c7",
+        "bebf19f8-fef9-4834-8031-5539647ecfc9",
+        "ac60ccae-5a66-480d-abcc-03309f65c151"
+      ]
+    },
+    "attr_affiliation": {
+      "name": "attr_affiliation",
+      "dtype": "str",
+      "null_count": 9995,
+      "null_pct": 99.95,
+      "distinct_count": 1,
+      "sample_values": [
+        "Online Store"
+      ]
+    },
+    "attr_revenue": {
+      "name": "attr_revenue",
+      "dtype": "float64",
+      "null_count": 9995,
+      "null_pct": 99.95,
+      "distinct_count": 4,
+      "sample_values": [
+        "300.0",
+        "651.0",
+        "299.0",
+        "150.0"
+      ]
+    },
+    "attr_tax": {
+      "name": "attr_tax",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_shipping": {
+      "name": "attr_shipping",
+      "dtype": "float64",
+      "null_count": 9995,
+      "null_pct": 99.95,
+      "distinct_count": 1,
+      "sample_values": [
+        "0.0"
+      ]
+    },
+    "attr_coupon": {
+      "name": "attr_coupon",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_cartitem_name": {
+      "name": "attr_cartitem_name",
+      "dtype": "str",
+      "null_count": 9999,
+      "null_pct": 99.99,
+      "distinct_count": 1,
+      "sample_values": [
+        "Pron\u00e1jem za\u0159\u00edzen\u00ed Z\u00e1klad - MAGENTA TV"
+      ]
+    },
+    "attr_cartitem_value": {
+      "name": "attr_cartitem_value",
+      "dtype": "float64",
+      "null_count": 9999,
+      "null_pct": 99.99,
+      "distinct_count": 1,
+      "sample_values": [
+        "0.0"
+      ]
+    },
+    "attr_device_category_filter": {
+      "name": "attr_device_category_filter",
+      "dtype": "str",
+      "null_count": 9997,
+      "null_pct": 99.97,
+      "distinct_count": 2,
+      "sample_values": [
+        "chytre_hodinky,tablety",
+        "telefony"
+      ]
+    },
+    "attr_storage_filter": {
+      "name": "attr_storage_filter",
+      "dtype": "str",
+      "null_count": 9998,
+      "null_pct": 99.98,
+      "distinct_count": 1,
+      "sample_values": [
+        "256_GB"
+      ]
+    },
+    "attr_current_plan": {
+      "name": "attr_current_plan",
+      "dtype": "str",
+      "null_count": 9985,
+      "null_pct": 99.85,
+      "distinct_count": 13,
+      "sample_values": [
+        "Start 150 Plus",
+        "2 GB Plus",
+        "Neomezen\u011b 5XL s v\u00fdhodou",
+        "Neomezen\u011b 3XL s v\u00fdhodou",
+        "Neomezen\u011b 2XL s v\u00fdhodou",
+        "Next neomezen\u011b 3 XL s v\u00fdhodou",
+        "6 GB Plus",
+        "Next neomezen\u011b L",
+        "Neomezen\u011b XL s v\u00fdhodou",
+        "NextU 12 GB"
+      ]
+    },
+    "attr_tariff_name": {
+      "name": "attr_tariff_name",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_storage_dropdown": {
+      "name": "attr_storage_dropdown",
+      "dtype": "str",
+      "null_count": 9979,
+      "null_pct": 99.79,
+      "distinct_count": 4,
+      "sample_values": [
+        "512 GB",
+        "256 GB",
+        "128 GB",
+        "1 TB"
+      ]
+    },
+    "attr_features_filter": {
+      "name": "attr_features_filter",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_colour_filter": {
+      "name": "attr_colour_filter",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_screen_size_filter": {
+      "name": "attr_screen_size_filter",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_color_filter": {
+      "name": "attr_color_filter",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_availability_filter": {
+      "name": "attr_availability_filter",
+      "dtype": "str",
+      "null_count": 9999,
+      "null_pct": 99.99,
+      "distinct_count": 1,
+      "sample_values": [
+        "IN_STOCK"
+      ]
+    },
+    "attr_credential_name": {
+      "name": "attr_credential_name",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_toottip_label": {
+      "name": "attr_toottip_label",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_new_plan": {
+      "name": "attr_new_plan",
+      "dtype": "str",
+      "null_count": 9999,
+      "null_pct": 99.99,
+      "distinct_count": 1,
+      "sample_values": [
+        "Next neomezen\u011b 2XL"
+      ]
+    },
+    "attr_popularityindex_dropdown": {
+      "name": "attr_popularityindex_dropdown",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_discount_dropdown": {
+      "name": "attr_discount_dropdown",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_launchdate_dropdown": {
+      "name": "attr_launchdate_dropdown",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_bestdeviceoffers_dropdown": {
+      "name": "attr_bestdeviceoffers_dropdown",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_numberofinstalments_dropdown": {
+      "name": "attr_numberofinstalments_dropdown",
+      "dtype": "str",
+      "null_count": 9977,
+      "null_pct": 99.77,
+      "distinct_count": 4,
+      "sample_values": [
+        "23 Prvn\u00ed spl\u00e1tka 0 K\u010d, pot\u00e9 23 m\u011bs. plateb ",
+        "23 spl\u00e1tek",
+        "23 spl\u00e1tek, prvn\u00ed je 0 K\u010d",
+        "Zaplatit jednor\u00e1zov\u011b"
+      ]
+    },
+    "attr_voicesms_dropdown": {
+      "name": "attr_voicesms_dropdown",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_extradata_dropdown": {
+      "name": "attr_extradata_dropdown",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_apps_dropdown": {
+      "name": "attr_apps_dropdown",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_minutes_dropdown": {
+      "name": "attr_minutes_dropdown",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_bank_dropdown": {
+      "name": "attr_bank_dropdown",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_plantype_dropdown": {
+      "name": "attr_plantype_dropdown",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_sourceoperator_dropdown": {
+      "name": "attr_sourceoperator_dropdown",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_installment_dropdown": {
+      "name": "attr_installment_dropdown",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_paymentmode_dropdown": {
+      "name": "attr_paymentmode_dropdown",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_deliverymethod_dropdown": {
+      "name": "attr_deliverymethod_dropdown",
+      "dtype": "str",
+      "null_count": 9998,
+      "null_pct": 99.98,
+      "distinct_count": 1,
+      "sample_values": [
+        "Vyzvednut\u00ed na pobo\u010dce"
+      ]
+    },
+    "attr_port_type": {
+      "name": "attr_port_type",
+      "dtype": "str",
+      "null_count": 9999,
+      "null_pct": 99.99,
+      "distinct_count": 1,
+      "sample_values": [
+        "desired date"
+      ]
+    },
+    "attr_connection_type": {
+      "name": "attr_connection_type",
+      "dtype": "str",
+      "null_count": 9999,
+      "null_pct": 99.99,
+      "distinct_count": 1,
+      "sample_values": [
+        "prepaid"
+      ]
+    },
+    "attr_previous_network": {
+      "name": "attr_previous_network",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_transaction_id": {
+      "name": "attr_transaction_id",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_transaction_amount": {
+      "name": "attr_transaction_amount",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_product_quantity": {
+      "name": "attr_product_quantity",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_product_name": {
+      "name": "attr_product_name",
+      "dtype": "str",
+      "null_count": 9997,
+      "null_pct": 99.97,
+      "distinct_count": 3,
+      "sample_values": [
+        "Mobile Sim Only S",
+        "Mobile Sim Only M",
+        "Mobile Sim Only Unlimited"
+      ]
+    },
+    "attr_search_term": {
+      "name": "attr_search_term",
+      "dtype": "str",
+      "null_count": 9992,
+      "null_pct": 99.92,
+      "distinct_count": 8,
+      "sample_values": [
+        "pevn\u00fd nternet",
+        "100 GB",
+        "pokryt\u00ed",
+        "pokryt\u00ed sign\u00e1lem",
+        "Samsung Galaxy Z Flip6",
+        "internet na cesty",
+        "apple",
+        "airpods max"
+      ]
+    },
+    "attr_search_mode": {
+      "name": "attr_search_mode",
+      "dtype": "str",
+      "null_count": 9992,
+      "null_pct": 99.92,
+      "distinct_count": 1,
+      "sample_values": [
+        "type search"
+      ]
+    },
+    "attr_creative": {
+      "name": "attr_creative",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_parent_id": {
+      "name": "attr_parent_id",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_business_group": {
+      "name": "attr_business_group",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_recurring_price": {
+      "name": "attr_recurring_price",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_quantity": {
+      "name": "attr_quantity",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_price_min_filter": {
+      "name": "attr_price_min_filter",
+      "dtype": "float64",
+      "null_count": 9999,
+      "null_pct": 99.99,
+      "distinct_count": 1,
+      "sample_values": [
+        "0.0"
+      ]
+    },
+    "attr_price_max_filter": {
+      "name": "attr_price_max_filter",
+      "dtype": "float64",
+      "null_count": 9999,
+      "null_pct": 99.99,
+      "distinct_count": 1,
+      "sample_values": [
+        "20000.0"
+      ]
+    },
+    "identifiers_sessionid": {
+      "name": "identifiers_sessionid",
+      "dtype": "str",
+      "null_count": 110,
+      "null_pct": 1.1,
+      "distinct_count": 3515,
+      "sample_values": [
+        "1724e0f1c3b04f74209b1b7eae147d2ab6164a280608e931f7dd242ab09785cf3c167d1c985a1627a402424ea116d4f8d424c024e972200d4f04797a61c79632",
+        "e74a57043cb9058e93f7c34079e634f3cd72e84c103ce0a82b48d093fc0b06c1de85417227995dd37356c7f5c11a76d119360faa99db9c3d8c6741ce64306395",
+        "d30208e778524c714370d04f08bd874d6ea9a44884a0c12643a0d19ebc1d6ca1beb44599bc7bfd51fa57d4d4ebfa9983a20cf12d4a202297e6d1a5f5f0e190c5",
+        "9e006109c955cf59010383147985603747b420a338935aab3dba1a90fa0d3e128a248f8c6e9fc86d32b203caf9f57346440b8a30a4654d4f67e7fb760c082909",
+        "c26394a5444f56830e5519285faeab7d0742ada343154abedbdc8dee13d2cd1c1ba29fb02d564ad37fb9d2e342a65c9bbae5d5d062931069308bf0d18ada598d",
+        "7f8a90fdc02a76b28f19ae5bfc9610af5befb12c08b7395b59a065fe30c822972701b5e408541c24c740d62efb233dbe44a3d9ea0566691016f43889c48555b2",
+        "422d5bc0cd241581f70404ddc309bd9e27f09309da0b18aab15354b036b6d1108afd526a9d6ef382f5570714b9972f942d7a997f2b899712ef89f3564759fe95",
+        "248a08ca5c7db9aa06c399dba32f96248b1de153f07b083b75186b38f3adfcf75220d008d2f69b053f93ebc408aa9c61d79d64421af3c3552596c018fc191fa0",
+        "e7471c94c31823551b98a5ac855c20e78fdf6e514e29dfcc2344827d619aac7de88292210693bbe27a500367f94291c7b374e116cd82d71eda8097267f3dde3c",
+        "4a152797d3caa1b7c4b808500d082864a2f93f70b48f4e0224e3f15f4f4181f5355ca289c45b0f61ffada0d1cffab2650236b8fbd4ae797f0f94abd3f5dc7fb2"
+      ]
+    },
+    "attr_count_of_mobile_services": {
+      "name": "attr_count_of_mobile_services",
+      "dtype": "float64",
+      "null_count": 9986,
+      "null_pct": 99.86,
+      "distinct_count": 3,
+      "sample_values": [
+        "1.0",
+        "0.0",
+        "2.0"
+      ]
+    },
+    "attr_fix_bb_product": {
+      "name": "attr_fix_bb_product",
+      "dtype": "str",
+      "null_count": 9986,
+      "null_pct": 99.86,
+      "distinct_count": 1,
+      "sample_values": [
+        "N"
+      ]
+    },
+    "attr_fix_voice_product": {
+      "name": "attr_fix_voice_product",
+      "dtype": "str",
+      "null_count": 9986,
+      "null_pct": 99.86,
+      "distinct_count": 1,
+      "sample_values": [
+        "N"
+      ]
+    },
+    "attr_is_magenta_1": {
+      "name": "attr_is_magenta_1",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_mobile_product": {
+      "name": "attr_mobile_product",
+      "dtype": "str",
+      "null_count": 9986,
+      "null_pct": 99.86,
+      "distinct_count": 1,
+      "sample_values": [
+        "Y"
+      ]
+    },
+    "attr_tv_product": {
+      "name": "attr_tv_product",
+      "dtype": "str",
+      "null_count": 9986,
+      "null_pct": 99.86,
+      "distinct_count": 1,
+      "sample_values": [
+        "N"
+      ]
+    },
+    "attr_longterm_revenue": {
+      "name": "attr_longterm_revenue",
+      "dtype": "float64",
+      "null_count": 9996,
+      "null_pct": 99.96,
+      "distinct_count": 3,
+      "sample_values": [
+        "300.0",
+        "299.0",
+        "150.0"
+      ]
+    },
+    "attr_business_process": {
+      "name": "attr_business_process",
+      "dtype": "str",
+      "null_count": 9951,
+      "null_pct": 99.51,
+      "distinct_count": 3,
+      "sample_values": [
+        "acquisition",
+        "prepaidToPostpaidMigration",
+        "tariffChange"
+      ]
+    },
+    "internal_user_flag": {
+      "name": "internal_user_flag",
+      "dtype": "str",
+      "null_count": 20,
+      "null_pct": 0.2,
+      "distinct_count": 2,
+      "sample_values": [
+        "N",
+        "Y"
+      ]
+    },
+    "attr_upfront_payment_mode": {
+      "name": "attr_upfront_payment_mode",
+      "dtype": "str",
+      "null_count": 9994,
+      "null_pct": 99.94,
+      "distinct_count": 3,
+      "sample_values": [
+        "manualPayment",
+        "tokenizedCard",
+        "card"
+      ]
+    },
+    "attr_monthly_payment_mode": {
+      "name": "attr_monthly_payment_mode",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "identifiers_pageurlparameters": {
+      "name": "identifiers_pageurlparameters",
+      "dtype": "str",
+      "null_count": 186,
+      "null_pct": 1.86,
+      "distinct_count": 4551,
+      "sample_values": [
+        "{}",
+        "{e=t}",
+        "{tariffId=MOBILE_PRODUCT_8858_EPC}",
+        "{tariffId=MOBILE_PRODUCT_8857_EPC}",
+        "{tariffId=MOBILE_PRODUCT_8856_EPC}",
+        "{preview=true, previewToken=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJhdWQiOiJoaW1hbnNodS5iYWphakB0ZWxla29tLWRpZ2l0YWwuY29tIiwic3ViIjoiZTg0ZWUzYzUtZTRlZS00Njk3LWJiMGItOGFlY2UxMGYxNDAzIiwib3RoZXJDbGFpbXMiOnsicGFnZUlkIjoiZTQ5ZjUzYjYtYTRiZS00MDFkLWJlOTEtNzQyNDc1MjkxYjFhIiwic3RhdGVJZCI6Ijc0NTNiNGEzLTliZmQtNGY4Ny1hZDdjLWVlNmJhNmVkMTdhZCIsImluc3RhbmNlSWQiOiJhdF9wcm9kIiwidGVuYW50SWQiOiJhdCIsImJhc2VVcmwiOiJodHRwczovL3VpLWF0LXRlc3QuZXNob3AueW8tZGlnaXRhbC5jb20vIn0sImlzcyI6Imh0dHA6Ly9lc2hvcC1idWlsZGVyLXByb2QuZXNob3AueW8tZGlnaXRhbC5jb206NDQzL3BhZ2VCdWlsZGVyL3BhZ2VzL3ByZXZpZXcvZTQ5ZjUzYjYtYTRiZS00MDFkLWJlOTEtNzQyNDc1MjkxYjFhIiwiZXhwIjoxNzQyNDY1Mzk3fQ.hiWHP9YFQbpXpE98bZJQtQ80H-VPHxIu32TOHgMNv7o, pageId=e49f53b6-a4be-401d-be91-742475291b1a}",
+        "{preview=true, previewToken=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJhdWQiOiJoaW1hbnNodS5iYWphakB0ZWxla29tLWRpZ2l0YWwuY29tIiwic3ViIjoiOTVmOTA1NjMtOTcxMi00MDM2LWE4MDMtOWQ3NjE0ZDFmZDljIiwib3RoZXJDbGFpbXMiOnsicGFnZUlkIjoiZTQ5ZjUzYjYtYTRiZS00MDFkLWJlOTEtNzQyNDc1MjkxYjFhIiwic3RhdGVJZCI6IjhkNTFiNzBlLTNmYjMtNDQyMy1iM2FiLWU5ZmQ0ZGJlMWNmMyIsImluc3RhbmNlSWQiOiJhdF9wcm9kIiwidGVuYW50SWQiOiJhdCIsImJhc2VVcmwiOiJodHRwczovL3VpLWF0LXRlc3QuZXNob3AueW8tZGlnaXRhbC5jb20vIn0sImlzcyI6Imh0dHA6Ly9vbmV1aWJ1aWxkZXIub2EueW8tZGlnaXRhbC5jb206NDQzL3BhZ2VCdWlsZGVyL3BhZ2VzL3ByZXZpZXcvZTQ5ZjUzYjYtYTRiZS00MDFkLWJlOTEtNzQyNDc1MjkxYjFhIiwiZXhwIjoxNzU3MzE3NTAyfQ.2misHqPfcs-LmRCVlWlkRpfqdDFHjeJW8AACAD2Ly9s, pageId=e49f53b6-a4be-401d-be91-742475291b1a}",
+        "{_gl=1*1lm6qhs*_gcl_aw*R0NMLjE3NDYwNDAzMjMuQ2owS0NRandsTWZBQmhDV0FSSXNBREdYZHk4dTNxZVpWeTNiTUtac0FyRG5FRDlabGJ3a0JIQVVGRG01RU5vNWNhLXN3WDQ3dEFvZkZONGFBdlVURUFMd193Y0I.*_gcl_au*MjkzMjk1OTgyLjE3NDYwNDAxNjI.*_ga*MjEwNzA1MjA5MC4xNzQ2MDQwMTYy*_ga_C57TTGMNNX*MTc0NjA0MDE2Mi4xLjEuMTc0NjA0MDQxMi4yMi4wLjE3MDQwOTcy, filter%5B%5D=filter.device_category%5B%5D%3Dherni_konzole, agreementId=agreement24, variantId=POS317, deviceCategoryName=herni_konzole, bp=acquisition, categoryId=Devices-Mobile}",
+        "{state=44c5ede2-6593-4741-a595-22fc6b5c87d2, error=guest_access, autoLogin=true}",
+        "{agreementId=agreement24, filter[]=filter.device_category[]%3Dtelefony, state=9ebe1d64-e998-4591-85eb-265a07cb2cdc, tariffId=POT144, variantId=POV534, error=guest_access, deviceCategoryName=Mobiln\u00ed+telefony, autoLogin=true, categoryId=Devices-Mobile}"
+      ]
+    },
+    "internalemployee": {
+      "name": "internalemployee",
+      "dtype": "str",
+      "null_count": 774,
+      "null_pct": 7.74,
+      "distinct_count": 1,
+      "sample_values": [
+        "no"
+      ]
+    },
+    "attr_cartid": {
+      "name": "attr_cartid",
+      "dtype": "str",
+      "null_count": 9908,
+      "null_pct": 99.08,
+      "distinct_count": 61,
+      "sample_values": [
+        "2c95854393286c6301932a24193d36f1",
+        "2c9584a393286c5101932a2b8ee93722",
+        "2c95854393286c6301932a18880c33e3",
+        "67bf378df0adc2014ea8967b",
+        "67bf37bb86e1647bc07501e3",
+        "67bf37e5cebcbc660fdf3a92",
+        "2c95836094535c2b0194549273d820ae",
+        "2c958767943e8ce501945494f1556aa4",
+        "2c958b59937e5f3c0193877b211911b6",
+        "67bf680df64a6379fe51edc3"
+      ]
+    },
+    "attr_carttype": {
+      "name": "attr_carttype",
+      "dtype": "str",
+      "null_count": 9881,
+      "null_pct": 98.81,
+      "distinct_count": 3,
+      "sample_values": [
+        "SB",
+        "EB",
+        "MB"
+      ]
+    },
+    "service_line": {
+      "name": "service_line",
+      "dtype": "str",
+      "null_count": 1346,
+      "null_pct": 13.46,
+      "distinct_count": 2,
+      "sample_values": [
+        "mobile",
+        "fixed"
+      ]
+    },
+    "identifiers_ab_experiment": {
+      "name": "identifiers_ab_experiment",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "identifiers_ab_experiment_variant": {
+      "name": "identifiers_ab_experiment_variant",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "identifiers_utmcampaign": {
+      "name": "identifiers_utmcampaign",
+      "dtype": "str",
+      "null_count": 8052,
+      "null_pct": 80.52,
+      "distinct_count": 104,
+      "sample_values": [
+        "9000056_Magenta-1-Business-GDN",
+        "6000058Q1-HUGO",
+        "6000058_Q1-HUGO",
+        "7000091_Vendor-Samsung-Xiaomi-unor-GDN-13c",
+        "7000091_Vendor-Samsung-Xiaomi-unor-GDN-A16",
+        "7000091_Vendori-Samsung-Xiaomi-unor",
+        "9000056_Magenta-1-Business",
+        "6000058_Q1-HUGO-Image",
+        "7000091_Vendor-Samsung-Xiaomi-unor",
+        "6000058_Q1-HUGO-consideration"
+      ]
+    },
+    "identifiers_utmsource": {
+      "name": "identifiers_utmsource",
+      "dtype": "str",
+      "null_count": 8729,
+      "null_pct": 87.29,
+      "distinct_count": 20,
+      "sample_values": [
+        "google",
+        "Novinky",
+        "adform",
+        "instagram",
+        "cnc",
+        "facebook",
+        "seznam",
+        "directmail",
+        "tiktok",
+        "mafra"
+      ]
+    },
+    "identifiers_utmmedium": {
+      "name": "identifiers_utmmedium",
+      "dtype": "str",
+      "null_count": 8052,
+      "null_pct": 80.52,
+      "distinct_count": 6,
+      "sample_values": [
+        "cpc",
+        "Rich-Media",
+        "cpm",
+        "social",
+        "email",
+        "paid"
+      ]
+    },
+    "identifiers_utmcontent": {
+      "name": "identifiers_utmcontent",
+      "dtype": "str",
+      "null_count": 9125,
+      "null_pct": 91.25,
+      "distinct_count": 197,
+      "sample_values": [
+        "security_480x480",
+        "banners-kliky-consideration-nulova-splatka",
+        "banners-kliky-Redmi-13C",
+        "stories-gif-brand",
+        "cnc-mobilni-vineta-image-splatka",
+        "banners-kliky",
+        "imagead-traffic",
+        "banner",
+        "seznam-zpravy-mobilni-square-S25-ultra",
+        "gif-redmi-note-14-pro"
+      ]
+    },
+    "identifiers_utmterm": {
+      "name": "identifiers_utmterm",
+      "dtype": "str",
+      "null_count": 9575,
+      "null_pct": 95.75,
+      "distinct_count": 17,
+      "sample_values": [
+        "pbu",
+        "db",
+        "120227351078510619",
+        "120227351078520619",
+        "120213163111370619",
+        "120225693021850619",
+        "6680560499260",
+        "6619624673260",
+        "120222383677070619",
+        "120225693021840619"
+      ]
+    },
+    "identifiers_referrer": {
+      "name": "identifiers_referrer",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 1147,
+      "sample_values": [
+        "https://conf.magenta.at/",
+        "https://dashboard.intra.eshop.yo-digital.com/",
+        "https://ui-at.eshop.yo-digital.com/shop/handytarife/tarife-ohne-handy",
+        "https://ui-at.eshop.yo-digital.com/shop/handytarife/internet-zuhause",
+        "https://oneuibuilder.oa.yo-digital.com/",
+        "https://ui-at.eshop.yo-digital.com/",
+        "https://statics.teams.cdn.office.net/",
+        "https://ui-at.eshop.yo-digital.com/shop/magenta.at/shop/handytarife/tarife-ohne-handy",
+        "https://ui-at.eshop.yo-digital.com/shop/internet/internet-zuhause",
+        "https://ui-at.eshop.yo-digital.com/shop/handytarife/internet"
+      ]
+    },
+    "attr_user_loyalty_bonus": {
+      "name": "attr_user_loyalty_bonus",
+      "dtype": "float64",
+      "null_count": 774,
+      "null_pct": 7.74,
+      "distinct_count": 1,
+      "sample_values": [
+        "-1.0"
+      ]
+    },
+    "attr_is_loyalty_bonus_applied": {
+      "name": "attr_is_loyalty_bonus_applied",
+      "dtype": "str",
+      "null_count": 9881,
+      "null_pct": 98.81,
+      "distinct_count": 1,
+      "sample_values": [
+        "na"
+      ]
+    },
+    "attr_is_magenta_one_bonus_applied": {
+      "name": "attr_is_magenta_one_bonus_applied",
+      "dtype": "str",
+      "null_count": 9881,
+      "null_pct": 98.81,
+      "distinct_count": 2,
+      "sample_values": [
+        "na",
+        "yes"
+      ]
+    },
+    "attr_magenta_one_data_benefit": {
+      "name": "attr_magenta_one_data_benefit",
+      "dtype": "float64",
+      "null_count": 774,
+      "null_pct": 7.74,
+      "distinct_count": 1,
+      "sample_values": [
+        "-1.0"
+      ]
+    },
+    "attr_magenta_one_price_benefit": {
+      "name": "attr_magenta_one_price_benefit",
+      "dtype": "str",
+      "null_count": 774,
+      "null_pct": 7.74,
+      "distinct_count": 18,
+      "sample_values": [
+        "-1",
+        "-189 K\u010d",
+        "-236,25 K\u010d",
+        "-271,25 K\u010d",
+        "-346,25 K\u010d",
+        "-217 K\u010d",
+        "-94,50 K\u010d",
+        "\u2212189 K\u010d",
+        "-162,75 K\u010d",
+        "-94.50 K\u010d"
+      ]
+    },
+    "attr_count_of_adult_card": {
+      "name": "attr_count_of_adult_card",
+      "dtype": "float64",
+      "null_count": 9996,
+      "null_pct": 99.96,
+      "distinct_count": 1,
+      "sample_values": [
+        "0.0"
+      ]
+    },
+    "attr_count_of_children_card": {
+      "name": "attr_count_of_children_card",
+      "dtype": "float64",
+      "null_count": 9996,
+      "null_pct": 99.96,
+      "distinct_count": 1,
+      "sample_values": [
+        "0.0"
+      ]
+    },
+    "attr_additional_card_type": {
+      "name": "attr_additional_card_type",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_contract_term": {
+      "name": "attr_contract_term",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_current_tab": {
+      "name": "attr_current_tab",
+      "dtype": "str",
+      "null_count": 9900,
+      "null_pct": 99.0,
+      "distinct_count": 6,
+      "sample_values": [
+        "login - enter username",
+        "prelogin retention option selection",
+        "user profile context bar",
+        "advanced filters selection",
+        "login - enter password",
+        "insurance plans"
+      ]
+    },
+    "attr_source": {
+      "name": "attr_source",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_current_service_provider": {
+      "name": "attr_current_service_provider",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_rank": {
+      "name": "attr_rank",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_option_selected": {
+      "name": "attr_option_selected",
+      "dtype": "str",
+      "null_count": 9868,
+      "null_pct": 98.68,
+      "distinct_count": 27,
+      "sample_values": [
+        "B\u00edl\u00e1",
+        "23 Prvn\u00ed spl\u00e1tka 0 K\u010d, pot\u00e9 23 m\u011bs. plateb ",
+        "\u010cern\u00e1",
+        "P\u0159\u00edrodn\u00ed",
+        "St\u0159\u00edbrn\u00e1",
+        "Modr\u00e1",
+        "1_TB",
+        "Customer selected living space 60 - 100 m\u00b2",
+        "23 spl\u00e1tek, prvn\u00ed je 0 K\u010d",
+        "256_GB"
+      ]
+    },
+    "attr_option_available": {
+      "name": "attr_option_available",
+      "dtype": "str",
+      "null_count": 9653,
+      "null_pct": 96.53,
+      "distinct_count": 47,
+      "sample_values": [
+        "buy plan only",
+        "select device",
+        "\u010cern\u00e1 | B\u00edl\u00e1 | R\u016f\u017eov\u00e1 | Modr\u00e1 | Zelen\u00e1",
+        "contractProlongation|tariffChange",
+        "23 Prvn\u00ed spl\u00e1tka 0 K\u010d, pot\u00e9 23 m\u011bs. plateb  | Zaplatit jednor\u00e1zov\u011b",
+        "R\u016f\u017eov\u00e1 | \u010cern\u00e1 | \u017dlut\u00e1 | Modr\u00e1 | Zelen\u00e1",
+        "\u010cern\u00e1 | B\u00edl\u00e1 | Pou\u0161tn\u00ed | P\u0159\u00edrodn\u00ed",
+        "\u010cern\u00e1 | St\u0159\u00edbrn\u00e1",
+        "Midnight | St\u0159\u00edbrn\u00e1 | Starlight",
+        "256 GB | 512 GB | 1 TB"
+      ]
+    },
+    "attr_selection_type": {
+      "name": "attr_selection_type",
+      "dtype": "str",
+      "null_count": 9871,
+      "null_pct": 98.71,
+      "distinct_count": 2,
+      "sample_values": [
+        "custom",
+        "manual"
+      ]
+    },
+    "attr_id_card_type": {
+      "name": "attr_id_card_type",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_credit_check_status": {
+      "name": "attr_credit_check_status",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_data_max_filter": {
+      "name": "attr_data_max_filter",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_data_min_filter": {
+      "name": "attr_data_min_filter",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_login_source": {
+      "name": "attr_login_source",
+      "dtype": "str",
+      "null_count": 9824,
+      "null_pct": 98.24,
+      "distinct_count": 4,
+      "sample_values": [
+        "add2cartFlow",
+        "loginHeaderBanner",
+        "sideBar",
+        "loginBox"
+      ]
+    },
+    "attr_savings_total_value": {
+      "name": "attr_savings_total_value",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_previous_tab": {
+      "name": "attr_previous_tab",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_strictlynecessaryconsent": {
+      "name": "attr_strictlynecessaryconsent",
+      "dtype": "object",
+      "null_count": 9994,
+      "null_pct": 99.94,
+      "distinct_count": 1,
+      "sample_values": [
+        "True"
+      ]
+    },
+    "attr_preferencesconsent": {
+      "name": "attr_preferencesconsent",
+      "dtype": "object",
+      "null_count": 9613,
+      "null_pct": 96.13,
+      "distinct_count": 2,
+      "sample_values": [
+        "True",
+        "False"
+      ]
+    },
+    "attr_statisticsconsent": {
+      "name": "attr_statisticsconsent",
+      "dtype": "object",
+      "null_count": 9613,
+      "null_pct": 96.13,
+      "distinct_count": 2,
+      "sample_values": [
+        "True",
+        "False"
+      ]
+    },
+    "attr_marketingconsent": {
+      "name": "attr_marketingconsent",
+      "dtype": "object",
+      "null_count": 9613,
+      "null_pct": 96.13,
+      "distinct_count": 2,
+      "sample_values": [
+        "True",
+        "False"
+      ]
+    },
+    "attr_filter_type": {
+      "name": "attr_filter_type",
+      "dtype": "str",
+      "null_count": 9993,
+      "null_pct": 99.93,
+      "distinct_count": 1,
+      "sample_values": [
+        "dropdown"
+      ]
+    },
+    "attr_calls_filter": {
+      "name": "attr_calls_filter",
+      "dtype": "str",
+      "null_count": 9993,
+      "null_pct": 99.93,
+      "distinct_count": 3,
+      "sample_values": [
+        "12 GB",
+        "8 GB",
+        "5 GB"
+      ]
+    },
+    "identifiers_pagedomain": {
+      "name": "identifiers_pagedomain",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "identifiers_pagehash": {
+      "name": "identifiers_pagehash",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "identifiers_pagepath": {
+      "name": "identifiers_pagepath",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "identifiers_pagetitle": {
+      "name": "identifiers_pagetitle",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "identifiers_sessionpageviewcount": {
+      "name": "identifiers_sessionpageviewcount",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "identifiers_sessioneventcount": {
+      "name": "identifiers_sessioneventcount",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "identifiers_sessioncount": {
+      "name": "identifiers_sessioncount",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "identifiers_sessionstartflag": {
+      "name": "identifiers_sessionstartflag",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "identifiers_tealiumsessionid": {
+      "name": "identifiers_tealiumsessionid",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "identifiers_tealiumvisitorid": {
+      "name": "identifiers_tealiumvisitorid",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "meta_viewportheight": {
+      "name": "meta_viewportheight",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "meta_viewportwidth": {
+      "name": "meta_viewportwidth",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "meta_tealiumaccount": {
+      "name": "meta_tealiumaccount",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "meta_tealiumenvironment": {
+      "name": "meta_tealiumenvironment",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "meta_tealiumprofile": {
+      "name": "meta_tealiumprofile",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "meta_tealiumversion": {
+      "name": "meta_tealiumversion",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_cart_source": {
+      "name": "attr_cart_source",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_elementvalue": {
+      "name": "attr_elementvalue",
+      "dtype": "str",
+      "null_count": 9714,
+      "null_pct": 97.14,
+      "distinct_count": 48,
+      "sample_values": [
+        "select device",
+        "back link",
+        "know more",
+        "back to all devices",
+        "close icon clicked",
+        "continue - validate username",
+        "Pokra\u010dovat",
+        "Pokud opust\u00edte str\u00e1nku, v\u00fdb\u011br budete muset opakovat",
+        "confirm plan",
+        "Vetrag als Bestandskunde anmelden"
+      ]
+    },
+    "attr_elementposition": {
+      "name": "attr_elementposition",
+      "dtype": "str",
+      "null_count": 9732,
+      "null_pct": 97.32,
+      "distinct_count": 5,
+      "sample_values": [
+        "side-bar",
+        "header",
+        "page-body",
+        "side-drawer",
+        "pop-up"
+      ]
+    },
+    "attr_elementtitle": {
+      "name": "attr_elementtitle",
+      "dtype": "str",
+      "null_count": 8837,
+      "null_pct": 88.37,
+      "distinct_count": 76,
+      "sample_values": [
+        "magenta 1 benefit removed",
+        "configuration side stepper",
+        "simonly_s_1",
+        "mnp",
+        "tariff selection tile",
+        "device detailed",
+        "user profile context bar",
+        "login - enter username",
+        "mnp step - enter phone number",
+        "personal info"
+      ]
+    },
+    "attr_server_load_time": {
+      "name": "attr_server_load_time",
+      "dtype": "float64",
+      "null_count": 9292,
+      "null_pct": 92.92,
+      "distinct_count": 614,
+      "sample_values": [
+        "2197.0",
+        "1563.0",
+        "410.0",
+        "1036.0",
+        "1630.0",
+        "575.0",
+        "1113.0",
+        "1691.0",
+        "810.0",
+        "873.0"
+      ]
+    },
+    "attr_browser_load_time": {
+      "name": "attr_browser_load_time",
+      "dtype": "float64",
+      "null_count": 9292,
+      "null_pct": 92.92,
+      "distinct_count": 670,
+      "sample_values": [
+        "8779.0",
+        "3382.0",
+        "5253.0",
+        "21864.0",
+        "2753.0",
+        "5348.0",
+        "3942.0",
+        "1406.0",
+        "1922.0",
+        "2269.0"
+      ]
+    },
+    "identifiers_previouspageurl": {
+      "name": "identifiers_previouspageurl",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "identifiers_pageurl": {
+      "name": "identifiers_pageurl",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 299,
+      "sample_values": [
+        "https://www.magenta.at/shop/handytarife/tarife-ohne-handy",
+        "https://ui-at.eshop.yo-digital.com/",
+        "https://ui-at.eshop.yo-digital.com/shop/handytarife/tarife-ohne-handy",
+        "https://ui-at.eshop.yo-digital.com/shop/handytarife/internet-zuhause",
+        "https://ui-at-test.eshop.yo-digital.com/",
+        "https://www.magenta.at/shop/checkout/personal-info",
+        "https://www.magenta.at/shop/basket",
+        "https://ui-at.eshop.yo-digital.com/shop/magenta.at/shop/handytarife/tarife-ohne-handy",
+        "https://www.magenta.at/shop/internet/internet-zuhause",
+        "https://www.magenta.at/shop/handytarife/internet-zuhause"
+      ]
+    },
+    "attr_old_tariff_data_benefit": {
+      "name": "attr_old_tariff_data_benefit",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_sms_benefit": {
+      "name": "attr_sms_benefit",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_minuty_benefit": {
+      "name": "attr_minuty_benefit",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_flow_name": {
+      "name": "attr_flow_name",
+      "dtype": "str",
+      "null_count": 9984,
+      "null_pct": 99.84,
+      "distinct_count": 1,
+      "sample_values": [
+        "pre sale"
+      ]
+    },
+    "attr_prd_installmentdropdown_dropdown": {
+      "name": "attr_prd_installmentdropdown_dropdown",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_correlationid": {
+      "name": "attr_correlationid",
+      "dtype": "str",
+      "null_count": 9964,
+      "null_pct": 99.64,
+      "distinct_count": 33,
+      "sample_values": [
+        "de6c0cea-446f-4ffc-9b3a-52b93138a601",
+        "57a3fc30-e041-44de-9eb1-05801e36dad8",
+        "addaf809-60c6-42c7-bd42-4b6bba9a116b",
+        "2084e4d1-ecaf-404e-9674-819cb052bf1c",
+        "2c375dcb-8539-4f21-90c7-0cc9d1eb26df",
+        "5e53bda2-5ee0-4743-80a2-00b7930c61fd",
+        "0731e9b9-d8e9-436c-8777-c08cce4daf20",
+        "5a596781-3b9c-4c38-9fff-114a8af81e0c",
+        "a54989e0-5433-4562-bef9-cd90fbd9b648",
+        "d6509a0a-3066-40e8-9fbd-c52022a753c1"
+      ]
+    },
+    "attr_page_title": {
+      "name": "attr_page_title",
+      "dtype": "str",
+      "null_count": 8767,
+      "null_pct": 87.67,
+      "distinct_count": 174,
+      "sample_values": [
+        "Tarife ohne Handy",
+        "Willkommen im neuen Telekom Onlineshop | Telekom",
+        "Pers\u00f6nliche Daten",
+        "Warenkorb",
+        "404 - Seite nicht gefunden",
+        "Kontakty T-Mobile",
+        "Magenta 1 Business",
+        "Telefony T-Mobile",
+        "Samsung Galaxy A16 5G | T-Mobile.cz",
+        "V\u00fdhodn\u00fd tarif od T-Mobilu."
+      ]
+    },
+    "attr_sortby": {
+      "name": "attr_sortby",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "identifiers_appversion": {
+      "name": "identifiers_appversion",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 13,
+      "sample_values": [
+        "oneshop-release-24.21",
+        "oneshop-24.20.0_prod",
+        "oneshop release-40",
+        "oneshop-24.20.3_prod",
+        "oneshop-release-26.05",
+        "oneshop-25.09.2_prod",
+        "oneshop-24.24.4_prod",
+        "oneshop-24.24.0_prod",
+        "oneshop-25.09.0_prod",
+        "oneshop-25.06.0_prod"
+      ]
+    },
+    "trigger_type": {
+      "name": "trigger_type",
+      "dtype": "str",
+      "null_count": 5883,
+      "null_pct": 58.83,
+      "distinct_count": 3,
+      "sample_values": [
+        "show",
+        "response",
+        "click"
+      ]
+    },
+    "attr_popup_source": {
+      "name": "attr_popup_source",
+      "dtype": "str",
+      "null_count": 9921,
+      "null_pct": 99.21,
+      "distinct_count": 4,
+      "sample_values": [
+        "PageBuilder",
+        "footer links",
+        "x on retention header",
+        "back button press"
+      ]
+    },
+    "attr_popup_text": {
+      "name": "attr_popup_text",
+      "dtype": "str",
+      "null_count": 9981,
+      "null_pct": 99.81,
+      "distinct_count": 6,
+      "sample_values": [
+        "Pokud opust\u00edte str\u00e1nku, v\u00fdb\u011br budete muset opakovat",
+        "You will loose all your selections prolong",
+        "Opustate migracny flow ",
+        "Opustate zmenu pausalu",
+        "Nastaven\u00ed nov\u00e9 platebn\u00ed karty",
+        "close icon clicked"
+      ]
+    },
+    "attr_ram_dropdown": {
+      "name": "attr_ram_dropdown",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_association": {
+      "name": "attr_association",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_authenticationmethod": {
+      "name": "attr_authenticationmethod",
+      "dtype": "str",
+      "null_count": 9995,
+      "null_pct": 99.95,
+      "distinct_count": 1,
+      "sample_values": [
+        "no 2fa"
+      ]
+    },
+    "attr_availablepersonalizedretentionbenefits": {
+      "name": "attr_availablepersonalizedretentionbenefits",
+      "dtype": "str",
+      "null_count": 9998,
+      "null_pct": 99.98,
+      "distinct_count": 2,
+      "sample_values": [
+        "Sleva 30%",
+        "Sleva 40%"
+      ]
+    },
+    "attr_band_colour_dropdown": {
+      "name": "attr_band_colour_dropdown",
+      "dtype": "str",
+      "null_count": 9997,
+      "null_pct": 99.97,
+      "distinct_count": 3,
+      "sample_values": [
+        "Starlight",
+        "Midnight",
+        "Ink"
+      ]
+    },
+    "attr_band_type_dropdown": {
+      "name": "attr_band_type_dropdown",
+      "dtype": "str",
+      "null_count": 9981,
+      "null_pct": 99.81,
+      "distinct_count": 13,
+      "sample_values": [
+        "Milanese Loop - M/L",
+        "Alpine Loop - Medium",
+        "Trail Loop S/M",
+        "Sport Loop",
+        "Sport Band - S/M",
+        "Milanese Loop - S",
+        "Milanese Loop - L",
+        "Alpine Loop - Large",
+        "Milanese Loop - M",
+        "Ocean Band"
+      ]
+    },
+    "attr_battery_filter": {
+      "name": "attr_battery_filter",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_camera_resolution_filter": {
+      "name": "attr_camera_resolution_filter",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_device_type_filter": {
+      "name": "attr_device_type_filter",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_display_size_dropdown": {
+      "name": "attr_display_size_dropdown",
+      "dtype": "str",
+      "null_count": 9999,
+      "null_pct": 99.99,
+      "distinct_count": 1,
+      "sample_values": [
+        "42mm"
+      ]
+    },
+    "attr_esim_filter": {
+      "name": "attr_esim_filter",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_emailid_encrypted": {
+      "name": "attr_emailid_encrypted",
+      "dtype": "str",
+      "null_count": 9988,
+      "null_pct": 99.88,
+      "distinct_count": 12,
+      "sample_values": [
+        "L1AnmfawwdDIQNUYXFpIJDwoh79oAu52dCfrs4Agea6l14hQHarK86+u7knNIMihvOEEYB9D0yWJLs11Wwq/dXgXeZrZcjnhwYYLLQhsuFiAjceKyh5MPDvO/LJCx+2pZzID2KD+I60QXgG2rhyX918NEN1AqLYhC97u/D4auqA=",
+        "odB4VtP2OKm15aAuTtUgMhArElSqCWMBP/GTYTmL9alY+YKiRWZkB38vOu8wKFbIRZJbafzv2paCSPFb9ARu1tp/MHDURwBkufH0GNTngpPZq8SAdivj68Z8Ygk/MG5e+ULGSCYWYIgS3/Q1fGObkdHFoBPY4VgZYB4u5rj8mho=",
+        "CTDSCVSvQ5fSGpjabx0ux1h4EU+umB/2wfIGooTSgK8mQ1KRtYGbpGifNw9hiM4klx/cnx9fzhHUWQU0PF2uX8cvQHLusJowHj3GB2ob+AMLiT4o0/do1gquJxFlyiw37MJUlo0jrNDc/1UDwJsFAkfcye5il7vhngtYYQ/cniI=",
+        "eIQgJxX0SBtMoIgK1mMURxxNlVFQ5IMzgBA3XNvUfY0SlePltc5IDsoQbpHYqnHfEI0J8iNeFJmotbjLUdc12pBka5t3Su+CJef2W0/IS8NmTG+FsLnSZnGMnIfq99K5mZ5s9sdGdi8PM8UPs8kwEkDCjNdhtu/j4m0bTN1W17Q=",
+        "mVFqysnIwxvF+CxYBb20OGgkeTzcsrtQk+A1K3/ad5+CpINBybRnmxjDW+JQggnK9AWsm0o7BrAC38LjkEGf9UXaG6/aArSrD2sVVEt7cWEtUcnfmQ94DpKJ9ufdMfTDeyGBR4O1DLxwuHxrgM4awWPueRp6Neb+y5Jg/KfAjtY=",
+        "vdiTpzb+ow0ABhGEi9/n2wuciX93bLg8Rhk1ixCBLZFychzG+849AaLF/eVcqHsVOaWcnFxWUDz6N+6Euitf1zSVAEgI/ln8PATVdRdvzOLgfx91CJT9FOE64gGmhx7zy0+w18tIEw8MFObcZC+j6+6X0Irayb3rMUPeOiVzu0o=",
+        "Ne0FzpYGnPzUvPQs5/eOAPMP1TA3yagIRd/vNj1E+pn5F1Kzao5rfuVsp9CuleX2XUKx1qxs9O4IsdsKfzB1+1rHIc/OI+fHwXpg3/Nr0J4UoQ0BWSxhB07R1BMdWX0On7KozmhIJCqERCihBs/fhSxuSa8Dq3oaxK3961jnFsk=",
+        "QXQVSDRaYxpMRPYyv4srmZ5Nn92Vks/7qR8rTLNKLLE9zPV5PEdl6kTt2Ws5+FR6XvRVgazc9kGG4d/Tja+TBB4xwOw8u7FSzHH40O5UoEwnPk0WVPX2RhIwNcNxXK/Lmf55nZkGXB1PGS1LHlINCEM8R6uVXWaVQZUoUBn/6CY=",
+        "Nc9Jd9V9T2JXz1B30WdjODaKq/ZdiBlESW2Mubpvm/E1zLOeke41YjLnCI8NruRdgJqnPBXMHUxS6/D1ojaHGTS1wd05LruFAnomSglPixH1US9KbNrkX8eIv2D1aqEk9R4o/QSqLHwa4P/51BUTJFLvm9hW9IXj70SsUOoUl7c=",
+        "R/XWcq8MwnIa1ozayXdeQxkbAlx5O8tEgVcQvjZauyGnHZhDl+mSGM8UFvbs0xDu8xhhOWkP3MNx2j4LNMsMp00kipiTn68LPT5Ti1pNgzXm2NQNc0MKSsJ7yDmMaVFvnZiznad9boc6fN4H4O2/ETTlAhDdrT3rglFzyrkd91k="
+      ]
+    },
+    "attr_esim_status": {
+      "name": "attr_esim_status",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_existingvariantdetails_benefit": {
+      "name": "attr_existingvariantdetails_benefit",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_extra_data": {
+      "name": "attr_extra_data",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_expirydate": {
+      "name": "attr_expirydate",
+      "dtype": "str",
+      "null_count": 9994,
+      "null_pct": 99.94,
+      "distinct_count": 5,
+      "sample_values": [
+        "06.03.2026",
+        "15.03.2026",
+        "27.06.2026",
+        "12.12.2025",
+        "26.09.2025"
+      ]
+    },
+    "attr_operating_system_filter": {
+      "name": "attr_operating_system_filter",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_parent_name": {
+      "name": "attr_parent_name",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_phonenumber_encrypted": {
+      "name": "attr_phonenumber_encrypted",
+      "dtype": "str",
+      "null_count": 9985,
+      "null_pct": 99.85,
+      "distinct_count": 15,
+      "sample_values": [
+        "SvNwy6CEJvDuOiArQlJMs4MnACC8boPFQBpEX+gue+rFerjRuE/rqj8dHrRmZj5VUpwK886oJNPGq2sRDLA23svS9CexqmdKOCXKvZ5Yj7xYH44p3aEcOtP2w1q7Fn6T/NPu1QJThcAWSDBcELysWJONKPusRNOVE8KPJUI/JPE=",
+        "fliy19g281E9NhM/pcWju3ZRg/trqNVsPNw19evH9kpcpxo4cw3T1laMJhMadzwDvZOzz1mcLkGzB7YCvtjIB5mXS5uF7cxZSv5GFpWM31dtkpMnzeUEtv2JQD5HRwzHmXVAB1QscG5meyfmApHd06Rw5zdo2fH1Oz3L6stAEPs=",
+        "fw++toTp6KB0uVxD610klbiWiAlZfjLvRrxbZZlrV8I2vgRARnxZB+Z8znGJkRnruEXnYLavb+LG47mUB8qQ05cdFs4UTjz2FGY6/vChu5qjqvoWukxiYicK7aEp58/kXyjB1141bnBIeYPZ65/D2XS2+L+WbyC6WzBdSUpt1cc=",
+        "bg0Kj1vNSM3mdnkqPOPbMwTRVjMBCaNRmOcEd19hBQr8xko8+1KY2iJVTo9/gRDrF+6bO7cTugQsR6+a/Q6uWLLtUXft+OV3PtOSPZA0IxFAXgxowg/QEAUveQKE99o/LtgEr2KyPUmquUwXdKtwiIY1jmlNA4M5A8mAPjDZuN4=",
+        "d5me5ybnzThqnkUKV375x+VBJl8614jwgrhgxHQGQrcqvaMRuLs4egE05FK6LxBNtxp3ttP5IzkzWQj+FZRyfq+BnEGpoagNoesZGog9UPzFn1kuGmnw3EjyYGiE/VziLGDs3X9UeBXgKt++h9inemMw1P/YxJij42LCeJmJfts=",
+        "WsMTIhKJH9OlMG6M56AAY4cfxBhCfr7sGDnMefsS36CadVJFUtzV+NhmkYgz/Y3CAZ5ZD8x3nhsmZhiDeGF9zo7z/1iXxtf9mxypzDcd/E63hnSGnclRDy7NWhwzBeSkE+K1LZ/weGuJkRDL6WWYB6CXAket5fYTl2rU9IuRM6I=",
+        "jdDIWTdjgGc7Tm9PO2RnH8JEypwKId4INSOtJ9YUczmYx2aBH/eccO5kmB43y7T+OaveWyqtXvVPAEwgF/R0L0xejNaOX+2zgGNlZ251qrYQIT/1kXgmb5KCcrS/yarJueO9k3gVhOfRlLZeSK+c+Ii4ni5jheppDsZ+A9fUqfI=",
+        "E/1XNeYOVHWVXv7o+0m9FpeyJG5WDmRzBoki8LHnHwZDTIDY7mGT+EA680b0VoFo7M3FMQWnuW+xRwkcjtNf5cNYkbw7EJlHw/vN+caAfRz+OOW3WPKfMrXq1omHz9pWz6jtXDTE7tUTkscJiNvUUKr4HDm3m02Sb6Rkv3n37HQ=",
+        "w1sgYxqPE0vKoyqK5M2Xcqkv6vSWEb+aNWAvByQHCPB4ETADrJP2j/8lYZxkBPUXagBySuCfGWGtBeSMpO9HpjO/uyO15P9d77R3MyD+gWXIHCzix9cAh2Zh3nkGCYT+0ZwLrIcoxwbS233myh9bTVaofgU8k+Ui3WVFLRxAx14=",
+        "ijn7you3O9KqBMNZD58MlAyyQXm4Cd9QC/DRguMVBmcxVxg1Y1vDnhaKOyH86kckoXIujdsRXjWsDsLJggS61UJJ6INjliHahFjxR1uIN1MHf8nQLZa3Bm/rC/oyRta0aFgfbwLBw9nkvTUitSg1CgddziANbyvbxQlHYJCU6Po="
+      ]
+    },
+    "attr_product_availability": {
+      "name": "attr_product_availability",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_recommended_filter": {
+      "name": "attr_recommended_filter",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_relationship_id": {
+      "name": "attr_relationship_id",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_selectedpersonalizedretentionbenefits": {
+      "name": "attr_selectedpersonalizedretentionbenefits",
+      "dtype": "str",
+      "null_count": 9998,
+      "null_pct": 99.98,
+      "distinct_count": 2,
+      "sample_values": [
+        "Sleva 30%",
+        "Sleva 40%"
+      ]
+    },
+    "attr_tooltip_label": {
+      "name": "attr_tooltip_label",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "identifiers_logtime": {
+      "name": "identifiers_logtime",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 5124,
+      "sample_values": [
+        "Tue, 10 Feb 2026 12:44:51 GMT",
+        "Mon, 23 Jun 2025 09:18:47 GMT",
+        "Mon, 23 Jun 2025 09:19:25 GMT",
+        "Mon, 23 Jun 2025 09:19:32 GMT",
+        "Mon, 23 Jun 2025 09:19:14 GMT",
+        "Mon, 23 Jun 2025 09:20:59 GMT",
+        "Thu, 05 Feb 2026 08:04:54 GMT",
+        "Thu, 05 Feb 2026 08:05:02 GMT",
+        "Thu, 05 Feb 2026 08:05:05 GMT",
+        "Tue, 02 Dec 2025 09:30:42 GMT"
+      ]
+    },
+    "identifiers_previouspagename": {
+      "name": "identifiers_previouspagename",
+      "dtype": "str",
+      "null_count": 6039,
+      "null_pct": 60.39,
+      "distinct_count": 58,
+      "sample_values": [
+        "HOME",
+        "BASKET",
+        "checkout/PersonalInfo",
+        "Tariff/tarife-ohne-handy",
+        "NOT FOUND/err/Wir k\u00f6nnen die gesuchte Seite leider nicht finden.",
+        "deviceListing/Devices-Mobile",
+        "Signin/EnterLoginCredentials",
+        "deviceDetailed",
+        "nejlepsi-nakup-telefonu",
+        "Signin/EnterOtp"
+      ]
+    },
+    "identifiers_returninguser": {
+      "name": "identifiers_returninguser",
+      "dtype": "bool",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 2,
+      "sample_values": [
+        "True",
+        "False"
+      ]
+    },
+    "identifiers_timestamp": {
+      "name": "identifiers_timestamp",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 5798,
+      "sample_values": [
+        "Tue Feb 10 2026 13:44:51 GMT+0100 (Central European Standard Time)",
+        "Mon Jun 23 2025 14:48:47 GMT+0530 (India Standard Time)",
+        "Mon Jun 23 2025 14:49:25 GMT+0530 (India Standard Time)",
+        "Mon Jun 23 2025 14:49:32 GMT+0530 (India Standard Time)",
+        "Mon Jun 23 2025 14:49:14 GMT+0530 (India Standard Time)",
+        "Mon Jun 23 2025 14:50:59 GMT+0530 (India Standard Time)",
+        "Thu Feb 05 2026 09:04:54 GMT+0100 (Mitteleurop\u00e4ische Normalzeit)",
+        "Thu Feb 05 2026 09:05:02 GMT+0100 (Mitteleurop\u00e4ische Normalzeit)",
+        "Thu Feb 05 2026 09:05:05 GMT+0100 (Mitteleurop\u00e4ische Normalzeit)",
+        "Tue Dec 02 2025 15:00:42 GMT+0530 (India Standard Time)"
+      ]
+    },
+    "identifiers_countrycode": {
+      "name": "identifiers_countrycode",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 2,
+      "sample_values": [
+        "at",
+        "cz"
+      ]
+    },
+    "meta_browsertimezone": {
+      "name": "meta_browsertimezone",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 10,
+      "sample_values": [
+        "UTC+0100",
+        "UTC+0530",
+        "UTC+0200",
+        "UTC-0700",
+        "UTC-0000",
+        "UTC+0800",
+        "UTC+0300",
+        "UTC-0400",
+        "UTC+0400",
+        "UTC+0700"
+      ]
+    },
+    "meta_browserlocale": {
+      "name": "meta_browserlocale",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 45,
+      "sample_values": [
+        "en",
+        "en-GB",
+        "de-DE",
+        "en-US",
+        "de",
+        "at",
+        "cs-CZ",
+        "sk-SK",
+        "cs-CS",
+        "cs"
+      ]
+    },
+    "meta_deviceresolution": {
+      "name": "meta_deviceresolution",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 1797,
+      "sample_values": [
+        "1920x1031",
+        "1512x416",
+        "1165x828",
+        "1165x167",
+        "1165x387",
+        "1512x275",
+        "1707x772",
+        "1512x823",
+        "1536x695",
+        "1920x1080"
+      ]
+    },
+    "attr_faq_name": {
+      "name": "attr_faq_name",
+      "dtype": "str",
+      "null_count": 9989,
+      "null_pct": 99.89,
+      "distinct_count": 9,
+      "sample_values": [
+        "Aktionsbedingungen",
+        "Jak\u00e1 je garantovan\u00e1 rychlost p\u0159ipojen\u00ed?",
+        "Jak\u00fd je datov\u00fd limit u pevn\u00e9ho internetu?",
+        "Jak si zjist\u00edm stav sv\u00e9 objedn\u00e1vky?",
+        "Je pevn\u00fd internet p\u0159enosn\u00fd?",
+        "Obchodn\u00ed podm\u00ednky slu\u017eby Cable Internet",
+        "Magenta 1 - Kompatibiln\u00ed slu\u017eby",
+        "Jak \u010dasto si mohu m\u011bnit tarif?",
+        "Jak mohu z\u00edskat modem za 1 K\u010d?"
+      ]
+    },
+    "attr_faq_category": {
+      "name": "attr_faq_category",
+      "dtype": "str",
+      "null_count": 9989,
+      "null_pct": 99.89,
+      "distinct_count": 4,
+      "sample_values": [
+        "Rechtliche Hinweise",
+        "Pod\u00edvejte se na nej\u010dast\u011bj\u0161\u00ed dotazy z\u00e1kazn\u00edk\u016f",
+        "Obchodn\u00ed podm\u00ednky",
+        "Pod\u00edvejte se na nej\u010dast\u011bj\u0161\u00ed dotazy z\u00e1kazn\u00edk\u016f "
+      ]
+    },
+    "attr_rmcstatus": {
+      "name": "attr_rmcstatus",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_error_code": {
+      "name": "attr_error_code",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_loggedinusertype": {
+      "name": "attr_loggedinusertype",
+      "dtype": "str",
+      "null_count": 9652,
+      "null_pct": 96.52,
+      "distinct_count": 1,
+      "sample_values": [
+        "existing"
+      ]
+    },
+    "attr_stepname": {
+      "name": "attr_stepname",
+      "dtype": "str",
+      "null_count": 9993,
+      "null_pct": 99.93,
+      "distinct_count": 2,
+      "sample_values": [
+        "configuration - broadband hardware",
+        "final check"
+      ]
+    },
+    "identifiers_user_geolocation_accuracy": {
+      "name": "identifiers_user_geolocation_accuracy",
+      "dtype": "float64",
+      "null_count": 774,
+      "null_pct": 7.74,
+      "distinct_count": 8,
+      "sample_values": [
+        "100.0",
+        "5.0",
+        "10.0",
+        "200.0",
+        "50.0",
+        "20.0",
+        "1000.0",
+        "500.0"
+      ]
+    },
+    "identifiers_user_city": {
+      "name": "identifiers_user_city",
+      "dtype": "str",
+      "null_count": 886,
+      "null_pct": 8.86,
+      "distinct_count": 434,
+      "sample_values": [
+        "Graz",
+        "Vienna",
+        "M\u00f6nchengladbach",
+        "Bonn",
+        "Olsztyn",
+        "Prague",
+        "Bratislava",
+        "Doma\u017elice",
+        "Jind\u0159ich\u016fv Hradec",
+        "Litovel"
+      ]
+    },
+    "identifiers_user_country": {
+      "name": "identifiers_user_country",
+      "dtype": "str",
+      "null_count": 774,
+      "null_pct": 7.74,
+      "distinct_count": 33,
+      "sample_values": [
+        "Austria",
+        "Germany",
+        "Poland",
+        "Czechia",
+        "Slovakia",
+        "United Arab Emirates",
+        "Sweden",
+        "Indonesia",
+        "United Kingdom",
+        "The Netherlands"
+      ]
+    },
+    "identifiers_user_country_code": {
+      "name": "identifiers_user_country_code",
+      "dtype": "str",
+      "null_count": 774,
+      "null_pct": 7.74,
+      "distinct_count": 33,
+      "sample_values": [
+        "at",
+        "de",
+        "cz",
+        "sk",
+        "ae",
+        "pl",
+        "se",
+        "id",
+        "gb",
+        "nl"
+      ]
+    },
+    "identifiers_user_state": {
+      "name": "identifiers_user_state",
+      "dtype": "str",
+      "null_count": 885,
+      "null_pct": 8.85,
+      "distinct_count": 80,
+      "sample_values": [
+        "Styria",
+        "Vienna",
+        "North Rhine-Westphalia",
+        "Warmia-Masuria",
+        "Prague",
+        "Bratislava Region",
+        "Plze\u0148 Region",
+        "Jiho\u010desk\u00fd kraj",
+        "Olomouck\u00fd kraj",
+        "Moravskoslezsk\u00fd kraj"
+      ]
+    },
+    "identifiers_user_state_code": {
+      "name": "identifiers_user_state_code",
+      "dtype": "str",
+      "null_count": 885,
+      "null_pct": 8.85,
+      "distinct_count": 72,
+      "sample_values": [
+        "6",
+        "9",
+        "NW",
+        "28",
+        "10",
+        "BL",
+        "32",
+        "31",
+        "71",
+        "80"
+      ]
+    },
+    "attr_numofm1eligibleservices": {
+      "name": "attr_numofm1eligibleservices",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_numofm1noteligibleservices": {
+      "name": "attr_numofm1noteligibleservices",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_numofloyaltybonuseligibleservices": {
+      "name": "attr_numofloyaltybonuseligibleservices",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_numofloyaltybonusnoteligibleservices": {
+      "name": "attr_numofloyaltybonusnoteligibleservices",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_isdifferentloyaltybonusavailable": {
+      "name": "attr_isdifferentloyaltybonusavailable",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_connectiontype": {
+      "name": "attr_connectiontype",
+      "dtype": "str",
+      "null_count": 9994,
+      "null_pct": 99.94,
+      "distinct_count": 1,
+      "sample_values": [
+        "appointment - technician not required"
+      ]
+    },
+    "attr_appointmentdate": {
+      "name": "attr_appointmentdate",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_appointmenttime": {
+      "name": "attr_appointmenttime",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_userhardwarebonus": {
+      "name": "attr_userhardwarebonus",
+      "dtype": "float64",
+      "null_count": 774,
+      "null_pct": 7.74,
+      "distinct_count": 27,
+      "sample_values": [
+        "0.0",
+        "7344.62",
+        "25952.24",
+        "11157.02",
+        "28925.62",
+        "2.2",
+        "12389.62",
+        "3310.26",
+        "9505.91",
+        "14786.01"
+      ]
+    },
+    "attr_ishardwarebonusapplied": {
+      "name": "attr_ishardwarebonusapplied",
+      "dtype": "str",
+      "null_count": 9975,
+      "null_pct": 99.75,
+      "distinct_count": 1,
+      "sample_values": [
+        "na"
+      ]
+    },
+    "identifiers_user_latitude": {
+      "name": "identifiers_user_latitude",
+      "dtype": "float64",
+      "null_count": 774,
+      "null_pct": 7.74,
+      "distinct_count": 508,
+      "sample_values": [
+        "47.0267",
+        "48.1535",
+        "48.1611",
+        "51.1309",
+        "50.6853",
+        "48.1982",
+        "53.7768",
+        "50.0985",
+        "48.157",
+        "49.4336"
+      ]
+    },
+    "identifiers_user_longitude": {
+      "name": "identifiers_user_longitude",
+      "dtype": "float64",
+      "null_count": 774,
+      "null_pct": 7.74,
+      "distinct_count": 513,
+      "sample_values": [
+        "15.5308",
+        "16.3855",
+        "16.4452",
+        "6.4381",
+        "7.1484",
+        "16.3917",
+        "20.4961",
+        "14.4524",
+        "17.0915",
+        "12.7133"
+      ]
+    },
+    "highlighted_tile": {
+      "name": "highlighted_tile",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_fixedquickprolongation": {
+      "name": "attr_fixedquickprolongation",
+      "dtype": "object",
+      "null_count": 9957,
+      "null_pct": 99.57,
+      "distinct_count": 1,
+      "sample_values": [
+        "False"
+      ]
+    },
+    "attr_savings_offers": {
+      "name": "attr_savings_offers",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_cashback_amount": {
+      "name": "attr_cashback_amount",
+      "dtype": "float64",
+      "null_count": 774,
+      "null_pct": 7.74,
+      "distinct_count": 1,
+      "sample_values": [
+        "-1.0"
+      ]
+    },
+    "attr_add_to_cart_source": {
+      "name": "attr_add_to_cart_source",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_app_selected": {
+      "name": "attr_app_selected",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_channeldefinitionnumber": {
+      "name": "attr_channeldefinitionnumber",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_device_color": {
+      "name": "attr_device_color",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_device_installments": {
+      "name": "attr_device_installments",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_device_installments_period_type": {
+      "name": "attr_device_installments_period_type",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_device_storage": {
+      "name": "attr_device_storage",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_downloadspeed": {
+      "name": "attr_downloadspeed",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_plan_data": {
+      "name": "attr_plan_data",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_plan_minutes": {
+      "name": "attr_plan_minutes",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_product_size": {
+      "name": "attr_product_size",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_hardwarebonusused": {
+      "name": "attr_hardwarebonusused",
+      "dtype": "float64",
+      "null_count": 9975,
+      "null_pct": 99.75,
+      "distinct_count": 1,
+      "sample_values": [
+        "0.0"
+      ]
+    },
+    "attr_tariffdata_tariff_id": {
+      "name": "attr_tariffdata_tariff_id",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_tariffdata_tariff_name": {
+      "name": "attr_tariffdata_tariff_name",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_numberofcustomers": {
+      "name": "attr_numberofcustomers",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_countm1eligiblecustomers": {
+      "name": "attr_countm1eligiblecustomers",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_countm1benefiteligiblecustomers": {
+      "name": "attr_countm1benefiteligiblecustomers",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_countm1discounteligiblecustomers": {
+      "name": "attr_countm1discounteligiblecustomers",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_magenta_one_bonus_type": {
+      "name": "attr_magenta_one_bonus_type",
+      "dtype": "str",
+      "null_count": 9881,
+      "null_pct": 98.81,
+      "distinct_count": 2,
+      "sample_values": [
+        "na",
+        "m1 discount - new m1 acq"
+      ]
+    },
+    "attr_istradeinapplied": {
+      "name": "attr_istradeinapplied",
+      "dtype": "object",
+      "null_count": 9881,
+      "null_pct": 98.81,
+      "distinct_count": 1,
+      "sample_values": [
+        "False"
+      ]
+    },
+    "attr_tradeinbonusvalue": {
+      "name": "attr_tradeinbonusvalue",
+      "dtype": "float64",
+      "null_count": 774,
+      "null_pct": 7.74,
+      "distinct_count": 1,
+      "sample_values": [
+        "-1.0"
+      ]
+    },
+    "attr_hnbtoption": {
+      "name": "attr_hnbtoption",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "identifiers_page_category_1": {
+      "name": "identifiers_page_category_1",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 2,
+      "sample_values": [
+        "sales",
+        "home"
+      ]
+    },
+    "identifiers_page_category_2": {
+      "name": "identifiers_page_category_2",
+      "dtype": "str",
+      "null_count": 1710,
+      "null_pct": 17.1,
+      "distinct_count": 3,
+      "sample_values": [
+        "mobile",
+        "general",
+        "fixed"
+      ]
+    },
+    "identifiers_customer_type": {
+      "name": "identifiers_customer_type",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_mnpbonusvalue": {
+      "name": "attr_mnpbonusvalue",
+      "dtype": "float64",
+      "null_count": 774,
+      "null_pct": 7.74,
+      "distinct_count": 1,
+      "sample_values": [
+        "-1.0"
+      ]
+    },
+    "attr_stepnumber": {
+      "name": "attr_stepnumber",
+      "dtype": "float64",
+      "null_count": 9994,
+      "null_pct": 99.94,
+      "distinct_count": 1,
+      "sample_values": [
+        "1.1"
+      ]
+    },
+    "attr_optoutoption": {
+      "name": "attr_optoutoption",
+      "dtype": "str",
+      "null_count": 9994,
+      "null_pct": 99.94,
+      "distinct_count": 1,
+      "sample_values": [
+        "not available"
+      ]
+    },
+    "attr_tradeindevicevalue": {
+      "name": "attr_tradeindevicevalue",
+      "dtype": "float64",
+      "null_count": 1006,
+      "null_pct": 10.06,
+      "distinct_count": 1,
+      "sample_values": [
+        "-1.0"
+      ]
+    },
+    "attr_customertype": {
+      "name": "attr_customertype",
+      "dtype": "str",
+      "null_count": 9998,
+      "null_pct": 99.98,
+      "distinct_count": 1,
+      "sample_values": [
+        "business customer"
+      ]
+    },
+    "attr_upgradetype": {
+      "name": "attr_upgradetype",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "identifiers_party_id": {
+      "name": "identifiers_party_id",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "identifiers_customergroup": {
+      "name": "identifiers_customergroup",
+      "dtype": "str",
+      "null_count": 8134,
+      "null_pct": 81.34,
+      "distinct_count": 1,
+      "sample_values": [
+        "general customer"
+      ]
+    },
+    "cdl_timestamp": {
+      "name": "cdl_timestamp",
+      "dtype": "str",
+      "null_count": 7693,
+      "null_pct": 76.93,
+      "distinct_count": 1177,
+      "sample_values": [
+        "2026-02-10T12:44:51",
+        "2025-06-23T09:18:50",
+        "2025-06-23T09:19:28",
+        "2025-06-23T09:19:36",
+        "2025-06-23T09:19:17",
+        "2025-06-23T09:21:30",
+        "2026-02-05T08:04:57",
+        "2026-02-05T08:05:02",
+        "2026-02-05T08:05:06",
+        "2025-12-02T09:30:58"
+      ]
+    },
+    "attr_event_priority": {
+      "name": "attr_event_priority",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_event_id": {
+      "name": "attr_event_id",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_campaign_category": {
+      "name": "attr_campaign_category",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_campaign_type": {
+      "name": "attr_campaign_type",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_campaign_name": {
+      "name": "attr_campaign_name",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_elementtype": {
+      "name": "attr_elementtype",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "identifiers_subcategory": {
+      "name": "identifiers_subcategory",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_userkek": {
+      "name": "attr_userkek",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_idverificationmethod": {
+      "name": "attr_idverificationmethod",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_subcategory": {
+      "name": "attr_subcategory",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_prolongationjourneytype": {
+      "name": "attr_prolongationjourneytype",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_ottservicecategory": {
+      "name": "attr_ottservicecategory",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_ottjourneytype": {
+      "name": "attr_ottjourneytype",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_precontract_documentation_status": {
+      "name": "attr_precontract_documentation_status",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_existingpaymentmethod": {
+      "name": "attr_existingpaymentmethod",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "identifiers_entrypoint": {
+      "name": "identifiers_entrypoint",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "identifiers_entrychannelprocess": {
+      "name": "identifiers_entrychannelprocess",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "identifiers_entrychannelid": {
+      "name": "identifiers_entrychannelid",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_error_status_code": {
+      "name": "attr_error_status_code",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_checkouttype": {
+      "name": "attr_checkouttype",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_apiresponsetime": {
+      "name": "attr_apiresponsetime",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_newaddons": {
+      "name": "attr_newaddons",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_currentaddons": {
+      "name": "attr_currentaddons",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_highlighted_tile": {
+      "name": "attr_highlighted_tile",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "mavi_data_test": {
+      "name": "mavi_data_test",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "mavi_data_test1": {
+      "name": "mavi_data_test1",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_iskrgcustomer": {
+      "name": "attr_iskrgcustomer",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_services_to_terminate": {
+      "name": "attr_services_to_terminate",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_services_to_migrate": {
+      "name": "attr_services_to_migrate",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_istelekomemployee": {
+      "name": "attr_istelekomemployee",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_user2fastatus": {
+      "name": "attr_user2fastatus",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_tariffchangejourneytype": {
+      "name": "attr_tariffchangejourneytype",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_penalty_fee": {
+      "name": "attr_penalty_fee",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_telekomlegacymigration": {
+      "name": "attr_telekomlegacymigration",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "mcanvas_type": {
+      "name": "mcanvas_type",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "mcanvas_source": {
+      "name": "mcanvas_source",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "mcanvas_position": {
+      "name": "mcanvas_position",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "mcanvas_label": {
+      "name": "mcanvas_label",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "mcanvas_action": {
+      "name": "mcanvas_action",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "mcanvas_name": {
+      "name": "mcanvas_name",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "mcanvas_component": {
+      "name": "mcanvas_component",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "mcanvas_id": {
+      "name": "mcanvas_id",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_service_transition_type": {
+      "name": "attr_service_transition_type",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_issuer_bank_name": {
+      "name": "attr_issuer_bank_name",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_payment_gateway": {
+      "name": "attr_payment_gateway",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "m_canvas_position": {
+      "name": "m_canvas_position",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "m_canvas_component": {
+      "name": "m_canvas_component",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "m_canvas_name": {
+      "name": "m_canvas_name",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "m_canvas_action": {
+      "name": "m_canvas_action",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "m_canvas_source": {
+      "name": "m_canvas_source",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "m_canvas_id": {
+      "name": "m_canvas_id",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "m_canvas_type": {
+      "name": "m_canvas_type",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "m_canvas_label": {
+      "name": "m_canvas_label",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_service_id": {
+      "name": "attr_service_id",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_nationality": {
+      "name": "attr_nationality",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_pageactivetab": {
+      "name": "attr_pageactivetab",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "identifiers_msisdn_id": {
+      "name": "identifiers_msisdn_id",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "identifiers_anonymoususerid": {
+      "name": "identifiers_anonymoususerid",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "identifiers_loginstatus": {
+      "name": "identifiers_loginstatus",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "identifiers_pagename": {
+      "name": "identifiers_pagename",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "identifiers_userprofileid": {
+      "name": "identifiers_userprofileid",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "meta_devicetype": {
+      "name": "meta_devicetype",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_islegacymigrationapplied": {
+      "name": "attr_islegacymigrationapplied",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_config_instancekey": {
+      "name": "attr_config_instancekey",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_betauser": {
+      "name": "attr_betauser",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "identifiers_cust_group": {
+      "name": "identifiers_cust_group",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "identifiers_current_service": {
+      "name": "identifiers_current_service",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "m_canvas_parent_id": {
+      "name": "m_canvas_parent_id",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "identifiers_platform": {
+      "name": "identifiers_platform",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_ottcustomertype": {
+      "name": "attr_ottcustomertype",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_ottservicetype": {
+      "name": "attr_ottservicetype",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_session_correlation_id": {
+      "name": "attr_session_correlation_id",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_backend_status": {
+      "name": "attr_backend_status",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_is_installment": {
+      "name": "attr_is_installment",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_processor_response_text": {
+      "name": "attr_processor_response_text",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_processor_response_code": {
+      "name": "attr_processor_response_code",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_gateway_response_message": {
+      "name": "attr_gateway_response_message",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_gateway_response_code": {
+      "name": "attr_gateway_response_code",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_is_retry": {
+      "name": "attr_is_retry",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_stateused": {
+      "name": "attr_stateused",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_isfrombackend": {
+      "name": "attr_isfrombackend",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_error_source": {
+      "name": "attr_error_source",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_http_status_code": {
+      "name": "attr_http_status_code",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_challenge_type": {
+      "name": "attr_challenge_type",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_flow_type": {
+      "name": "attr_flow_type",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_request_tracking_id": {
+      "name": "attr_request_tracking_id",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_redirect_surface": {
+      "name": "attr_redirect_surface",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_retry_count": {
+      "name": "attr_retry_count",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_is_recurring": {
+      "name": "attr_is_recurring",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_mandate_type": {
+      "name": "attr_mandate_type",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_mandate_status": {
+      "name": "attr_mandate_status",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_gateway_error_code": {
+      "name": "attr_gateway_error_code",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_gateway_result": {
+      "name": "attr_gateway_result",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_is_saved_instrument": {
+      "name": "attr_is_saved_instrument",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_payment_instrument": {
+      "name": "attr_payment_instrument",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_stateinresponse": {
+      "name": "attr_stateinresponse",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_monthlypaymentmethod": {
+      "name": "attr_monthlypaymentmethod",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_recurring_payment_method": {
+      "name": "attr_recurring_payment_method",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_item_category": {
+      "name": "attr_item_category",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_rmc_issue_type": {
+      "name": "attr_rmc_issue_type",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_rmc_status": {
+      "name": "attr_rmc_status",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "attr_paymentmode": {
+      "name": "attr_paymentmode",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "nc": {
+      "name": "nc",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 2,
+      "sample_values": [
+        "at",
+        "cz"
+      ]
+    },
+    "year": {
+      "name": "year",
+      "dtype": "int64",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 3,
+      "sample_values": [
+        "2026",
+        "2025",
+        "2024"
+      ]
+    },
+    "date": {
+      "name": "date",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 65,
+      "sample_values": [
+        "2026-02-10",
+        "2025-06-23",
+        "2026-02-05",
+        "2025-12-02",
+        "2025-10-14",
+        "2025-08-26",
+        "2026-03-17",
+        "2024-11-20",
+        "2025-05-15",
+        "2025-10-02"
+      ]
+    }
+  }
+}

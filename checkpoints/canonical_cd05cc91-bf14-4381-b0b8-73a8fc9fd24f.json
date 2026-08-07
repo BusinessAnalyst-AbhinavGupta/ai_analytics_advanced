@@ -1,0 +1,56 @@
+{
+  "id": "cd05cc91-bf14-4381-b0b8-73a8fc9fd24f",
+  "name_canonical": "Checkout Funnel",
+  "journey_stage": "Checkout",
+  "description": "Total Basket Users (SL) (scalar) - Metabase Question #20868",
+  "owner": "OneMind Analytics",
+  "tags": [
+    "Scalar",
+    "Metabase",
+    "Card-20868"
+  ],
+  "logic": {
+    "type": "Count",
+    "formula": "SELECT ... FROM base",
+    "granularity": "None",
+    "is_derived": false,
+    "parent_metrics": []
+  },
+  "source_mapping": {
+    "sql_reference_id": null,
+    "table_map": {},
+    "query_filters": [
+      "Rule: (\n'All' IN ({{category}})\nOR category = {{category}}\nOR LOWER(category) = {{category}}\n)\n\t\t   \n        \n)\nselect count(distinct guest_id ) as basketusers \nfrom base \nwhere page_name LIKE '%BASKET%'",
+      "Rule: lower(internalemployee) = 'no'\n   --",
+      "Rule: {{natco}} ]]",
+      "Rule: (\n            'All' IN ({{servie_line}})\n            OR lower(service_line) = lower({{servie_line}})\n            OR lower(ui_page_category) = lower({{servie_line}})\n        )\n     --",
+      "Rule: {{date}}",
+      "Rule: natco_code = 'de'",
+      "Rule: lower(category) <> 'addonmanagement'\n\t\t \n\n\t\t   [[",
+      "Rule: action = 'PageView'",
+      "Rule: (\n            'All' IN ({{os_naame}})\n            OR lower(user_device_type) = lower({{os_naame}})\n        )"
+    ],
+    "grouping_columns": [],
+    "joins": []
+  },
+  "metadata": {
+    "service_line": "Fixed & Mobile",
+    "category": "Traffic & Funnel",
+    "natco": "DE",
+    "journey_stage_or_page": "Checkout",
+    "user_metadata": {
+      "journey_stage": "Checkout",
+      "journey_stage_or_page": "Checkout",
+      "service_line": "Fixed & Mobile",
+      "category": "Traffic & Funnel",
+      "natco": "DE",
+      "tags": "Scalar, Metabase, Card-20868",
+      "owner": "OneMind Analytics",
+      "description": "Total Basket Users (SL) (scalar) - Metabase Question #20868",
+      "metabase_card_id": 20868,
+      "display_type": "scalar"
+    }
+  },
+  "confidence_score": 1.0,
+  "warnings": []
+}

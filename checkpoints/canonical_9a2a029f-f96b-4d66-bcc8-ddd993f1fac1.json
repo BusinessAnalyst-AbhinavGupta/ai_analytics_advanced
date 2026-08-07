@@ -1,0 +1,55 @@
+{
+  "id": "9a2a029f-f96b-4d66-bcc8-ddd993f1fac1",
+  "name_canonical": "basket_page",
+  "journey_stage": "Checkout",
+  "description": "One Checkout Journey (Tariff Change) - CR by steps (line) - Metabase Question #19101",
+  "owner": "OneMind Analytics",
+  "tags": [
+    "Line",
+    "Metabase",
+    "Card-19101"
+  ],
+  "logic": {
+    "type": "Count",
+    "formula": "SELECT ... FROM base",
+    "granularity": "None",
+    "is_derived": false,
+    "parent_metrics": []
+  },
+  "source_mapping": {
+    "sql_reference_id": null,
+    "table_map": {},
+    "query_filters": [
+      "Rule: (\n            'All' IN ({{category}})\n            OR category = {{category}}\n            OR LOWER(category) = {{category}}\n        )",
+      "Rule: {{natco}} ]]",
+      "Rule: lower(category) = 'tariffchange'\n        [[",
+      "Rule: (\n            'All' IN ({{servie_line}})\n            OR lower(service_line) = lower({{servie_line}})\n            OR lower(ui_page_category) = lower({{servie_line}})\n        )\n     --",
+      "Rule: {{date}}",
+      "Rule: natco_code = 'de'",
+      "Rule: lower(internalemployee) = 'no'",
+      "Rule: (\n            'All' IN ({{os_naame}})\n            OR lower(user_device_type) = lower({{os_naame}})\n        )"
+    ],
+    "grouping_columns": [],
+    "joins": []
+  },
+  "metadata": {
+    "service_line": "Fixed & Mobile",
+    "category": "Conversion & KPIs",
+    "natco": "DE",
+    "journey_stage_or_page": "Checkout",
+    "user_metadata": {
+      "journey_stage": "Checkout",
+      "journey_stage_or_page": "Checkout",
+      "service_line": "Fixed & Mobile",
+      "category": "Conversion & KPIs",
+      "natco": "DE",
+      "tags": "Line, Metabase, Card-19101",
+      "owner": "OneMind Analytics",
+      "description": "One Checkout Journey (Tariff Change) - CR by steps (line) - Metabase Question #19101",
+      "metabase_card_id": 19101,
+      "display_type": "line"
+    }
+  },
+  "confidence_score": 1.0,
+  "warnings": []
+}

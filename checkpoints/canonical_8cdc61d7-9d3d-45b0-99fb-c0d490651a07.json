@@ -1,0 +1,56 @@
+{
+  "id": "8cdc61d7-9d3d-45b0-99fb-c0d490651a07",
+  "name_canonical": "Checkout Funnel",
+  "journey_stage": "Checkout",
+  "description": "Payment Time Spent (scalar) - Metabase Question #19063",
+  "owner": "OneMind Analytics",
+  "tags": [
+    "Scalar",
+    "Metabase",
+    "Card-19063"
+  ],
+  "logic": {
+    "type": "Count",
+    "formula": "SELECT ... FROM base",
+    "granularity": "None",
+    "is_derived": false,
+    "parent_metrics": []
+  },
+  "source_mapping": {
+    "sql_reference_id": null,
+    "table_map": {},
+    "query_filters": [
+      "Rule: page_name like '%checkout%'",
+      "Rule: (\n        'All' IN ({{servie_line}})\n        OR lower(service_line) = lower({{servie_line}})\n        OR lower(ui_page_category) = lower({{servie_line}})\n      )\n      --",
+      "Rule: {{date}}",
+      "Rule: natco_code = 'de'",
+      "Rule: (\n        'All' IN ({{os_naame}})\n        OR lower(user_device_type) = lower({{os_naame}})\n      )",
+      "Rule: (\n'All' IN ({{category}})\nOR category = {{category}}\nOR LOWER(category) = {{category}}\n)\n  )\n\n\n,base2 as\n (\nSELECT\n  session_id,\n  curr_page,\n  next_page,\n  from_unixtime (curr_time / 1000) as t1,\n  from_unixtime (next_time / 1000) as t2,\n  date_diff ('minute', from_unixtime (curr_time / 1000",
+      "Rule: LOWER(action) = 'pageview'",
+      "Rule: lower(internalemployee) = 'no'",
+      "Rule: lower(category) <> 'addonmanagement'"
+    ],
+    "grouping_columns": [],
+    "joins": []
+  },
+  "metadata": {
+    "service_line": "Fixed & Mobile",
+    "category": "Performance & Duration",
+    "natco": "DE",
+    "journey_stage_or_page": "Checkout",
+    "user_metadata": {
+      "journey_stage": "Checkout",
+      "journey_stage_or_page": "Checkout",
+      "service_line": "Fixed & Mobile",
+      "category": "Performance & Duration",
+      "natco": "DE",
+      "tags": "Scalar, Metabase, Card-19063",
+      "owner": "OneMind Analytics",
+      "description": "Payment Time Spent (scalar) - Metabase Question #19063",
+      "metabase_card_id": 19063,
+      "display_type": "scalar"
+    }
+  },
+  "confidence_score": 1.0,
+  "warnings": []
+}

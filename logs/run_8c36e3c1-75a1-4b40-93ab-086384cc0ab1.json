@@ -1,0 +1,6 @@
+{"timestamp": "2026-08-04T18:30:16.594164+00:00", "stage": "pipeline_resume", "status": "started", "details": {"checkpoint_path": "checkpoints/canonical_05e87893-a776-4928-a86a-5e60c3961228.json", "uri": "neo4j://127.0.0.1:7687", "database": "neo4j"}}
+{"timestamp": "2026-08-04T18:30:16.594881+00:00", "stage": "load_checkpoint", "status": "started", "details": null}
+{"timestamp": "2026-08-04T18:30:16.609580+00:00", "stage": "load_checkpoint", "status": "success", "details": {"canonical_id": "05e87893-a776-4928-a86a-5e60c3961228"}}
+{"timestamp": "2026-08-04T18:30:16.615540+00:00", "stage": "database_ingestion", "status": "started", "details": null}
+{"timestamp": "2026-08-04T18:30:16.668108+00:00", "stage": "database_ingestion", "status": "success", "details": {"results_count": 6}}
+{"timestamp": "2026-08-04T18:30:16.678349+00:00", "stage": "pipeline_resume", "status": "completed", "details": null}

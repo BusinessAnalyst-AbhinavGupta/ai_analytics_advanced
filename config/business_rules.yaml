@@ -1,0 +1,110 @@
+# ==============================================================================
+# Declarative Business Validation Rules
+# Evaluated by BusinessRuleEngine over query results & dataset profiling
+# ==============================================================================
+
+rules:
+  # ── Funnel & Conversion Logic ──────────────────────────────────────────────
+  - id: BR_PERFECT_CONVERSION
+    name: "100% Conversion Anomaly"
+    category: "conversion"
+    metric_pattern: ".*(?:conversion|completed_pct|completion_rate|view_to_complete|rate|pct).*"
+    condition_type: "column_value_boundary"
+    condition: "value >= 100.0"
+    severity: "WARNING"
+    observation: "A conversion or completion rate of exactly 100% was observed."
+    hypotheses:
+      - "The denominator was filtered in the SQL WHERE clause to only successful sessions."
+      - "The step is mandatory or auto-completed in the user flow."
+      - "Join duplication between event and completion tables inflated downstream step."
+      - "Genuine behavior in a very small or specialized cohort."
+    recommended_checks:
+      - "Check if the base query filters out sessions that did not complete."
+      - "Verify join keys (e.g. session_id AND date) to avoid Cartesian joins."
+      - "Inspect the unaggregated session count for the denominator."
+
+  - id: BR_ZERO_CONVERSION
+    name: "0% Conversion Rate Drop-Off"
+    category: "conversion"
+    metric_pattern: ".*(?:conversion|completed_pct|completion_rate|rate|pct).*"
+    condition_type: "column_value_boundary"
+    condition: "value == 0.0"
+    severity: "WARNING"
+    observation: "A completion or conversion rate of exactly 0% was observed for one or more segments."
+    hypotheses:
+      - "Broken funnel step or major tracking outage for this release/cohort."
+      - "Mismatch in event naming convention or casing (e.g. 'completed' vs 'Completed')."
+      - "Legitimate zero conversions for an inactive channel or legacy flow."
+    recommended_checks:
+      - "Check event name spelling and case sensitivity in WHERE filters."
+      - "Verify date ranges and software version telemetry."
+
+  - id: BR_FUNNEL_MONOTONICITY
+    name: "Non-Monotonic Funnel Steps"
+    category: "funnel"
+    condition_type: "funnel_sequence"
+    severity: "CRITICAL"
+    observation: "A downstream funnel step has a higher session/user count than an upstream step."
+    hypotheses:
+      - "Users are re-entering or looping through the funnel multiple times without session deduplication."
+      - "Distinct session count was missed on the downstream step."
+      - "Users can bypass the upstream step via direct deep-links or shortcuts."
+    recommended_checks:
+      - "Ensure 'COUNT(DISTINCT session_id)' is used across all funnel steps."
+      - "Check if direct entry is possible for the downstream step."
+
+  # ── Accounting & Numeric Boundaries ─────────────────────────────────────────
+  - id: BR_NEGATIVE_NUMERIC
+    name: "Negative Value in Non-Negative Metric"
+    category: "accounting"
+    metric_pattern: ".*(?:revenue|price|amount|count|views|orders|sessions|users|items).*"
+    condition_type: "column_value_boundary"
+    condition: "value < 0"
+    severity: "CRITICAL"
+    observation: "A negative value was found in a metric that should strictly be non-negative."
+    hypotheses:
+      - "Refunds, chargebacks, or order cancellations are treated as raw negatives."
+      - "Arithmetic overflow or sign error in custom calculation."
+    recommended_checks:
+      - "Inspect raw transaction line items and handle refund record types explicitly."
+
+  - id: BR_CTR_OVER_100
+    name: "Click-Through Rate > 100%"
+    category: "marketing"
+    metric_pattern: ".*(?:ctr|click_through_rate|click_rate).*"
+    condition_type: "column_value_boundary"
+    condition: "value > 100.0"
+    severity: "HIGH"
+    observation: "Click-through rate exceeded 100%."
+    hypotheses:
+      - "Total clicks were divided by unique impressions without deduping clicks."
+      - "Multiple clicks per impression were not aggregated at session level."
+    recommended_checks:
+      - "Use COUNT(DISTINCT session_id) for both numerator and denominator."
+
+  # ── Data Quality & Integrity ────────────────────────────────────────────────
+  - id: BR_HIGH_NULL_PROPORTION
+    name: "High Null Proportion in Key Dimension"
+    category: "data_quality"
+    condition_type: "null_ratio_threshold"
+    threshold: 0.30
+    severity: "MEDIUM"
+    observation: "More than 30% of values are NULL in a primary dimension or metric column."
+    hypotheses:
+      - "Incomplete tracking on legacy clients or missing payload parameters."
+      - "Outer join produced unmatched rows."
+    recommended_checks:
+      - "Check if outer joins are returning NULLs."
+      - "Verify if NULL represents 'Unknown' or 'Web/Direct'."
+
+  - id: BR_FUTURE_TIMESTAMPS
+    name: "Future Timestamps Observed"
+    category: "temporal"
+    condition_type: "temporal_boundary"
+    severity: "HIGH"
+    observation: "Records contain timestamps in the future relative to query execution time."
+    hypotheses:
+      - "Client-side device clock skew or timezone parsing bug (UTC vs Local)."
+      - "Scheduled future appointments or bookings logged as event timestamps."
+    recommended_checks:
+      - "Confirm whether timestamp is event creation time or future appointment booking time."

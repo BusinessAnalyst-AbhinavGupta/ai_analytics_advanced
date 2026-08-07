@@ -1,0 +1,638 @@
+{
+  "table_name": "silver_layer.t_link_journey_checkout_com",
+  "database_id": 59,
+  "row_count": 10000,
+  "column_count": 44,
+  "columns": {
+    "session_id": {
+      "name": "session_id",
+      "dtype": "str",
+      "null_count": 60,
+      "null_pct": 0.6,
+      "distinct_count": 7423,
+      "sample_values": [
+        "13af80d83d79470bbff50ea351b20e35b5cf65a2d144dcd7d8cbf3574d78810ca05280cf71bad249ce252cc5d5bf5e15a4788a8bc6a6ad4aa5b47c5750e9d4cc",
+        "092c71c46a0de970519e5e98d9c1b08e9ce7f83d9ac69e0ed0c40a73af6b28b4dc3d8851e8e9f42654f0361ec2485070952089887ad31417d2a7c8393a2d8532",
+        "dcf765f94cc96705710028a37688908a719d219dd277853efa51d0d822da91b79e4d15a11626f432c2fe3ce2458e721bb0f6f94c6c2e5c6031a90fe14150f929",
+        "01de4be7051170d242660a02ee90b85d415c25da20b5daff95949dddb7c0ba00cb9fb94c15573806170d38a545fa435b20c794c2ca5861e5ca2c971d4a076329",
+        "64c09318630efc8342ee507753894542e3ab8be33612bc743d549c50db73802342dd5d3a94fa0e138f34c1b1e4542dab20507fb22df37714f210edd52f9d410d",
+        "beb04b09de373482208dd3685554e34bb7d3b759ab886232649bfbfb5a9126f2be77cc4ba227c89874dca0951b7e1ae45b629bdae7b7116e2e7ca2a7a18eabad",
+        "8ef98cecf83bf1a15cc9c9281aef9261273786c7ce76337046088a0669b82b2a29ac5104c0a10ca1ab8b4e4ae60869cb977d74638f46e0e5ef5af8d1e5a7d72a",
+        "fd537a033212471a05bd6326f505c7878755f9e7b4ebd09c90daac5c1b568a570baaad39fcf790da405b1edd89317d21b62fa91223991525f89aa05dc6c26923",
+        "b4d923aa978b16f9bbaafd65d120316a2303e7e2a135aaac599dce73b3360beb8337ce9b1419dad760b34a9eb75637b019339fd6a8d40202c4ef1b8ee9b79f89",
+        "ad0d5239bd44236911f724bfe8b8518df89a4fa147e0f1102801f3a1ec664a6a4e24e9a0201399ad1c378969734cd75ddeb482d6ecb111b83b69da1a0e3cc3a2"
+      ]
+    },
+    "guest_id": {
+      "name": "guest_id",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 7238,
+      "sample_values": [
+        "a395cb53-7f79-4af7-bc15-ea2d8e5f7afd",
+        "b7550bf8-eebd-4d06-a228-3002e4ff6a0d",
+        "f74c3e55-14a4-4e57-add1-f1f0c351444a",
+        "7a91495d-5d7b-45da-92e7-0c53f8eb16c4",
+        "dea0f7d9-37ea-4241-b8fc-a5eda36efc90",
+        "d5a1eea9-de9f-4f4a-ac03-3db42e8470ad",
+        "eddfbb30-b0f1-4f8e-83ed-d70fdaad31d8",
+        "124ce8ff-7dbe-4fba-99ba-451a97ed0c26",
+        "aed9f9be-dd60-4529-a662-077e02a6d40d",
+        "b160e5e1-b5d2-43b7-8347-dee7258d345b"
+      ]
+    },
+    "user_id": {
+      "name": "user_id",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 3376,
+      "sample_values": [
+        "",
+        "100049017300139718890001",
+        "100049017300139222210001",
+        "100049017300068676170001",
+        "100049015511389757620001",
+        "100049015511420649230001",
+        "100049017300139777240001",
+        "100049017300136799640001",
+        "100049017300139797050001",
+        "100049017300081060170001"
+      ]
+    },
+    "party_id": {
+      "name": "party_id",
+      "dtype": "str",
+      "null_count": 7686,
+      "null_pct": 76.86,
+      "distinct_count": 1752,
+      "sample_values": [
+        "2ed056cf-325f-4a9a-920a-6107da36069e",
+        "f39bc5f2-8a38-4022-8631-cd6aa6532690",
+        "d6805710-0e4f-38dc-a4e8-3f14c314fd74",
+        "d82bb1a2-3b0f-45aa-b542-a4f33d90d988",
+        "920db6b6-6389-4927-8696-58ae0d61ffe0",
+        "226ed64c-13d6-46fd-8eef-18b1b843791e",
+        "02314421-f719-3bbc-9fee-9f902a8edab5",
+        "bafd5c9f-968f-4b7f-80e3-0cfad6465fd4",
+        "d73918bf-1426-4c2f-91ac-f48355484787",
+        "fb03bce5-f187-4806-89fd-ca94d6377a77"
+      ]
+    },
+    "record_source": {
+      "name": "record_source",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 1,
+      "sample_values": [
+        "OneShop"
+      ]
+    },
+    "event_type": {
+      "name": "event_type",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 3,
+      "sample_values": [
+        "event",
+        "debug",
+        "cart"
+      ]
+    },
+    "category": {
+      "name": "category",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 8,
+      "sample_values": [
+        "acquisition",
+        "tariffChange",
+        "mnpMigration",
+        "MNP",
+        "contractProlongation",
+        "firstPageLoad",
+        "fixed",
+        "error"
+      ]
+    },
+    "sub_category": {
+      "name": "sub_category",
+      "dtype": "str",
+      "null_count": 4518,
+      "null_pct": 45.18,
+      "distinct_count": 3,
+      "sample_values": [
+        "one-checkout",
+        "oneui-builder",
+        "magenta-canvas"
+      ]
+    },
+    "action": {
+      "name": "action",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 74,
+      "sample_values": [
+        "clickInteractions",
+        "optimize.activate",
+        "checkoutSubStepViewed",
+        "checkoutSubStepSubmitted",
+        "basket trigger",
+        "checkoutStepViewed",
+        "addToCart",
+        "errorEvent",
+        "sideDrawerModalViewed",
+        "magentaeinsEligibilityCheck"
+      ]
+    },
+    "event_action": {
+      "name": "event_action",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "environment": {
+      "name": "environment",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 1,
+      "sample_values": [
+        "prod"
+      ]
+    },
+    "service_line": {
+      "name": "service_line",
+      "dtype": "str",
+      "null_count": 901,
+      "null_pct": 9.01,
+      "distinct_count": 3,
+      "sample_values": [
+        "fixed",
+        "ott",
+        "mobile"
+      ]
+    },
+    "natco_code": {
+      "name": "natco_code",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 1,
+      "sample_values": [
+        "de"
+      ]
+    },
+    "label": {
+      "name": "label",
+      "dtype": "str",
+      "null_count": 1638,
+      "null_pct": 16.38,
+      "distinct_count": 253,
+      "sample_values": [
+        "Weiter",
+        "login or registration",
+        "choose identification method",
+        "consent",
+        "product is added it",
+        "warning + confirmation",
+        "not eligible",
+        "payment Initiated",
+        "phoneNumber",
+        "account"
+      ]
+    },
+    "page_name": {
+      "name": "page_name",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 11,
+      "sample_values": [
+        "checkout/account",
+        "BASKET",
+        "checkout/identification",
+        "checkout/consent",
+        "checkout/payment",
+        "checkout/personalInfo",
+        "checkout/OrderConfirmation",
+        "checkout/shipping",
+        "checkout/providerChange",
+        "basket"
+      ]
+    },
+    "event_date": {
+      "name": "event_date",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 1,
+      "sample_values": [
+        "2026-07-01"
+      ]
+    },
+    "log_time": {
+      "name": "log_time",
+      "dtype": "int64",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 9928,
+      "sample_values": [
+        "1782926531903",
+        "1782885306940",
+        "1782902267893",
+        "1782893335242",
+        "1782907081570",
+        "1782905876376",
+        "1782904221420",
+        "1782931451839",
+        "1782893263121",
+        "1782919305750"
+      ]
+    },
+    "event_timestamp": {
+      "name": "event_timestamp",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 8809,
+      "sample_values": [
+        "2026-07-01T17:22:12",
+        "2026-07-01T05:55:07",
+        "2026-07-01T10:37:51",
+        "2026-07-01T08:08:55",
+        "2026-07-01T11:58:01",
+        "2026-07-01T11:37:56",
+        "2026-07-01T11:10:08",
+        "2026-07-01T18:44:12",
+        "2026-07-01T08:07:48",
+        "2026-07-01T15:21:46"
+      ]
+    },
+    "user_device_type": {
+      "name": "user_device_type",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 2,
+      "sample_values": [
+        "desktop",
+        "phone"
+      ]
+    },
+    "user_device_os_name": {
+      "name": "user_device_os_name",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "page_url": {
+      "name": "page_url",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 13,
+      "sample_values": [
+        "https://www.telekom.de/shop/one-checkout/account",
+        "https://www.telekom.de/shop/basket",
+        "https://www.telekom.de/shop/one-checkout/identification",
+        "https://www.telekom.de/shop/one-checkout/consent",
+        "https://www.telekom.de/shop/one-checkout/payment",
+        "https://www.telekom.de/shop/one-checkout/personalInfo",
+        "https://www.telekom.de/shop/order-confirmation",
+        "https://www.telekom.de/shop/one-checkout/shipping",
+        "https://www.telekom.de/shop/one-checkout/providerChange",
+        "https://www.telekom.de/shop/one-checkout/appointment"
+      ]
+    },
+    "user_type": {
+      "name": "user_type",
+      "dtype": "str",
+      "null_count": 9436,
+      "null_pct": 94.36,
+      "distinct_count": 2,
+      "sample_values": [
+        "existing",
+        "new registered"
+      ]
+    },
+    "user_login_type": {
+      "name": "user_login_type",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 2,
+      "sample_values": [
+        "guest",
+        "loggedin"
+      ]
+    },
+    "page_section_name": {
+      "name": "page_section_name",
+      "dtype": "str",
+      "null_count": 9124,
+      "null_pct": 91.24,
+      "distinct_count": 64,
+      "sample_values": [
+        "Weiter",
+        "start streaming",
+        "place order",
+        "Neue Kreditkarte hinzuf\u00fcgen",
+        "router credit details",
+        "switch to esim",
+        "continue - validate number",
+        "Deutscher Personalausweis, ID-Card",
+        "checked",
+        "Vodafone [VODA]"
+      ]
+    },
+    "segment": {
+      "name": "segment",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 1,
+      "sample_values": [
+        "B2C"
+      ]
+    },
+    "order_id": {
+      "name": "order_id",
+      "dtype": "str",
+      "null_count": 9945,
+      "null_pct": 99.45,
+      "distinct_count": 54,
+      "sample_values": [
+        "bd867e77-592f-44f7-aabe-cb2029e2a772",
+        "a5595461-254e-44ff-8fb2-52ada886ebb2",
+        "4c4f5e87-4e4b-4058-b64e-7e83af2e3e28",
+        "55a37400-1150-4d54-9320-e319dd5fc753",
+        "27383294-fa94-47b7-baf2-bbcb6697d394",
+        "affebb6d-fdb1-41e6-b9e1-03446227c0ea",
+        "13f76cc4-dc43-4fc9-aa6f-0eb6c1951280",
+        "37f243bb-a8c4-47be-8079-5341d19a55a4",
+        "88aff43b-c014-418c-905f-deaffd0ff2af",
+        "70bf48a2-519d-45d7-93a0-2fefd72c215d"
+      ]
+    },
+    "order_type": {
+      "name": "order_type",
+      "dtype": "str",
+      "null_count": 9942,
+      "null_pct": 99.42,
+      "distinct_count": 8,
+      "sample_values": [
+        "activation",
+        "Tariff Change",
+        "hw only, activation",
+        "activation, portation",
+        "hw only, activation, prolongation",
+        "activation, prolongation",
+        "hw only",
+        "hw only, activation, portation"
+      ]
+    },
+    "product_category": {
+      "name": "product_category",
+      "dtype": "str",
+      "null_count": 7496,
+      "null_pct": 74.96,
+      "distinct_count": 19,
+      "sample_values": [
+        "Smartwatches",
+        "Fixed Service/addon/broadbandAddon",
+        "MOBILEPOSTPAID",
+        "tariff_mobile_postpaid",
+        "Fixed Service/hardware/internetAccount",
+        "OTTTV",
+        "Devices",
+        "Fixed Service/2P/internetAccount-voice",
+        "page-1667",
+        "addon"
+      ]
+    },
+    "error_type": {
+      "name": "error_type",
+      "dtype": "str",
+      "null_count": 9883,
+      "null_pct": 98.83,
+      "distinct_count": 3,
+      "sample_values": [
+        "warning + confirmation",
+        "api failure",
+        "error information not found"
+      ]
+    },
+    "error_description": {
+      "name": "error_description",
+      "dtype": "str",
+      "null_count": 9881,
+      "null_pct": 98.81,
+      "distinct_count": 27,
+      "sample_values": [
+        "Invalid Iban",
+        "Bitte geben Sie Ihre Postleitzahl mit Ort ein.",
+        "Bitte geben Sie Ihre Hausnummer an.",
+        "Die eingegebene Rufnummer ist ung\u00fcltig. Bitte eine deutsche Mobilfunkrufnummer ohne vorstehende Null und ohne Trennzeichen eingeben. Zum Beispiel 151234xxx.",
+        "nonce token expired",
+        "Wir haben diesen Auftrag bereits erfasst.",
+        "Bitte achten Sie auf die korrekte Gro\u00df- und Kleinschreibung.",
+        "Password must be 8-16 characters",
+        "DT_INVALID_OTT_COUPON_CODE",
+        "W\u00e4hlen Sie eine Karte aus oder f\u00fcgen Sie eine neue Karte hinzu."
+      ]
+    },
+    "device_id": {
+      "name": "device_id",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "product_variant_name": {
+      "name": "product_variant_name",
+      "dtype": "str",
+      "null_count": 7587,
+      "null_pct": 75.87,
+      "distinct_count": 187,
+      "sample_values": [
+        "XPLORA Kids Watch X6 Play eSIM (2025) ",
+        "Heimnetz-Diagnose",
+        "MagentaMobil XS",
+        "Smart Connect S mit Ger\u00e4t",
+        "MagentaTV Flex",
+        "Glasfaser Modem 2",
+        "MagentaMobil S Young",
+        "Unfall- und Diebstahlschutz",
+        "MagentaZuhause L",
+        "Disney+ Premium"
+      ]
+    },
+    "contract_card_type": {
+      "name": "contract_card_type",
+      "dtype": "str",
+      "null_count": 9531,
+      "null_pct": 95.31,
+      "distinct_count": 2,
+      "sample_values": [
+        "mainCard",
+        "familyCard"
+      ]
+    },
+    "business_group": {
+      "name": "business_group",
+      "dtype": "str",
+      "null_count": 7573,
+      "null_pct": 75.73,
+      "distinct_count": 7,
+      "sample_values": [
+        "OTHER",
+        "AUTOMATIC_ONTOP_ADDONS",
+        "TARIFF",
+        "MOBILE_DEVICE",
+        "DEVICE_INSURANCE",
+        "ADDON",
+        "TABLET"
+      ]
+    },
+    "buying_option": {
+      "name": "buying_option",
+      "dtype": "str",
+      "null_count": 8299,
+      "null_pct": 82.99,
+      "distinct_count": 3,
+      "sample_values": [
+        "bundle",
+        "plan only",
+        "device only"
+      ]
+    },
+    "product_name": {
+      "name": "product_name",
+      "dtype": "str",
+      "null_count": 7208,
+      "null_pct": 72.08,
+      "distinct_count": 231,
+      "sample_values": [
+        "XPLORA Kids Watch X6 Play eSIM (2025)",
+        "Heimnetz-Diagnose",
+        "MagentaMobil XS",
+        "Smart Connect S mit Ger\u00e4t",
+        "dtLogoIcon",
+        "MagentaTV Flex",
+        "Glasfaser Modem 2",
+        "place order",
+        "MagentaMobil S Young",
+        "Insure MyMobile L"
+      ]
+    },
+    "entry_point": {
+      "name": "entry_point",
+      "dtype": "float64",
+      "null_count": 10000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "ab_experiment": {
+      "name": "ab_experiment",
+      "dtype": "str",
+      "null_count": 9833,
+      "null_pct": 98.33,
+      "distinct_count": 7,
+      "sample_values": [
+        "global.twoFaPrompt.enabled",
+        "global.expressCheckout.tariffChange.enabled || global.twoFaPrompt.enabled || modules.creditCheck.newRmc.enabled",
+        "global.expressCheckout.tariffChange.enabled",
+        "modules.creditCheck.newRmc.enabled || modules.creditCheck.newRmc.enabled",
+        "global.expressCheckout.tariffChange.enabled || global.expressCheckout.tariffChange.enabled",
+        "global.expressCheckout.tariffChange.enabled || modules.creditCheck.newRmc.enabled",
+        "global.expressCheckout.tariffChange.enabled || modules.creditCheck.newRmc.enabled || global.expressCheckout.tariffChange.enabled || modules.creditCheck.newRmc.enabled"
+      ]
+    },
+    "ab_experiment_variant": {
+      "name": "ab_experiment_variant",
+      "dtype": "str",
+      "null_count": 9833,
+      "null_pct": 98.33,
+      "distinct_count": 13,
+      "sample_values": [
+        "[{\"global.twoFaPrompt.enabled\":\"true\"}]",
+        "[{\"global.expressCheckout.tariffChange.enabled\":\"true\"},{\"global.twoFaPrompt.enabled\":\"true\"},{\"modules.creditCheck.newRmc.enabled\":\"false\"}]",
+        "[{\"global.expressCheckout.tariffChange.enabled\":\"false\"}]",
+        "[{\"modules.creditCheck.newRmc.enabled\":\"true\"},{\"modules.creditCheck.newRmc.enabled\":\"true\"}]",
+        "[{\"modules.creditCheck.newRmc.enabled\":\"false\"},{\"modules.creditCheck.newRmc.enabled\":\"false\"}]",
+        "[{\"global.expressCheckout.tariffChange.enabled\":\"false\"},{\"global.expressCheckout.tariffChange.enabled\":\"false\"}]",
+        "[{\"global.expressCheckout.tariffChange.enabled\":\"true\"},{\"modules.creditCheck.newRmc.enabled\":\"true\"}]",
+        "[{\"global.expressCheckout.tariffChange.enabled\":\"false\"},{\"modules.creditCheck.newRmc.enabled\":\"false\"}]",
+        "[{\"global.expressCheckout.tariffChange.enabled\":\"true\"},{\"modules.creditCheck.newRmc.enabled\":\"false\"}]",
+        "[{\"global.expressCheckout.tariffChange.enabled\":\"false\"},{\"modules.creditCheck.newRmc.enabled\":\"false\"},{\"global.expressCheckout.tariffChange.enabled\":\"false\"},{\"modules.creditCheck.newRmc.enabled\":\"false\"}]"
+      ]
+    },
+    "ui_page_category": {
+      "name": "ui_page_category",
+      "dtype": "str",
+      "null_count": 117,
+      "null_pct": 1.17,
+      "distinct_count": 3,
+      "sample_values": [
+        "general",
+        "mobile",
+        "fixed"
+      ]
+    },
+    "is_internal_employee": {
+      "name": "is_internal_employee",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 1,
+      "sample_values": [
+        "no"
+      ]
+    },
+    "identifiers_customer_type": {
+      "name": "identifiers_customer_type",
+      "dtype": "str",
+      "null_count": 6469,
+      "null_pct": 64.69,
+      "distinct_count": 2,
+      "sample_values": [
+        "greenfield",
+        "brownfield"
+      ]
+    },
+    "attribute_customer_type": {
+      "name": "attribute_customer_type",
+      "dtype": "str",
+      "null_count": 9361,
+      "null_pct": 93.61,
+      "distinct_count": 2,
+      "sample_values": [
+        "private",
+        "business"
+      ]
+    },
+    "attribute_checkout_type": {
+      "name": "attribute_checkout_type",
+      "dtype": "str",
+      "null_count": 4508,
+      "null_pct": 45.08,
+      "distinct_count": 2,
+      "sample_values": [
+        "normal",
+        "express-checkout"
+      ]
+    }
+  }
+}

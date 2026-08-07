@@ -1,0 +1,52 @@
+{
+  "id": "43e1b8e0-2d1c-4c3e-9137-8990111f896a",
+  "name_canonical": "Pluscard Digital Share",
+  "journey_stage": "Acquisition",
+  "description": "Analytics metric for Mobile (Conversion & KPIs) in DE",
+  "owner": "Analytics Team",
+  "tags": [
+    "OKR",
+    "Digital Share",
+    "Performance"
+  ],
+  "logic": {
+    "type": "Count",
+    "formula": "SELECT ... FROM base",
+    "granularity": "None",
+    "is_derived": false,
+    "parent_metrics": []
+  },
+  "source_mapping": {
+    "sql_reference_id": null,
+    "table_map": {},
+    "query_filters": [
+      "Rule: N/A (used in SELECT for substring extraction)",
+      "Rule: date = (SELECT MAX(date) FROM eshop_data.okrperformancemetrics)",
+      "Rule: pluscard_digital <> ''",
+      "Rule: No explicit predicate, used as denominator in SELECT",
+      "Rule: mobile_pro_digital <> ''",
+      "Rule: No explicit predicate, used as denominator in SELECT"
+    ],
+    "grouping_columns": [],
+    "joins": []
+  },
+  "metadata": {
+    "service_line": "Mobile",
+    "category": "Conversion & KPIs",
+    "natco": "DE",
+    "journey_stage_or_page": "Acquisition",
+    "user_metadata": {
+      "journey_stage": "Acquisition",
+      "service_line": "Mobile",
+      "category": "Conversion & KPIs",
+      "natco": "DE",
+      "tags": "OKR, Digital Share, Performance",
+      "general_context": "Calculates weekly digital share for pluscard and mobile_pro contracts from latest snapshot date.",
+      "llm_provider": "OpenRouter API",
+      "llm_model": "deepseek/deepseek-v4-flash-0731",
+      "llm_api_key": null
+    }
+  },
+  "confidence_score": 1.0,
+  "warnings": []
+}

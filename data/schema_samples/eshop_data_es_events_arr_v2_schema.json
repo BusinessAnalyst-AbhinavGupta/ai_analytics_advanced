@@ -1,0 +1,901 @@
+{
+  "table_name": "eshop_data.es_events_arr_v2",
+  "database_id": 59,
+  "row_count": 100000,
+  "column_count": 75,
+  "columns": {
+    "inventory": {
+      "name": "inventory",
+      "dtype": "str",
+      "null_count": 8853,
+      "null_pct": 8.85,
+      "distinct_count": 3,
+      "sample_values": [
+        "in stock",
+        "out of stock",
+        "instock"
+      ]
+    },
+    "uuid": {
+      "name": "uuid",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 30479,
+      "sample_values": [
+        "6471c65f-78ea-47d7-9b4e-ac5763b92974attr_items",
+        "f3873856-8bed-48f3-8d63-61ef78d58b5battributeList",
+        "ee9afe3a-35e4-45ee-822e-13a26b376e89attributeList",
+        "79ec2b42-9ef3-4f81-b266-9bb374503cd7attributeList",
+        "2f84cbc1-da39-491e-b79d-fecf1e01f973attributeList",
+        "5f505801-f680-4ff3-881a-43abd487b938attributeList",
+        "b99552da-5cf9-445a-99a7-1a9e8a7ec590attributeList",
+        "e7e423af-11be-4bd4-93c8-749d5d1a26eeattributeList",
+        "dd5d5780-a0b6-457d-a8c9-e556a0cb960fattributeList",
+        "749863b3-a35d-4938-a351-7cec8906e4dbattributeList"
+      ]
+    },
+    "price": {
+      "name": "price",
+      "dtype": "float64",
+      "null_count": 2794,
+      "null_pct": 2.79,
+      "distinct_count": 960,
+      "sample_values": [
+        "1.0",
+        "745.0",
+        "505.0",
+        "0.0",
+        "485.0",
+        "945.0",
+        "1085.0",
+        "7432.23",
+        "24786.78",
+        "1045.0"
+      ]
+    },
+    "variant": {
+      "name": "variant",
+      "dtype": "str",
+      "null_count": 5008,
+      "null_pct": 5.01,
+      "distinct_count": 560,
+      "sample_values": [
+        "Next Data 5 GB",
+        "Samsung Galaxy A16 5G 128GB (A166B) - \u0161ed\u00fd",
+        "Next 12 GB s v\u00fdhodou",
+        "Next internet 12 GB s v\u00fdhodou",
+        "Xiaomi Redmi 13C 5G 128GB - \u010dern\u00fd",
+        "Next Data 5 GB s v\u00fdhodou",
+        "Next neomezen\u011b XL s v\u00fdhodou",
+        "Next neomezen\u011b 2XL s v\u00fdhodou",
+        "Samsung Galaxy A55 5G 128GB (A556B) - modro\u010dern\u00fd",
+        "Apple iPhone 16 Pro 128GB - \u010dern\u00fd titan"
+      ]
+    },
+    "name": {
+      "name": "name",
+      "dtype": "str",
+      "null_count": 4463,
+      "null_pct": 4.46,
+      "distinct_count": 379,
+      "sample_values": [
+        "Next Data 5 GB",
+        "Samsung Galaxy A16 5G",
+        "Next 12 GB s v\u00fdhodou",
+        "Next internet 12 GB s v\u00fdhodou",
+        "Xiaomi Redmi 13C 5G",
+        "Next Data 5 GB s v\u00fdhodou",
+        "Next neomezen\u011b XL s v\u00fdhodou",
+        "Next neomezen\u011b 2XL s v\u00fdhodou",
+        "Samsung Galaxy A55 5G",
+        "Apple iPhone 16 Pro"
+      ]
+    },
+    "id": {
+      "name": "id",
+      "dtype": "str",
+      "null_count": 4463,
+      "null_pct": 4.46,
+      "distinct_count": 661,
+      "sample_values": [
+        "POT126",
+        "POV534",
+        "flamingo10",
+        "flamingo28",
+        "POT311",
+        "flamingo24",
+        "flamingo14",
+        "flamingo16",
+        "POT014",
+        "POU508"
+      ]
+    },
+    "brand": {
+      "name": "brand",
+      "dtype": "str",
+      "null_count": 646,
+      "null_pct": 0.65,
+      "distinct_count": 16,
+      "sample_values": [
+        "telekom",
+        "Samsung",
+        "Xiaomi",
+        "Apple",
+        "TCL",
+        "T-Mobile",
+        "Honor",
+        "addon",
+        "Setty",
+        "Motorola"
+      ]
+    },
+    "product_category": {
+      "name": "product_category",
+      "dtype": "str",
+      "null_count": 514,
+      "null_pct": 0.51,
+      "distinct_count": 26,
+      "sample_values": [
+        "tariffMobilePostpaid",
+        "Mobile",
+        "datovetarify",
+        "addon",
+        "tpods-mm",
+        "studentske-tarify",
+        "prislusenstvi",
+        "tariff-mobile-twist",
+        "tariff-mobile-twist1",
+        "Devices-Mobile"
+      ]
+    },
+    "_timestamp": {
+      "name": "_timestamp",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 21529,
+      "sample_values": [
+        "2025-02-04T10:56:05",
+        "2025-02-04T21:45:46",
+        "2025-02-04T15:52:06",
+        "2025-02-04T11:42:35",
+        "2025-02-04T21:35:03",
+        "2025-02-04T11:48:51",
+        "2025-02-04T19:32:33",
+        "2025-02-04T10:26:01",
+        "2025-02-04T21:45:47",
+        "2025-02-04T10:56:12"
+      ]
+    },
+    "list": {
+      "name": "list",
+      "dtype": "str",
+      "null_count": 15579,
+      "null_pct": 15.58,
+      "distinct_count": 6,
+      "sample_values": [
+        "device + tariff list section",
+        "tariff list section",
+        "device-only list section",
+        "search results",
+        "basket special offer section",
+        "configurator list section"
+      ]
+    },
+    "position": {
+      "name": "position",
+      "dtype": "float64",
+      "null_count": 11599,
+      "null_pct": 11.6,
+      "distinct_count": 120,
+      "sample_values": [
+        "2.0",
+        "1.0",
+        "3.0",
+        "4.0",
+        "5.0",
+        "6.0",
+        "25.0",
+        "26.0",
+        "27.0",
+        "7.0"
+      ]
+    },
+    "device_color": {
+      "name": "device_color",
+      "dtype": "str",
+      "null_count": 98946,
+      "null_pct": 98.95,
+      "distinct_count": 19,
+      "sample_values": [
+        "\u010cern\u00e1",
+        "Zelen\u00e1",
+        "R\u016f\u017eov\u00e1",
+        "Bez barvy",
+        "\u0160ed\u00e1",
+        "Modr\u00e1",
+        "B\u00e9\u017eov\u00e1",
+        "St\u0159\u00edbrn\u00e1",
+        "Pou\u0161tn\u00ed",
+        "Fialov\u00e1"
+      ]
+    },
+    "quantity": {
+      "name": "quantity",
+      "dtype": "float64",
+      "null_count": 91686,
+      "null_pct": 91.69,
+      "distinct_count": 1,
+      "sample_values": [
+        "1.0"
+      ]
+    },
+    "business_group": {
+      "name": "business_group",
+      "dtype": "str",
+      "null_count": 91088,
+      "null_pct": 91.09,
+      "distinct_count": 6,
+      "sample_values": [
+        "TARIFF",
+        "DEVICE_INSURANCE",
+        "AUTOMATIC_ONTOP_ADDONS",
+        "MOBILE_DEVICE",
+        "acquisition",
+        "EXTRA_ONTOP"
+      ]
+    },
+    "parent_id": {
+      "name": "parent_id",
+      "dtype": "str",
+      "null_count": 99212,
+      "null_pct": 99.21,
+      "distinct_count": 51,
+      "sample_values": [
+        "POT145",
+        "POV284",
+        "POT148",
+        "POC193",
+        "POT149",
+        "POT144",
+        "POU636",
+        "PO6700",
+        "POM538",
+        "POU660"
+      ]
+    },
+    "device_installments": {
+      "name": "device_installments",
+      "dtype": "float64",
+      "null_count": 99713,
+      "null_pct": 99.71,
+      "distinct_count": 1,
+      "sample_values": [
+        "23.0"
+      ]
+    },
+    "recurring_price": {
+      "name": "recurring_price",
+      "dtype": "float64",
+      "null_count": 68099,
+      "null_pct": 68.1,
+      "distinct_count": 496,
+      "sample_values": [
+        "335.0",
+        "745.0",
+        "505.0",
+        "0.0",
+        "485.0",
+        "945.0",
+        "1085.0",
+        "1045.0",
+        "1385.0",
+        "495.0"
+      ]
+    },
+    "product_size": {
+      "name": "product_size",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "plan_data": {
+      "name": "plan_data",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "plan_minutes": {
+      "name": "plan_minutes",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "app_selected": {
+      "name": "app_selected",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "extra_data": {
+      "name": "extra_data",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "product_id": {
+      "name": "product_id",
+      "dtype": "str",
+      "null_count": 96020,
+      "null_pct": 96.02,
+      "distinct_count": 109,
+      "sample_values": [
+        "flamingo23",
+        "flamingo16",
+        "folie_zdarma_os",
+        "xiaomi_14t",
+        "hugo_balicky",
+        "flamingo22",
+        "apple_iphone_16",
+        "tv_l",
+        "pronajem_zarizeni",
+        "flamingo24"
+      ]
+    },
+    "product_availability": {
+      "name": "product_availability",
+      "dtype": "str",
+      "null_count": 96398,
+      "null_pct": 96.4,
+      "distinct_count": 1,
+      "sample_values": [
+        "in stock"
+      ]
+    },
+    "device_storage": {
+      "name": "device_storage",
+      "dtype": "str",
+      "null_count": 98995,
+      "null_pct": 99.0,
+      "distinct_count": 9,
+      "sample_values": [
+        "256 GB",
+        "128 GB",
+        "Bez pam\u011bti",
+        "32 GB",
+        "512 GB",
+        "16 GB",
+        "64 GB",
+        "8 GB",
+        "1 TB"
+      ]
+    },
+    "add_to_cart_source": {
+      "name": "add_to_cart_source",
+      "dtype": "str",
+      "null_count": 99561,
+      "null_pct": 99.56,
+      "distinct_count": 2,
+      "sample_values": [
+        "Tariff",
+        "deviceDetailed"
+      ]
+    },
+    "campaign_id": {
+      "name": "campaign_id",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "label": {
+      "name": "label",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "targetpage": {
+      "name": "targetpage",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "discount_amount": {
+      "name": "discount_amount",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "retail_price": {
+      "name": "retail_price",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "creative": {
+      "name": "creative",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "identifiers_user_id": {
+      "name": "identifiers_user_id",
+      "dtype": "float64",
+      "null_count": 69295,
+      "null_pct": 69.3,
+      "distinct_count": 1437,
+      "sample_values": [
+        "6003127228.0",
+        "6009406051.0",
+        "6008294296.0",
+        "17597894.0",
+        "38752189.0",
+        "17490439.0",
+        "6019905299.0",
+        "6020547222.0",
+        "35556945.0",
+        "6002353091.0"
+      ]
+    },
+    "business_process": {
+      "name": "business_process",
+      "dtype": "str",
+      "null_count": 97843,
+      "null_pct": 97.84,
+      "distinct_count": 4,
+      "sample_values": [
+        "acquisition",
+        "contractProlongation",
+        "prepaidToPostpaidMigration",
+        "tariffChange"
+      ]
+    },
+    "relationship_id": {
+      "name": "relationship_id",
+      "dtype": "str",
+      "null_count": 97893,
+      "null_pct": 97.89,
+      "distinct_count": 1010,
+      "sample_values": [
+        "ed90815d0b9d4f77801dc9771b2c3695",
+        "4a91b30914214ae6a9efc816c4ff5f1f",
+        "b987fd50f92c4c42b2a9dec2a435c56f",
+        "ef67f504b0cc41b295761e9922ee62ba",
+        "8dbd86e3004a47d882303ac3839da95f",
+        "0a19faa42c9e44b3ba58db2b8bfce053",
+        "37c0d922b9f9400ab8509476953ef387",
+        "16f7745760674180864c1e696b422354",
+        "3945039ee632430ca9baed65304f005b",
+        "6a61174f9d3746ffbc0ee2594f78ae3f"
+      ]
+    },
+    "association": {
+      "name": "association",
+      "dtype": "str",
+      "null_count": 97837,
+      "null_pct": 97.84,
+      "distinct_count": 4,
+      "sample_values": [
+        "plan only",
+        "bundle",
+        "device only",
+        "device only, plan only"
+      ]
+    },
+    "base_price": {
+      "name": "base_price",
+      "dtype": "float64",
+      "null_count": 98953,
+      "null_pct": 98.95,
+      "distinct_count": 76,
+      "sample_values": [
+        "200.0",
+        "21479.34",
+        "0.0",
+        "1.0",
+        "9982.0",
+        "5014.0",
+        "34017.0",
+        "17710.0",
+        "15295.0",
+        "29992.0"
+      ]
+    },
+    "highlighted_tile": {
+      "name": "highlighted_tile",
+      "dtype": "object",
+      "null_count": 68651,
+      "null_pct": 68.65,
+      "distinct_count": 2,
+      "sample_values": [
+        "False",
+        "True"
+      ]
+    },
+    "ribbon": {
+      "name": "ribbon",
+      "dtype": "str",
+      "null_count": 93610,
+      "null_pct": 93.61,
+      "distinct_count": 8,
+      "sample_values": [
+        "V\u00ddHODN\u00dd TARIF",
+        "POHOD\u00c1\u0158\u016eM",
+        "FLEXER\u016eM",
+        "DATAKING\u016eM",
+        "PRO \u0160KOL\u00c1KA",
+        "Nejobl\u00edben\u011bj\u0161\u00ed",
+        "LTE",
+        "5G"
+      ]
+    },
+    "esim_status": {
+      "name": "esim_status",
+      "dtype": "str",
+      "null_count": 96918,
+      "null_pct": 96.92,
+      "distinct_count": 5,
+      "sample_values": [
+        "disabled",
+        "not compatible",
+        "enabled",
+        "mandatory",
+        "compatible"
+      ]
+    },
+    "hardwarebonusused": {
+      "name": "hardwarebonusused",
+      "dtype": "float64",
+      "null_count": 99948,
+      "null_pct": 99.95,
+      "distinct_count": 22,
+      "sample_values": [
+        "18170.9",
+        "10320.49",
+        "6613.88",
+        "19824.62",
+        "6613.0",
+        "3724.0",
+        "27275.0",
+        "4960.16",
+        "12000.0",
+        "11317.7"
+      ]
+    },
+    "contract_card_type": {
+      "name": "contract_card_type",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "tarifftype": {
+      "name": "tarifftype",
+      "dtype": "str",
+      "null_count": 71630,
+      "null_pct": 71.63,
+      "distinct_count": 2,
+      "sample_values": [
+        "bundle only",
+        "plan only"
+      ]
+    },
+    "esimdevicelinkstatus": {
+      "name": "esimdevicelinkstatus",
+      "dtype": "str",
+      "null_count": 99927,
+      "null_pct": 99.93,
+      "distinct_count": 1,
+      "sample_values": [
+        "option not available"
+      ]
+    },
+    "tradeinbonusvalue": {
+      "name": "tradeinbonusvalue",
+      "dtype": "float64",
+      "null_count": 98943,
+      "null_pct": 98.94,
+      "distinct_count": 1,
+      "sample_values": [
+        "-1.0"
+      ]
+    },
+    "ismnpapplied": {
+      "name": "ismnpapplied",
+      "dtype": "object",
+      "null_count": 96727,
+      "null_pct": 96.73,
+      "distinct_count": 2,
+      "sample_values": [
+        "True",
+        "False"
+      ]
+    },
+    "tradeindevicevalue": {
+      "name": "tradeindevicevalue",
+      "dtype": "float64",
+      "null_count": 98943,
+      "null_pct": 98.94,
+      "distinct_count": 1,
+      "sample_values": [
+        "-1.0"
+      ]
+    },
+    "contractduration": {
+      "name": "contractduration",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "purchasemethod": {
+      "name": "purchasemethod",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "producttype": {
+      "name": "producttype",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "cdl_timestamp": {
+      "name": "cdl_timestamp",
+      "dtype": "str",
+      "null_count": 99963,
+      "null_pct": 99.96,
+      "distinct_count": 11,
+      "sample_values": [
+        "2025-10-14T09:57:17",
+        "2026-02-11T12:54:05",
+        "2025-11-25T10:19:39",
+        "2025-11-25T10:19:46",
+        "2025-11-25T10:19:41",
+        "2025-11-25T10:19:43",
+        "2025-11-25T10:19:36",
+        "2026-01-27T17:03:40",
+        "2026-01-27T17:03:27",
+        "2026-01-27T17:03:38"
+      ]
+    },
+    "cartid": {
+      "name": "cartid",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "carttype": {
+      "name": "carttype",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "currency_code": {
+      "name": "currency_code",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "parent_name": {
+      "name": "parent_name",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "product_service_line": {
+      "name": "product_service_line",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "devicediscountwithtariff": {
+      "name": "devicediscountwithtariff",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "ispromopricingapplied": {
+      "name": "ispromopricingapplied",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "is_energy_icon_displayed": {
+      "name": "is_energy_icon_displayed",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "savings_offers": {
+      "name": "savings_offers",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "selectedpersonalizedretentionbenefits": {
+      "name": "selectedpersonalizedretentionbenefits",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "option_available": {
+      "name": "option_available",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "availablepersonalizedretentionbenefits": {
+      "name": "availablepersonalizedretentionbenefits",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "productidentificationdetails": {
+      "name": "productidentificationdetails",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "associatedproduct": {
+      "name": "associatedproduct",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "cashback_amount": {
+      "name": "cashback_amount",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "telekomlegacymigration": {
+      "name": "telekomlegacymigration",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "item_type": {
+      "name": "item_type",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "price_type": {
+      "name": "price_type",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "total_price": {
+      "name": "total_price",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "upfront_price": {
+      "name": "upfront_price",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "sim_type": {
+      "name": "sim_type",
+      "dtype": "float64",
+      "null_count": 100000,
+      "null_pct": 100.0,
+      "distinct_count": 0,
+      "sample_values": []
+    },
+    "nc": {
+      "name": "nc",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 2,
+      "sample_values": [
+        "cz",
+        "at"
+      ]
+    },
+    "year": {
+      "name": "year",
+      "dtype": "int64",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 3,
+      "sample_values": [
+        "2025",
+        "2024",
+        "2026"
+      ]
+    },
+    "date": {
+      "name": "date",
+      "dtype": "str",
+      "null_count": 0,
+      "null_pct": 0.0,
+      "distinct_count": 16,
+      "sample_values": [
+        "2025-02-04",
+        "2025-05-15",
+        "2025-02-03",
+        "2024-12-02",
+        "2025-05-16",
+        "2025-10-14",
+        "2024-11-18",
+        "2024-12-09",
+        "2025-01-22",
+        "2026-02-11"
+      ]
+    }
+  }
+}

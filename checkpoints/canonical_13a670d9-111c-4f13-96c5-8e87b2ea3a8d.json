@@ -1,0 +1,53 @@
+{
+  "id": "13a670d9-111c-4f13-96c5-8e87b2ea3a8d",
+  "name_canonical": "basket_users",
+  "journey_stage": "Checkout",
+  "description": "OCI Conversion Rate (Sessions) (scalar) - Metabase Question #35149",
+  "owner": "OneMind Analytics",
+  "tags": [
+    "Scalar",
+    "Metabase",
+    "Card-35149"
+  ],
+  "logic": {
+    "type": "Count",
+    "formula": "SELECT ... FROM base",
+    "granularity": "None",
+    "is_derived": false,
+    "parent_metrics": []
+  },
+  "source_mapping": {
+    "sql_reference_id": null,
+    "table_map": {},
+    "query_filters": [
+      "Rule: {{date}}",
+      "Rule: ('All' IN ({{servie_line}}) OR lower(service_line) = lower({{servie_line}}) OR lower(ui_page_category) = lower({{servie_line}}))",
+      "Rule: ('All' IN ({{os_naame}}) OR lower(user_device_type) = lower({{os_naame}}))",
+      "Rule: lower(category) <> 'addonmanagement'",
+      "Rule: [[ AND {{natco}} ]]",
+      "Rule: ('All' IN ({{category}}) OR category = {{category}} OR LOWER(category) = {{category}})"
+    ],
+    "grouping_columns": [],
+    "joins": []
+  },
+  "metadata": {
+    "service_line": "Fixed & Mobile",
+    "category": "Conversion & KPIs",
+    "natco": "DE",
+    "journey_stage_or_page": "Checkout",
+    "user_metadata": {
+      "journey_stage": "Checkout",
+      "journey_stage_or_page": "Checkout",
+      "service_line": "Fixed & Mobile",
+      "category": "Conversion & KPIs",
+      "natco": "DE",
+      "tags": "Scalar, Metabase, Card-35149",
+      "owner": "OneMind Analytics",
+      "description": "OCI Conversion Rate (Sessions) (scalar) - Metabase Question #35149",
+      "metabase_card_id": 35149,
+      "display_type": "scalar"
+    }
+  },
+  "confidence_score": 1.0,
+  "warnings": []
+}

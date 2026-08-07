@@ -1,0 +1,52 @@
+{
+  "id": "bbc17fac-e5a3-4a21-ba25-10abd3ce504f",
+  "name_canonical": "total_sessions",
+  "journey_stage": "Checkout",
+  "description": "Daily Business Errors Count (One checkout) (line) - Metabase Question #19178",
+  "owner": "OneMind Analytics",
+  "tags": [
+    "Line",
+    "Metabase",
+    "Card-19178"
+  ],
+  "logic": {
+    "type": "Count",
+    "formula": "SELECT ... FROM base",
+    "granularity": "None",
+    "is_derived": false,
+    "parent_metrics": []
+  },
+  "source_mapping": {
+    "sql_reference_id": null,
+    "table_map": {},
+    "query_filters": [
+      "Rule: {{date}}",
+      "Rule: ('All' IN ({{servie_line}}) OR LOWER(service_line) = LOWER({{servie_line}}) OR LOWER(ui_page_category) = LOWER({{servie_line}))",
+      "Rule: ('All' IN ({{os_naame}}) OR LOWER(user_device_type) = LOWER({{os_naame}))",
+      "Rule: [[ AND {{natco}} ]]",
+      "Rule: ('All' IN ({{category}}) OR category = {{category}} OR LOWER(category) = LOWER({{category}}))"
+    ],
+    "grouping_columns": [],
+    "joins": []
+  },
+  "metadata": {
+    "service_line": "Fixed & Mobile",
+    "category": "Errors & Quality",
+    "natco": "DE",
+    "journey_stage_or_page": "Checkout",
+    "user_metadata": {
+      "journey_stage": "Checkout",
+      "journey_stage_or_page": "Checkout",
+      "service_line": "Fixed & Mobile",
+      "category": "Errors & Quality",
+      "natco": "DE",
+      "tags": "Line, Metabase, Card-19178",
+      "owner": "OneMind Analytics",
+      "description": "Daily Business Errors Count (One checkout) (line) - Metabase Question #19178",
+      "metabase_card_id": 19178,
+      "display_type": "line"
+    }
+  },
+  "confidence_score": 1.0,
+  "warnings": []
+}

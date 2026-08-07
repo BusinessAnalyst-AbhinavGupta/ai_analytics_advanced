@@ -1,0 +1,86 @@
+{
+  "id": "f1db98b7-40e5-4bed-ab93-d38d304af170",
+  "name_canonical": "Time on Appointment Page",
+  "journey_stage": "Checkout",
+  "description": "This query is used to RCA the drop in checkout at the appointment stag for the fixed acquisition funnel. I am checking conversion at various cut increase customer type, customer interaction depth, and basis the items they added to cart.",
+  "owner": "Analytics Team",
+  "tags": [
+    "Funnel",
+    "Explaratory Analysis"
+  ],
+  "logic": {
+    "type": "Count",
+    "formula": "SELECT ... FROM base",
+    "granularity": "None",
+    "is_derived": false,
+    "parent_metrics": []
+  },
+  "source_mapping": {
+    "sql_reference_id": null,
+    "table_map": {},
+    "query_filters": [
+      "Rule: COALESCE(ev.attr_items, ev.attr_list, ev.attributelist) = arr.uuid",
+      "Rule: ev.identifiers_user_id",
+      "Rule: ev.action = 'radioButtonClicks'",
+      "Rule: ev.label = 'date picked'",
+      "Rule: ev.identifiers_page_name = 'checkout/appointment'",
+      "Rule: ev.identifiers_log_time",
+      "Rule: ev.nc = 'de'"
+    ],
+    "grouping_columns": [],
+    "joins": []
+  },
+  "metadata": {
+    "service_line": "Enterprise",
+    "category": "Traffic & Funnel",
+    "natco": "DE",
+    "journey_stage_or_page": "Checkout",
+    "user_metadata": {
+      "general_context": "This query is used to RCA the drop in checkout at the appointment stag for the fixed acquisition funnel. I am checking conversion at various cut increase customer type, customer interaction depth, and basis the items they added to cart.",
+      "description": "This query is used to RCA the drop in checkout at the appointment stag for the fixed acquisition funnel. I am checking conversion at various cut increase customer type, customer interaction depth, and basis the items they added to cart.",
+      "journey_stage": "Checkout",
+      "journey_stage_or_page": "Checkout",
+      "service_line": "Enterprise",
+      "category": "Traffic & Funnel",
+      "natco": "DE",
+      "tags": "Funnel, Explaratory Analysis",
+      "owner": "Analytics Team",
+      "llm_provider": "Local Ollama",
+      "llm_model": "qwen2.5-coder:14b",
+      "context_window": 262144,
+      "llm_api_key": "",
+      "sample_output_columns": [
+        "identifiers_sessionid",
+        "first_appointment_page_view",
+        "latest_appointment_page_activity_time",
+        "latest_appointment_completion_time",
+        "appointment_page",
+        "flag_manual_search_flow_user",
+        "customer_type",
+        "date_picker_click",
+        "date_picker_view",
+        "date_selected",
+        "time_slot",
+        "any_interaction_done",
+        "already_existing_contract_user",
+        "appointment_submitted",
+        "acq_purchase_success",
+        "latest_chosen_items",
+        "latest_chosen_main_item",
+        "latest_chosen_time_slot",
+        "appointment_page_exit_timestamp",
+        "hour_appointment_page_time",
+        "time_on_appointment_page",
+        "tc_landed_on_checkout",
+        "tc_order_placed",
+        "tc_order_success",
+        "existing_contract_response",
+        "date_time_interaction_type",
+        "gap_col"
+      ],
+      "sample_output_rows": 10
+    }
+  },
+  "confidence_score": 1.0,
+  "warnings": []
+}

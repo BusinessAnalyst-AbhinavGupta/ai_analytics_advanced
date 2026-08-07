@@ -1,0 +1,55 @@
+{
+  "id": "18a543a9-c9fd-499c-9ecd-7b3365e5a2d3",
+  "name_canonical": "basket_page",
+  "journey_stage": "Checkout",
+  "description": "One Checkout Journey (Acquisition) - CR by steps (line) - Metabase Question #19132",
+  "owner": "OneMind Analytics",
+  "tags": [
+    "Line",
+    "Metabase",
+    "Card-19132"
+  ],
+  "logic": {
+    "type": "Count",
+    "formula": "SELECT ... FROM base",
+    "granularity": "None",
+    "is_derived": false,
+    "parent_metrics": []
+  },
+  "source_mapping": {
+    "sql_reference_id": null,
+    "table_map": {},
+    "query_filters": [
+      "Rule: (\n            'All' IN ({{category}})\n            OR category = {{category}}\n            OR LOWER(category) = {{category}}\n        )",
+      "Rule: {{natco}} ]]",
+      "Rule: (\n            'All' IN ({{servie_line}})\n            OR lower(service_line) = lower({{servie_line}})\n            OR lower(ui_page_category) = lower({{servie_line}})\n        )\n     --",
+      "Rule: natco_code = 'de'\n        [[",
+      "Rule: {{date}}",
+      "Rule: lower(category) = 'acquisition'",
+      "Rule: (\n            'All' IN ({{os_naame}})\n            OR lower(user_device_type) = lower({{os_naame}})\n        )",
+      "Rule: lower(internalemployee) = 'no'\n     --"
+    ],
+    "grouping_columns": [],
+    "joins": []
+  },
+  "metadata": {
+    "service_line": "Fixed & Mobile",
+    "category": "Conversion & KPIs",
+    "natco": "DE",
+    "journey_stage_or_page": "Checkout",
+    "user_metadata": {
+      "journey_stage": "Checkout",
+      "journey_stage_or_page": "Checkout",
+      "service_line": "Fixed & Mobile",
+      "category": "Conversion & KPIs",
+      "natco": "DE",
+      "tags": "Line, Metabase, Card-19132",
+      "owner": "OneMind Analytics",
+      "description": "One Checkout Journey (Acquisition) - CR by steps (line) - Metabase Question #19132",
+      "metabase_card_id": 19132,
+      "display_type": "line"
+    }
+  },
+  "confidence_score": 1.0,
+  "warnings": []
+}

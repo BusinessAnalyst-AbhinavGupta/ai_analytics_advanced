@@ -1,0 +1,54 @@
+{
+  "id": "b474065b-45ea-4105-9f92-9e7b2e27152d",
+  "name_canonical": "Checkout Funnel",
+  "journey_stage": "Checkout",
+  "description": "One Checkout Journey (with optional steps) - (w.r.t onecheckout) - acquisition (table) - Metabase Question #19133",
+  "owner": "OneMind Analytics",
+  "tags": [
+    "Table",
+    "Metabase",
+    "Card-19133"
+  ],
+  "logic": {
+    "type": "Count",
+    "formula": "SELECT ... FROM base",
+    "granularity": "None",
+    "is_derived": false,
+    "parent_metrics": []
+  },
+  "source_mapping": {
+    "sql_reference_id": null,
+    "table_map": {},
+    "query_filters": [
+      "Rule: (\n            'All' IN ({{category}})\n            OR category = {{category}}\n            OR LOWER(category) = {{category}}\n        )",
+      "Rule: {{natco}} ]]",
+      "Rule: (\n            'All' IN ({{servie_line}})\n            OR lower(service_line) = lower({{servie_line}})\n            OR lower(ui_page_category) = lower({{servie_line}})\n        )\n        [[",
+      "Rule: {{date}}",
+      "Rule: lower(category) = 'acquisition'",
+      "Rule: lower(category) <> 'addonmanagement'",
+      "Rule: (\n            'All' IN ({{os_naame}})\n            OR lower(user_device_type) = lower({{os_naame}})\n        )"
+    ],
+    "grouping_columns": [],
+    "joins": []
+  },
+  "metadata": {
+    "service_line": "Fixed & Mobile",
+    "category": "Checkout Analytics",
+    "natco": "DE",
+    "journey_stage_or_page": "Checkout",
+    "user_metadata": {
+      "journey_stage": "Checkout",
+      "journey_stage_or_page": "Checkout",
+      "service_line": "Fixed & Mobile",
+      "category": "Checkout Analytics",
+      "natco": "DE",
+      "tags": "Table, Metabase, Card-19133",
+      "owner": "OneMind Analytics",
+      "description": "One Checkout Journey (with optional steps) - (w.r.t onecheckout) - acquisition (table) - Metabase Question #19133",
+      "metabase_card_id": 19133,
+      "display_type": "table"
+    }
+  },
+  "confidence_score": 1.0,
+  "warnings": []
+}
