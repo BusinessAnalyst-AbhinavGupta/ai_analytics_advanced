@@ -83,6 +83,10 @@ ANALYTICS_MB_LIVE=1 \
 .venv/bin/python -m analytics_platform.cli review <tenant> --conflicts # title conflicts
 .venv/bin/python -m analytics_platform.cli review <tenant> --kind IDIOM --bulk-approve --quiet
 ```
+```bash
+# Junior maturity-stage assessment (stage + EDA catalog + goal-aligned questions):
+.venv/bin/python -m analytics_platform.cli junior <tenant>
+```
 
 ### API quick start
 ```bash
@@ -122,8 +126,12 @@ curl -s localhost:8000/tenants/$TID/metrics
   approve/reject/bulk by kind) and CLI `analytics-platform review <tenant>` (submit-then-approve;
   only CANDIDATE/UNDER_REVIEW/REVISION_REQUIRED are touched). Verified E2E on the migrated
   snapshot: 1229 CANDIDATEs → bulk-approve IDIOM (180) → actionable 1229→1049.
+- **Junior maturity-stage engine: DONE** — `analytics_platform/junior.py` (`JuniorEngine`,
+  read-only): `stage()` (0 provisioning → 3 process-analysis, needing reproduced approved
+  queries + targets), `reproduce_metrics()` (runs approved queries via the injectable executor),
+  `catalog()` (schema/EDA of registered tables), `suggest_questions()` (Company
+  `Profile.targets` ↔ approved definitions/queries). CLI `analytics-platform junior <tenant>`.
 
-Next per plan: the **junior maturity-stage engine** (stage-gated agent + metric reproduction
-from approved definitions). Finishing the live-Metabase E2E run just needs your
-`ANALYTICS_MB_DATABASE_ID`/`EXPECTED_HOST`; the remaining 871 CANDIDATEs are ready for senior
-triage via `cli review`.
+Next per plan: wire the junior engine to the live `BrowserSessionExecutor` for stage‑3 assessment
+on real data; keep triaging the ~871 remaining CANDIDATEs; option to expose review/junior via the
+FastAPI. Finishing the live-Metabase E2E run needs your `ANALYTICS_MB_DATABASE_ID`/`EXPECTED_HOST`.

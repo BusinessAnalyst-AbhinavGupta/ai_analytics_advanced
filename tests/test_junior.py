@@ -76,6 +76,25 @@ class TestJunior(unittest.TestCase):
         self.assertEqual(c["tables_described"], 0)
         self.assertTrue(c["tables"][0]["error"])
 
+    def test_suggest_questions_from_targets(self):
+        self.ctx.tenants.set_company_profile(self.tid, {
+            "name": "X", "industry": "ecommerce", "description": "d",
+            "customers": "c", "value_creation": "v", "revenue_model": "r",
+            "targets": [{"name": "Raise funnel conversion", "category": "funnel",
+                         "priority": 1, "metric_refs": ["view_to_order_pct"]},
+                        {"name": "Grow orders", "category": "growth", "priority": 2}]})
+        s = self.engine.suggest_questions(self.tid)
+        self.assertGreaterEqual(s["count"], 1)
+        self.assertTrue(any("Raise funnel conversion" in x["question"]
+                            for x in s["suggestions"]))
+
+    def test_suggest_questions_fallback_without_targets(self):
+        approve_query(self.ctx.pipeline.brain(self.tid), WEEKLY_ORDER_SQL,
+                      title="Order completion by month")
+        s = self.engine.suggest_questions(self.tid)
+        self.assertGreaterEqual(s["count"], 1)
+        self.assertTrue(any("reproduce" in x["question"] for x in s["suggestions"]))
+
 
 if __name__ == "__main__":
     unittest.main()

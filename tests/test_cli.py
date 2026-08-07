@@ -73,6 +73,11 @@ class TestCliBrowser(unittest.TestCase):
         from analytics_platform.cli import cmd_review
         self.assertIs(args.func, cmd_review)
 
+    def test_parser_resolves_junior(self):
+        args = build_parser().parse_args(["junior", "t1"])
+        from analytics_platform.cli import cmd_junior
+        self.assertIs(args.func, cmd_junior)
+
     def _temp_ctx(self):
         import os
         import tempfile

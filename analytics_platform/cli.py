@@ -193,6 +193,27 @@ def cmd_review(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_junior(args: argparse.Namespace) -> int:
+    ctx = make_context()
+    from .execution.sampler import SamplerExecutor
+    from .junior import JuniorEngine
+    try:
+        ctx.tenants.require_tenant(args.tenant_id)
+    except KeyError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    eng = JuniorEngine(ctx.store, executor=ctx.executor or SamplerExecutor(),
+                       tenants=ctx.tenants, observability=ctx.observability)
+    _print("Junior readiness", eng.stage(args.tenant_id, limit=args.limit))
+    cat = eng.catalog(args.tenant_id)
+    _print("Catalog", {"tables_known": cat["tables_known"],
+                       "tables_described": cat["tables_described"],
+                       "tables": [{"table": t["table"], "columns": t["columns"][:12],
+                                   "error": t["error"]} for t in cat["tables"]]})
+    _print("Suggested questions", eng.suggest_questions(args.tenant_id))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="analytics-platform")
     sub = p.add_subparsers(dest="command", required=True)
@@ -236,6 +257,10 @@ def build_parser() -> argparse.ArgumentParser:
     rv.add_argument("--conflict-limit", type=int, default=20)
     rv.add_argument("--quiet", action="store_true", help="suppress summary/queue output")
     rv.set_defaults(func=cmd_review)
+    jn = sub.add_parser("junior", help="Junior maturity-stage assessment: stage + EDA catalog + questions")
+    jn.add_argument("tenant_id")
+    jn.add_argument("--limit", type=int, default=50, help="max approved queries to reproduce")
+    jn.set_defaults(func=cmd_junior)
     return p
 
 

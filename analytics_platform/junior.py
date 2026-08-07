@@ -139,5 +139,57 @@ class JuniorEngine:
         """Distinct column/schema names known across described tables (for EDA)."""
         return [t["table"] for t in self.catalog(tenant_id)["tables"] if t["columns"]]
 
+    # -- stage 3: goal-aligned questions (read-only, deterministic) -----------
+    def _usable_definitions(self, tenant_id: str) -> Dict[str, List[Any]]:
+        out: Dict[str, List[Any]] = {}
+        for n in self.brain(tenant_id).all(limit=100000):
+            if n.kind == NodeKind.DEFINITION and n.status.is_usable():
+                col = n.payload.get("column")
+                if not col:
+                    continue
+                for v in n.payload.get("values", []):
+                    if v not in out.setdefault(col, []):
+                        out[col].append(v)
+        return out
+
+    def suggest_questions(self, tenant_id: str, *, limit_per_target: int = 2) -> Dict[str, Any]:
+        """Turn CompanyProfile.targets (+ approved definitions/queries) into questions."""
+        self.tenants.require_tenant(tenant_id)
+        profile = self.tenants.get_company_profile(tenant_id)
+        defs = self._usable_definitions(tenant_id)
+        query_titles = [n.title for n in self.approved_queries(tenant_id)]
+        catalog_columns = {c for t in self.catalog(tenant_id)["tables"] for c in t["columns"]}
+        targets = list(profile.targets) if profile else []
+        suggestions = []
+        for t in targets:
+            col = next((c for c in (t.metric_refs or []) if c in catalog_columns), None)
+            if col is None:
+                col = next((c for c in (t.metric_refs or []) if c in defs), None)
+            source = ("approved_definition" if col in defs
+                      else "metric" if col in catalog_columns else "adapted")
+            question = (f"How has '{t.name}' ({t.category}) trended over time"
+                        + (f" using {col}?" if col else "?"))
+            suggestions.append({"target": t.name, "category": t.category,
+                                "priority": t.priority, "question": question,
+                                "columns": [col] if col else [], "source": source})
+            if t.priority:
+                # prioritize high-priority targets first; cap below
+                pass
+        # cap
+        suggestions = suggestions[:max(len(targets), 1) * limit_per_target]
+
+        # fallback when no targets / to enrich: approved queries + definitions
+        if not targets:
+            for title in query_titles[:limit_per_target]:
+                suggestions.append({"target": "", "category": "", "priority": 0,
+                                    "question": f"{title} — refresh/reproduce?",
+                                    "columns": [], "source": "approved_query"})
+            for col, vals in list(defs.items())[:limit_per_target]:
+                suggestions.append({"target": "", "category": "", "priority": 0,
+                                    "question": f"Analyze {col} distribution of {vals[:3]}?",
+                                    "columns": [col], "source": "approved_definition"})
+        return {"tenant_id": tenant_id, "count": len(suggestions),
+                "suggestions": suggestions}
+
 
 __all__ = ["JuniorEngine"]

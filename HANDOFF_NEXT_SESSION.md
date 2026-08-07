@@ -66,8 +66,10 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
 - **CP-J2 — schema/EDA catalog (DONE)**: `JuniorEngine.catalog()`/`datasets()` — describes
   registered tables via `SELECT * FROM t LIMIT 0` (dialect-agnostic, injectable executor);
   reports columns/types/errors. Tests +2 → **87 tests (2 skipped).**
-- **CP-J3 — goal-aligned questions + CLI `junior` (PENDING)**: stage-3 `suggest_questions()` from
-  `CompanyProfile.targets` ↔ approved definitions/definitions + `cli.py` `junior` command.
+- **CP-J3 — questions + CLI `junior` (DONE)**: `suggest_questions()` (CompanyProfile.targets ↔
+  approved definitions/queries) + `cli.py` `junior <tenant> [--limit N]` (stage + catalog +
+  questions). Verified: demo tenant → stage 3, 2/2 reproduced, 1 table described, 2 goal-aligned
+  questions. Tests +3 → **90 tests (2 skipped).** **Junior engine is complete.**
 
 ## How to run (all in repo root)
 ```bash
@@ -96,15 +98,16 @@ Deps frozen in `requirements-advanced.txt` (incl. `fastapi==0.141.1`).
 - `api.py` — `create_app(ctx)`; `make_context()`; onboarding endpoints; 23 routes.
 - `fixtures/` — synthetic retail warehouse + golden queries (athena-dialect SQL; transpiled at runtime).
 
-## Next steps (Triage DONE; Brain v2 + Live-Metabase wired — next up: junior engine)
-1. **Junior maturity-stage engine (plan P5).** Stage-gated agent: stage 0–1 schema/EDA
-   (use `SamplerExecutor` + catalog), stage 2 metric reproduction vs approved definitions,
-   stage 3 goal-aligned questions from `CompanyProfile.targets`. Needs an LLM hook
-   (NullClient today; swap to `GatewayClient` with provider config).
+## Next steps (Brain v2 + Live-Metabase wired; Triage + Junior engine DONE)
+1. **Wire the junior engine to the live `BrowserSessionExecutor`.** Run `JuniorEngine` with a
+   live executor so stage‑3 assessment (`reproduce_metrics`/`catalog`) works against real Metabase
+   data — same code path, now over the browser executor.
 2. **Finish the live-Metabase E2E (your Chrome).** Run the gated `MetabaseLive` test /
    `analytics-platform browser` with your `database_id` + `expected_host`.
 3. **Keep triaging the remaining ~871 CANDIDATEs.** `cli review` — bulk approve by kind,
    `--conflicts` to dedupe the value-set Definition candidates.
+4. (optional) Expose `triage`/`junior` as FastAPI endpoints; add an LLM hook for richer
+   stage-3 questions (NullClient today → `GatewayClient`).
 
 Re-run migration into any tenant's Brain (idempotent, CANDIDATE-only):
 `ANALYTICS_DB_PATH=<db> .venv/bin/python -m analytics_platform.cli migrate <tid> --snapshot extracted_data/knowledge_graph_snapshot.json`
