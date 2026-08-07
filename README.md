@@ -31,7 +31,9 @@ analytics_platform/
   migration/            brain-v2: knowledge-graph snapshot -> NodeSpec mapper + idempotent loader + cli 'migrate'
   junior.py             junior engine: maturity stages, EDA catalog, goal-aligned questions (LLM hook)
   junior_worker.py      P9 background junior: system-window, 1/hr, serial single-flight
-  senior.py             CP-10 senior: per-analyst AI config + review inbox (approve/reject/revise -> FINDING)
+  senior.py             CP-10 senior: per-analyst AI config + review inbox (approve/reject/revise -> FINDING);
+                        CP-11: human promote/downgrade of junior question-depth + human-signoff window
+  markdown.py           CP-11: every analysis renders as a reviewable .md (question/SQL/facts/hypotheses)
   scheduler.py          P9 weekly auto-purge scheduler (persisted due-state)
   triage.py             senior-review inbox service (approve/reject/bulk + conflicts dedupe)
   stakeholder.py        P6 stakeholder analyst (classify -> approved-knowledge-first -> escalate)
@@ -229,7 +231,7 @@ ANALYTICS_API_URL=http://localhost:8001 .venv/bin/streamlit run standalone_ui.py
   role through the same surface when the senior AI is off (human-on-top). Config panel in
   the UI; covered by the API + `ui_client` test suites.
 
-Next per plan: an **OpenRouter config panel** (list provider models via a live ping, save
-config, log config state/changes), then wire the operator tail for P8 (live OIDC/SSO +
-per-tenant browser profile) and the security tail (threat model / pen test / DR / SOC2
-readiness). Senior review of the migrated Brain is complete (536 approved / 693 rejected).
+Next per plan (after **CP-11**: config panel + junior depth + MD renderings are DONE): wire the
+operator tail for P8 (live OIDC/SSO + per-tenant browser profile) and the security tail (threat
+model / pen test / DR / SOC2 readiness), then junior Stage 4–5 autonomy. Senior review of the
+migrated Brain is complete (536 approved / 693 rejected).

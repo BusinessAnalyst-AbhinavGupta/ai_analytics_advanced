@@ -8,22 +8,30 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
 > snapshot on top of it — keep the plan's spine updated when work lands.
 
 ## State
-- **HEAD `ec69560` (`main`) — clean tree; everything committed.** P0–P9 core + CP-10 + triage +
-  launcher/docs are all in `git log`. Original `AI analytics/` folder untouched.
-  Latest checkpoints: `ec69560` Docs(plan) · `0a82a1c` Docs(README) · `5f4b824` Fix(run) ·
+- **HEAD `d3ee7bb` **CP-11** (`main`) — clean tree; everything committed.** P0–P9 core + CP-10 + CP-11 +
+  triage + launcher/docs are all in `git log`. Original `AI analytics/` folder untouched.
+  Latest checkpoints: `d3ee7bb` **CP-11** (config panel + junior depth + MD) · `da27d19` Docs(sync) ·
   `e874406` **CP-10** (senior tool) · `12b0aed` **CP-9** (observability + background junior).
+- **CP-11 (config panel + junior depth + senior review depth) is IN** — human promote/downgrade of the
+  junior question-depth (0 basic → 2 advanced) scales the questions it asks and adds business
+  hypotheses (`/junior/{tid}/hypotheses`); a first-N-days **human-signoff mandate** (default 7) blocks
+  AI auto-approval of every junior analysis; **every analysis renders as a reviewable `.md`**
+  (`analytics_platform/markdown.py`, `/analyses/{tid}/{rid}/md`, persisted under `data/reviews/`);
+  the **Config tab** (GET/PUT `/tenants/{tid}/analyst-config` + versioned history + live provider-model
+  ping `/llm/models`) exposes per-role toggles/models and the shared key/model default; and
+  `junior.enabled=false` now **fully stops the background worker** (no runaway ask/solve).
 - **CP-10 senior tool is IN** — per-analyst AI config (junior/senior/stakeholder toggles + model,
   versioned per tenant in `analyst_configs` + `analyst_config_history`) and a run-level senior review
   inbox (`approve` / `reject` / `revise` → promote to a governed FINDING via `pipeline.promote_finding`;
   the human plays senior when the senior AI is off — human-on-top). Config panel + review surface in the UI.
-- **169/169 standalone tests pass** (all `tests/` modules except the legacy `test_ui_and_db`).
+- **184/184 standalone tests pass** (all `tests/` modules except the legacy `test_ui_and_db`).
   Run: `cd <repo> && .venv/bin/python -m unittest tests.test_api tests.test_brain
   tests.test_browser_session tests.test_cli tests.test_governance_auth
-  tests.test_governance_retention tests.test_ingest tests.test_integration tests.test_junior
+  tests.test_governance_retention tests.test_ingest tests.test_junior
   tests.test_llm tests.test_migration tests.test_onboarding tests.test_phase9
-  tests.test_pipeline_e2e tests.test_policy tests.test_research tests.test_stakeholder
-  tests.test_tenancy tests.test_triage tests.test_ui_client
-  # -> 169 tests (3 live skipped)`
+  tests.test_pipeline_e2e tests.test_policy tests.test_research tests.test_senior_depth
+  tests.test_stakeholder tests.test_tenancy tests.test_config_panel tests.test_triage tests.test_ui_client
+  # -> 184 tests (3 live skipped)`
   **Caveat (pre-existing, environmental):** `unittest discover -s tests` hangs on this machine in
   `test_ui_and_db.test_pipeline_with_form_metadata` — `core.IngestionPipeline.run`'s Step-4 Cypher
   generation waits on a Neo4j that isn't reachable here. It is legacy `core.*` code, unrelated to
@@ -260,7 +268,8 @@ Deps frozen in `requirements-advanced.txt` (incl. `fastapi==0.141.1`).
 - `execution/sampler.py` — offline executor: **`sqlglot` transpile source→duckdb**, runs on pandas frames.
 - `execution/browser_session.py` — PRODUCTION executor: AppleScript→JS into authenticated Chrome tab; same-origin `fetch` (cookie stays in browser); `runner=` param injectable → offline-testable; `needs_login` fail-with-pause; `expected_host` guard. Requires `database_id`.
 - `llm/client.py` — `LLMClient` protocol; `NullClient` (offline); `GatewayClient` wraps **static** `core.llm_gateway.LLMGateway` (never instantiate it); `make_client`/`make_client_from(settings)`; wired into `junior` `suggest_questions` LLM enrichment.
-- `ui_client.py` — thin HTTP client (`APIClient`) for the FastAPI; used by `standalone_ui.py`.
+- `ui_client.py` — thin HTTP client (`APIClient`) for the FastAPI; used by `standalone_ui.py`; config-panel + senior queue/review + MD + provider-model-ping methods (CP-11).
+- `markdown.py` — CP-11: `render_analysis_md`/`write_analysis_md` → per-analysis `.md` for human review (persisted under `data/reviews/<tenant>/`).
 - `analysis.py` — reuses `core.profiler.FastSummaryProfiler` + `core.rules.BusinessRuleEngine`; frames facts/hypotheses.
 - `pipeline.py` — plan→policy→execute→analyze→persist; novel/anomalous → `REQUIRES_SENIOR_REVIEW`; `register_approved_query()`, `promote_finding()`.
 - `onboarding.py` — `OnboardingService`: provision_company / add_main_tables / ingest_legacy / candidates / review / readiness (stage 0–3) / digest.
@@ -319,15 +328,14 @@ Deps frozen in `requirements-advanced.txt` (incl. `fastapi==0.141.1`).
   config panel (see Next steps).
 
 ## Next steps (aligned with the plan's Backlog)
-1. **OpenRouter config panel** — list provider models via a live ping, save config, log config
-   state/changes (the current "next per plan" item; builds on the Phase 9 scheduler/junior-worker +
-   analyst-config layers).
-2. **P8 operator tail** — wire a real OIDC/SSO provider and per-tenant browser profiles.
-3. **P7 provider connections** — connect approved external search providers.
-4. **Security tail** — threat model / pen test / DR / SOC2 readiness.
-5. **Junior Stage 4–5** — external/competitive research autonomy + governed proactive investigations.
-6. **Senior review depth** — per-analysis MD renderings; depth scales with senior approval.
-7. **Vector retrieval** for unstructured notes (plan §8).
+1. **P8 operator tail** — wire a real OIDC/SSO provider and per-tenant browser profiles.
+2. **P7 provider connections** — connect approved external search providers.
+3. **Security tail** — threat model / pen test / DR / SOC2 readiness.
+4. **Junior Stage 4–5** — external/competitive research autonomy + governed proactive investigations.
+5. **Vector retrieval** for unstructured notes (plan §8).
+6. **Junior depth → mastery badges** — automatic depth promotion once a senior-approval threshold is
+   met (human still holds the override). The OpenRouter config panel and the per-analysis MD /
+   depth-scaling senior-review depth are **DONE (CP-11)**.
 
 **Triage is complete for the migrated tenant** (`tnt_56a8295f82c3`): 0 CANDIDATEs remain
 (`APPROVED 536 / REJECTED 693`). To get junior value from it: the tenant already has a

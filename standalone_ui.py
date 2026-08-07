@@ -317,6 +317,105 @@ def _observability_tab(tenant):
             st.write("(metrics endpoint not reachable here)")
 
 
+_PROVIDERS = ["openrouter", "gemini", "ollama"]
+
+
+def _provider_index(p) -> int:
+    try:
+        return _PROVIDERS.index((p or "openrouter").lower())
+    except ValueError:
+        return 0
+
+
+def _config_tab(tenant):
+    """Config panel: per-analyst AI toggles + per-role model, junior depth,
+    human-signoff window, live provider ping, and versioned history."""
+    st.subheader("Analyst AI config (config panel)")
+    cfg = _guarded(lambda: _client().get_analyst_config(tenant)) or {}
+    if not cfg:
+        st.info("No analyst config yet — save one below.")
+        return
+
+    depth = int(cfg.get("junior_depth", 1))
+    st.caption(f"Junior question depth: **{cfg.get('depth_label', 'standard')}** "
+               f"({depth}/2) — human-controlled on this tab; higher = deeper business "
+               f"questions **+ hypotheses**, lower = basic questions.")
+    d = st.columns([1, 1, 3])
+    if d[0].button("⬆ Promote junior", key=f"cfg_up_{tenant}"):
+        _guarded(lambda: _client().senior_junior_depth(tenant, action="up", by="human"))
+        st.rerun()
+    if d[1].button("⬇ Downgrade junior", key=f"cfg_dn_{tenant}"):
+        _guarded(lambda: _client().senior_junior_depth(tenant, action="down", by="human"))
+        st.rerun()
+    d[2].caption("Promoting makes the junior ask deeper questions and business "
+                 "hypotheses; demoting pulls it back to basic questions.")
+
+    st.markdown("### Per-role AI toggles + model (save to apply)")
+    roles = ["junior", "senior", "stakeholder"]
+    new = {}
+    for role in roles:
+        rc = cfg.get(role) or {}
+        st.markdown(f"**{role.title()} analyst**")
+        cols = st.columns([2, 3, 2, 1])
+        enabled = cols[0].toggle(f"AI enabled", value=bool(rc.get("enabled", True)),
+                                 key=f"cfg_on_{role}_{tenant}")
+        provider = cols[1].selectbox("provider", _PROVIDERS,
+                                     index=_provider_index(rc.get("provider")),
+                                     key=f"cfg_pr_{role}_{tenant}")
+        model = cols[2].text_input("model", value=rc.get("model", ""),
+                                   key=f"cfg_m_{role}_{tenant}")
+        new[role] = {"enabled": enabled, "provider": provider, "model": model.strip()}
+
+    hcols = st.columns([2, 2])
+    junior_depth = hcols[0].number_input("Junior depth (0-2)", min_value=0, max_value=2,
+                                         value=depth, key=f"cfg_depth_{tenant}")
+    signoff_days = hcols[1].number_input("Human-signoff days (first N days)",
+                                         min_value=0, max_value=365,
+                                         value=int(cfg.get("human_signoff_days", 7)),
+                                         key=f"cfg_signoff_{tenant}")
+    st.caption("During the first N days (default 7) every junior analysis needs an "
+               "explicit **human** review — an AI senior can't auto-approve in that window.")
+
+    if st.button("Save config", key=f"cfg_save_{tenant}", type="primary"):
+        _guarded(lambda: _client().set_analyst_config(tenant, {
+            "junior": new["junior"], "senior": new["senior"],
+            "stakeholder": new["stakeholder"],
+            "junior_depth": int(junior_depth), "human_signoff_days": int(signoff_days),
+            "changed_by": "human"}))
+        cp = f"cfg_on_senior_{tenant}"
+        st.success(f"Saved (senior AI {'ON' if new['senior']['enabled'] else 'OFF'} → "
+                   f"{'notes human-on-top: workload falls to you' if not new['senior']['enabled'] else 'automated'})")
+        st.rerun()
+
+    st.markdown("### Provider model options (live ping)")
+    pcols = st.columns([2, 3, 1])
+    ping_prov = pcols[0].selectbox("Provider", ["openrouter", "ollama"],
+                                   key=f"ping_prov_{tenant}")
+    ping_key = pcols[1].text_input("Provider key (used once, never stored)",
+                                   value="", key=f"ping_key_{tenant}", type="password")
+    if pcols[2].button("Ping models", key=f"ping_btn_{tenant}"):
+        models = _guarded(lambda: _client().llm_models(provider=ping_prov, key=ping_key)) or []
+        st.session_state.setdefault(f"ping_models_{tenant}", models)
+        st.session_state[f"ping_prov_raw_{tenant}"] = ping_prov
+    models = st.session_state.get(f"ping_models_{tenant}", [])
+    if models:
+        st.markdown(f"**{len(models)} models from {st.session_state.get(f'ping_prov_raw_{tenant}', '')}**")
+        st.dataframe(pd.DataFrame(models), hide_index=True, use_container_width=True)
+
+    st.markdown("### Config history (versioned)")
+    hist = _guarded(lambda: _client().analyst_config_history(tenant, limit=20)) or []
+    if hist:
+        hdf = pd.DataFrame([{
+            "version": h.get("version"), "changed_by": h.get("changed_by"),
+            "at": h.get("created_at"),
+            "junior_depth": (h.get("snapshot") or {}).get("junior_depth"),
+            "junior_enabled": (h.get("snapshot") or {}).get("junior", {}).get("enabled"),
+            "senior_enabled": (h.get("snapshot") or {}).get("senior", {}).get("enabled"),
+            "stakeholder_enabled": (h.get("snapshot") or {}).get("stakeholder", {}).get("enabled"),
+        } for h in hist])
+        st.dataframe(hdf, hide_index=True, use_container_width=True)
+    else:
+        st.caption("No config changes logged yet.")
 def _business_context_tab(tenant: str):
     """Initialisation: the one business context every analyst reads.
 
@@ -509,16 +608,21 @@ with st.sidebar:
 
 if tenant:
     tabs = st.tabs(["Business", "Junior", "Triage", "Stakeholder", "Research",
-                    "Governance", "Observability"])
+                    "Governance", "Observability", "Config"])
     with tabs[0]:
         _business_context_tab(tenant)
     with tabs[1]:
         st.subheader("Junior maturity stage")
         st.json(_guarded(lambda: _client().junior_stage(tenant)) or {})
+        jcfg = _guarded(lambda: _client().get_analyst_config(tenant)) or {}
+        st.caption(f"Junior question depth: **{jcfg.get('depth_label', 'standard')}** "
+                   f"({int(jcfg.get('junior_depth', 1))}/2)")
+        st.subheader("Suggested questions (depth-scaled)")
+        st.json(_guarded(lambda: _client().junior_questions(tenant)) or {})
+        st.subheader("Business hypotheses (depth-scaled)")
+        st.json(_guarded(lambda: _client().junior_hypotheses(tenant)) or {})
         st.subheader("Catalog (schema / EDA)")
         st.json(_guarded(lambda: _client().junior_catalog(tenant)) or {})
-        st.subheader("Suggested questions")
-        st.json(_guarded(lambda: _client().junior_questions(tenant)) or {})
 
     with tabs[2]:
         summary = _guarded(lambda: _client().triage_summary(tenant)) or {}
@@ -528,6 +632,48 @@ if tenant:
             m[1].metric("Actionable (needs review)", summary.get("actionable", 0))
             m[2].metric("Approved", summary.get("approved", 0))
             m[3].metric("Conflicts", summary.get("conflicts", 0))
+        st.markdown("**Junior depth / senior mode**")
+        sstatus = _guarded(lambda: _client().senior_status(tenant)) or {}
+        scols = st.columns([2, 2, 2])
+        scols[0].markdown(f"Senior AI: **{('ON' if sstatus.get('enabled') else 'OFF')}** — "
+                          f"mode **{sstatus.get('mode', '?')}**")
+        scols[1].markdown(f"Junior depth: **{sstatus.get('junior_depth_label', '?')}** "
+                          f"({sstatus.get('junior_depth', '?')}/2)")
+        scols[2].markdown(f"Human-signoff: **{sstatus.get('human_signoff_days', '?')} days**")
+        jb = st.columns([1, 1])
+        if jb[0].button("⬆ Promote junior", key="tri_depth_up"):
+            _guarded(lambda: _client().senior_junior_depth(tenant, action="up", by="human"))
+            st.rerun()
+        if jb[1].button("⬇ Downgrade junior", key="tri_depth_dn"):
+            _guarded(lambda: _client().senior_junior_depth(tenant, action="down", by="human"))
+            st.rerun()
+
+        with st.expander("Senior review inbox (analyst runs → .md for human review)"):
+            runs = _guarded(lambda: _client().senior_queue(tenant, limit=50)) or []
+            if not runs:
+                st.caption("No completed analyses awaiting senior review yet.")
+            for r in runs:
+                st.markdown(f"**{r.get('review_status', '?')}** · `{r.get('run_id')}` — "
+                            f"{(r.get('question') or '').strip()[:90]}")
+                with st.container(border=True):
+                    rcols = st.columns([3, 2, 2])
+                    if rcols[0].button("Preview / save .md", key=f"md_{r.get('run_id')}"):
+                        md = _guarded(lambda: _client().analysis_md(tenant, r.get("run_id")))
+                        if md:
+                            st.session_state[f"mdtext_{r.get('run_id')}"] = md
+                    if rcols[1].button("Approve", key=f"appr_{r.get('run_id')}"):
+                        res = _guarded(lambda: _client().senior_review(tenant, r.get("run_id"),
+                                                                       action="approve", by="human"))
+                        st.session_state[f"mdres_{r.get('run_id')}"] = res
+                    if rcols[2].button("Reject", key=f"rej_{r.get('run_id')}"):
+                        res = _guarded(lambda: _client().senior_review(tenant, r.get("run_id"),
+                                                                       action="reject", by="human"))
+                        st.session_state[f"mdres_{r.get('run_id')}"] = res
+                    if f"mdtext_{r.get('run_id')}" in st.session_state:
+                        st.code(st.session_state[f"mdtext_{r.get('run_id')}"].get("md", ""))
+                    if f"mdres_{r.get('run_id')}" in st.session_state:
+                        res = st.session_state[f"mdres_{r.get('run_id')}"]
+                        st.success(res) if res.get("ok") else st.error(res.get("error", res))
         rt1, rt2, rt3 = st.tabs(["Definitions", "Queue review", "Conflicts"])
         with rt1:
             _definitions_review(tenant)
@@ -544,5 +690,7 @@ if tenant:
         _governance_tab(tenant)
     with tabs[6]:
         _observability_tab(tenant)
+    with tabs[7]:
+        _config_tab(tenant)
 else:
     st.info("Select or create a tenant to begin.")

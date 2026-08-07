@@ -107,24 +107,54 @@ class AnalystAI:
         return asdict(self)
 
 
+# Junior question-depth levels (human-controlled on the senior tab). Higher depth
+# asks deeper business questions + hypotheses; lower depth asks basic ones.
+JUNIOR_DEPTH_LABELS = {0: "basic", 1: "standard", 2: "advanced"}
+
+
+def clamp_junior_depth(level: Any) -> int:
+    """Clamp a junior depth value to the valid range 0..2."""
+    try:
+        v = int(level)
+    except (TypeError, ValueError):
+        v = 1
+    return max(0, min(2, v))
+
+
 @dataclass
 class AnalystConfig:
-    """All three analysts' AI + model config for one tenant."""
+    """All three analysts' AI + model config for one tenant.
+
+    `junior_depth` is the depth/competency level the human controls on the senior
+    tab: promoted -> deeper business questions + hypotheses; demoted -> basic ones.
+    `human_signoff_days` is the initial window (default 7) during which *every*
+    junior analysis requires an explicit human review, even when the senior AI is on.
+    """
 
     tenant_id: str
     junior: AnalystAI = field(default_factory=lambda: AnalystAI("junior"))
     senior: AnalystAI = field(default_factory=lambda: AnalystAI("senior"))
     stakeholder: AnalystAI = field(default_factory=lambda: AnalystAI("stakeholder"))
+    junior_depth: int = 1           # 0=basic | 1=standard | 2=advanced
+    human_signoff_days: int = 7     # initial window: every analysis -> human review
     updated_at: str = ""
 
+    @property
+    def depth_label(self) -> str:
+        return JUNIOR_DEPTH_LABELS.get(clamp_junior_depth(self.junior_depth), "standard")
+
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d = {
             "tenant_id": self.tenant_id,
             "junior": self.junior.to_dict(),
             "senior": self.senior.to_dict(),
             "stakeholder": self.stakeholder.to_dict(),
+            "junior_depth": clamp_junior_depth(self.junior_depth),
+            "depth_label": self.depth_label,
+            "human_signoff_days": int(self.human_signoff_days),
             "updated_at": self.updated_at,
         }
+        return d
 
 
 @dataclass

@@ -9,7 +9,8 @@ from typing import Any, Dict, List, Optional
 
 from .database import Store, dump_json, load_json
 from .domain import (AnalystAI, AnalystConfig, CompanyProfile, CompanyTarget,
-                     DataSource, DataSourceKind, Tenant, TenantStatus, new_id, now_iso)
+                     DataSource, DataSourceKind, Tenant, TenantStatus, clamp_junior_depth,
+                     new_id, now_iso)
 
 # Analyst-role defaults (config panel). API keys never stored — injected at runtime.
 _ROLES = ("junior", "senior", "stakeholder")
@@ -29,6 +30,8 @@ def _config_from_dict(tenant_id: str, cfg: Optional[Dict[str, Any]]) -> AnalystC
         junior=_analyst_from_dict("junior", cfg.get("junior")),
         senior=_analyst_from_dict("senior", cfg.get("senior")),
         stakeholder=_analyst_from_dict("stakeholder", cfg.get("stakeholder")),
+        junior_depth=clamp_junior_depth(cfg.get("junior_depth", 1)),
+        human_signoff_days=int(cfg.get("human_signoff_days", 7)),
         updated_at=cfg.get("updated_at", ""),
     )
 
@@ -196,6 +199,13 @@ class TenantService:
                         cur[k] = incoming[k] if k != "enabled" else \
                             (incoming[k] if isinstance(incoming[k], bool) else bool(incoming[k]))
                 merged[role] = cur
+        if config.get("junior_depth") is not None:
+            merged["junior_depth"] = clamp_junior_depth(config["junior_depth"])
+        if config.get("human_signoff_days") is not None:
+            try:
+                merged["human_signoff_days"] = max(0, int(config["human_signoff_days"]))
+            except (TypeError, ValueError):
+                pass
         cfg = _config_from_dict(tenant_id, merged)
         cfg.updated_at = now_iso()
         self.store.execute(

@@ -61,6 +61,21 @@ class APIClient:
     def junior_questions(self, tenant: str) -> Dict[str, Any]:
         return self._req("GET", f"/junior/{tenant}/questions")
 
+    def junior_hypotheses(self, tenant: str, limit: int = 4) -> Dict[str, Any]:
+        return self._req("GET", f"/junior/{tenant}/hypotheses",
+                          params={"limit": limit})
+
+    def senior_status(self, tenant: str) -> Dict[str, Any]:
+        return self._req("GET", f"/tenants/{tenant}/senior/status")
+
+    def senior_queue(self, tenant: str, limit: int = 50) -> List[Dict[str, Any]]:
+        return self._req("GET", f"/senior/{tenant}/queue", params={"limit": limit})
+
+    def senior_review(self, tenant: str, run_id: str, action: str = "approve",
+                      by: str = "human", notes: str = "") -> Dict[str, Any]:
+        return self._req("POST", f"/senior/{tenant}/review",
+                          json={"run_id": run_id, "action": action, "by": by, "notes": notes})
+
     def junior_datasets(self, tenant: str) -> List[str]:
         return self._req("GET", f"/junior/{tenant}/datasets")
 
@@ -159,5 +174,28 @@ class APIClient:
         return self._req("POST", "/observability/junior/run",
                          params={"tenant_id": tenant})
 
+# -- analyst AI config panel (toggles, per-role model, depth, history) ------
+    def get_analyst_config(self, tenant: str) -> Dict[str, Any]:
+        return self._req("GET", f"/tenants/{tenant}/analyst-config")
+
+    def set_analyst_config(self, tenant: str, config: Dict[str, Any]) -> Dict[str, Any]:
+        return self._req("PUT", f"/tenants/{tenant}/analyst-config", json=config)
+
+    def analyst_config_history(self, tenant: str, limit: int = 20) -> List[Dict[str, Any]]:
+        return self._req("GET", f"/tenants/{tenant}/analyst-config/history",
+                          params={"limit": limit})
+
+    def senior_junior_depth(self, tenant: str, action: str = "up",
+                             level: Optional[int] = None, by: str = "human") -> Dict[str, Any]:
+        return self._req("POST", f"/tenants/{tenant}/senior/junior-depth",
+                          json={"action": action, "level": level, "by": by})
+
+    def analysis_md(self, tenant: str, run_id: str) -> Dict[str, Any]:
+        return self._req("GET", f"/analyses/{tenant}/{run_id}/md")
+
+    def llm_models(self, provider: str = "", key: str = "") -> List[Dict[str, Any]]:
+        out = self._req("GET", "/llm/models",
+                         params={"provider": provider, "key": key})
+        return out if isinstance(out, list) else (out or {}).get("models", [])
 
 __all__ = ["APIClient"]

@@ -43,6 +43,7 @@ class Settings:
     junior_work_start: str = "10:00"   # junior background window start (system time)
     junior_work_end: str = "19:00"      # junior background window end
     junior_min_interval_minutes: int = 60  # one problem statement per hour max
+    junior_human_signoff_days: int = 7 # initial window: every analysis -> human review
 
     def resolve_db_path(self) -> str:
         if self.db_path:
@@ -76,6 +77,8 @@ class Settings:
             junior_work_end=os.environ.get("ANALYTICS_JUNIOR_WORK_END", "19:00"),
             junior_min_interval_minutes=int(
                 os.environ.get("ANALYTICS_JUNIOR_MIN_INTERVAL_MINUTES", "60")),
+            junior_human_signoff_days=int(
+                os.environ.get("ANALYTICS_JUNIOR_HUMAN_SIGNOFF_DAYS", "7")),
         )
 
     def to_dict(self) -> Dict[str, Any]:

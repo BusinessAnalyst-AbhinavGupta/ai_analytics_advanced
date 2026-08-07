@@ -9,9 +9,9 @@
 
 ## Plan Status & Progress (living spine)
 
-> **This section is the spine of the repo — keep it updated as work lands.** Last updated: 2026-08-08 · HEAD `0a82a1c` (`main`).
+> **This section is the spine of the repo — keep it updated as work lands.** Last updated: 2026-08-08 · HEAD `d3ee7bb` **CP-11** (`main`).
 
-**Overall:** implementation **in progress — core complete**. Phases **P0–P9 are DONE (core)**; the platform ships as a supervised analytics copilot. Remaining work = operator/security tail (live OIDC/SSO, per-tenant browser profiles, threat model/pen-test/DR/SOC2) + the OpenRouter config panel + junior Stage-4/5 autonomy. No knowledge is lost; everything below is committed.
+**Overall:** implementation **in progress — core complete**. Phases **P0–P9 are DONE (core)**; the platform ships as a supervised analytics copilot. CP-11 lands the **config panel + junior depth + senior review depth** (per-analysis MD renderings, human-promoted/demoted question depth, human-signoff window, provider model ping, worker enable-gate). Remaining work = operator/security tail (live OIDC/SSO, per-tenant browser profiles, threat model/pen-test/DR/SOC2) + junior Stage-4/5 autonomy. No knowledge is lost; everything below is committed.
 
 ### Completed stages (vs. §11 Delivery Roadmap)
 
@@ -22,14 +22,14 @@
 | **P2 — Browser-session executor + policy** | ✅ DONE | `QueryExecutor` interface, hardened `BrowserSessionExecutor` (injectable runner, offline-tested), sqlglot read-only policy, offline duckdb sampler; **live Metabase E2E confirmed (3/3)** |
 | **P3 — Company-independent onboarding** | ✅ DONE | `OnboardingService`, tenant + company profile, data sources, guided wizard + **version history** |
 | **P4 — Company Brain v2** | ✅ DONE (core) | `brain/store.py` (lifecycle CANDIDATE→…→APPROVED/REJECTED/STALE, multi-dimension confidence, conflicts, isolation), `brain/ingest.py` (AST ingestion), migration from the Neo4j snapshot (CP1–CP3). Vector retrieval deferred |
-| **P5 — Junior + senior workflows** | ✅ DONE (core) | `JuniorEngine` (maturity stages, EDA catalog, goal-aligned questions, LLM hook), `TriageService` review inbox, **`SeniorService` approve/reject/revise → promote to governed FINDING (CP-10)** |
+| **P5 — Junior + senior workflows** | ✅ DONE (core) | `JuniorEngine` (maturity stages, EDA catalog, goal-aligned questions, LLM hook), `TriageService` review inbox, **`SeniorService` approve/reject/revise → promote to governed FINDING (CP-10)**; **CP-11 adds human-controlled junior question-depth (promote/downgrade → deeper questions + hypotheses), the first-N-days human-signoff mandate, and per-analysis markdown renderings** |
 | **P6 — Stakeholder analyst** | ✅ DONE (core) | `StakeholderService`: classify → approved-knowledge-first → refresh/cite → escalate → feedback + quality |
 | **P7 — External research** | ✅ DONE (core) | `ResearchService`: allow/block sources, credibility, citations, EXTERNAL nodes start **CANDIDATE** (senior gate). Live provider connections deferred |
 | **P8 — Commercial hardening** | ✅ DONE (core) | `auth.py` (signed tokens, RBAC, OIDC seam; **off by default**), `billing.py`, `retention.py`. Live OIDC/SSO + per-tenant browser profiles + security tail deferred |
 | **P9 — Owner observability + background junior** | ✅ DONE (core) | `api_logs` + HTTP access-log middleware (30-day retention), weekly auto-purge `Scheduler`, background `JuniorWorker` (10:00–19:00 window, 1/hr, serial single-flight), `/observability/*`, UI **Observability** tab |
 | **Brain migration + triage** | ✅ DONE | migrated tenant triaged to completion: **APPROVED 536 / REJECTED 693 / 0 CANDIDATEs** (CP-X1–X10) |
 
-**Test status:** 169/169 standalone tests pass (all `tests/` modules except legacy `test_ui_and_db`, which hangs only because it targets an unreachable Neo4j). Live Metabase tests: 3/3.
+**Test status:** 184/184 standalone tests pass (all `tests/` modules except legacy `test_ui_and_db`, which hangs only because it targets an unreachable Neo4j). Live Metabase tests: 3/3.
 
 ### Built beyond the plan (additions)
 
@@ -38,11 +38,16 @@
 | **Background autonomous `JuniorWorker` + `Scheduler`** | `analytics_platform/junior_worker.py`, `scheduler.py` | System-time window, one problem/hr, serial single-flight lock, persisted purge state — concrete automation beyond the plan's described autonomy |
 | **API access-log middleware + retention/purge** | `api.py`, `database.py`, `scheduler.py` | 30-day `api_logs` retention with weekly auto-purge (never logs credentials) |
 | **Analyst AI config panel** | `domain.py` (`AnalystAI`/`AnalystConfig`), `tenancy.py`, `senior.py` | Per-analyst junior/senior/stakeholder toggles + provider/model, versioned per tenant (`analyst_configs` + `analyst_config_history`) |
+| **Config panel API + UI (CP-11)** | `api.py` (`/tenants/{tid}/analyst-config`, `/llm/models`), `ui_client.py`, `standalone_ui.py` **Config tab** | GET/PUT config + versioned history in the UI; live provider-model ping (OpenRouter `/models`, Ollama `/api/tags`); shared default key/model from `Settings`/env, keys never stored |
+| **Junior question-depth control (CP-11)** | `domain.py` (`junior_depth`), `junior.py`, `senior.py`, UI Triage/Config tabs | Human promote/downgrade (0 basic → 2 advanced); depth scales questions + adds business hypotheses (`/junior/{tid}/hypotheses`); depth persisted + versioned with config |
+| **Human-signoff mandate (CP-11)** | `config.py` (`junior_human_signoff_days`), `senior.py` | First N days (default 7) every junior analysis requires explicit human review; an AI senior cannot auto-approve in the window or at basic depth |
+| **Per-analysis markdown renderings (CP-11)** | `analytics_platform/markdown.py`, `api.py` `/analyses/{tid}/{rid}/md` | Every analysis renders as a reviewable `.md` (question/SQL/facts/hypotheses); persisted under `data/reviews/<tenant>/<run_id>.md`, surfaced in the Triage tab |
+| **Worker enable-gate (CP-11)** | `junior_worker.py` | `junior.enabled=false` fully stops the background junior (no runaway ask/solve) regardless of window/rate |
 | **Senior review inbox at run level → governed FINDING** | `senior.py`, `pipeline.promote_finding` | `analysis_runs.review_status` lifecycle; the human plays senior when the senior AI is off (**human-on-top**) |
 | **Triage Conflicts dedupe (keep-one)** | `api.py` `POST /triage/{tid}/dedupe`, UI | reject (actionable) + supersede (approved) per conflict group |
 | **Definitions review tab** | `standalone_ui.py` | Grouped value-set review showing source SQL before approve/reject |
 | **Company-profile version history** | `tenancy.py`, `api.py` | Business-context snapshots versioned over time |
-| **Standalone UI 7-tab thin client** | `standalone_ui.py`, `ui_client.py` | Business / Junior / Triage / Stakeholder / Research / Governance / Observability |
+| **Standalone UI 8-tab thin client** | `standalone_ui.py`, `ui_client.py` | Business / Junior / Triage / Stakeholder / Research / Governance / Observability / **Config** |
 | **One-click launcher** | `run_dashboard.command` | Starts the backend (if needed) + opens the standalone UI; retired the legacy `app.py` boot |
 
 ### Material deviations from the plan
@@ -55,13 +60,12 @@
 
 ### Backlog (next up)
 
-1. **OpenRouter config panel** — live provider-model ping, save config, log config state/changes (the remaining "next per plan" item).
-2. **P8 operator tail** — live OIDC/SSO provider + per-tenant browser profiles.
-3. **P7 provider connections** — wire approved external search providers.
-4. **Security tail** — threat model / pen test / DR / SOC2 readiness.
-5. **Junior Stage 4–5** — external/competitive research autonomy + governed proactive investigations.
-6. **Senior review depth** — per-analysis MD renderings; depth scales with senior approval.
-7. **Vector retrieval** for unstructured notes (plan §8).
+1. **P8 operator tail** — live OIDC/SSO provider + per-tenant browser profiles.
+2. **P7 provider connections** — wire approved external search providers.
+3. **Security tail** — threat model / pen test / DR / SOC2 readiness.
+4. **Junior Stage 4–5** — external/competitive research autonomy + governed proactive investigations.
+5. **Vector retrieval** for unstructured notes (plan §8).
+6. **Junior depth → mastery badges** — automatic depth promotion once a senior-approval threshold is met (human still holds the override).
 
 ---
 

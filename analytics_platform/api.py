@@ -25,7 +25,7 @@ from .database import Store
 from .domain import (AnswerMode, DataSourceKind, KnowledgeNode, NodeKind, ReviewStatus, RunStatus)
 from .execution.sampler import SamplerExecutor
 from .junior import JuniorEngine
-from .llm.client import make_client_from
+from .llm.client import list_provider_models, make_client_from
 from .observability import Observability
 from .onboarding import OnboardingService
 from .pipeline import Pipeline
@@ -142,7 +142,15 @@ class AnalystConfigIn(BaseModel):
     junior: Optional[AnalystToggleIn] = None
     senior: Optional[AnalystToggleIn] = None
     stakeholder: Optional[AnalystToggleIn] = None
+    junior_depth: Optional[int] = None      # 0=basic | 1=standard | 2=advanced
+    human_signoff_days: Optional[int] = None
     changed_by: Optional[str] = "owner"
+
+
+class JuniorDepthIn(BaseModel):
+    action: str = "up"                      # up | down | set
+    level: Optional[int] = None             # used when action == set
+    by: str = "human"
 
 
 class SeniorReviewIn(BaseModel):
@@ -425,6 +433,15 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
     def health() -> Dict[str, Any]:
         return {"status": "ok", "app": C.settings.app_name, "db": C.store.db_path}
 
+    @app.get("/llm/models")
+    def llm_models(provider: str = "", key: str = "") -> Dict[str, Any]:
+        """Config panel: live-ping a provider for model options. The key is used
+        only for this call (never persisted). Ollama uses the configured base URL."""
+        models = list_provider_models(
+            provider=provider, api_key=key or C.settings.effective_api_key(),
+            ollama_base_url=C.settings.ollama_base_url)
+        return {"provider": provider or "null", "count": len(models), "models": models}
+
     # -- tenants -----------------------------------------------------------
     @app.post("/tenants")
     def create_tenant(body: NewTenant) -> Dict[str, Any]:
@@ -460,6 +477,60 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
         tenant_or_404(tenant_id)
         return C.tenants.get_company_profile_history(tenant_id, limit=limit)
 
+    # -- analyst AI config panel (toggles, per-role model, depth, history) ------
+    @app.get("/tenants/{tenant_id}/analyst-config")
+    def get_analyst_config_route(tenant_id: str) -> Dict[str, Any]:
+        tenant_or_404(tenant_id)
+        cfg = C.tenants.get_analyst_config(tenant_id)
+        return cfg.to_dict()
+
+    @app.put("/tenants/{tenant_id}/analyst-config")
+    def put_analyst_config(tenant_id: str, body: AnalystConfigIn) -> Dict[str, Any]:
+        tenant_or_404(tenant_id)
+        payload = body.model_dump()
+        changed_by = payload.pop("changed_by", None) or "owner"
+        cfg = C.tenants.set_analyst_config(tenant_id, payload, changed_by=changed_by)
+        C.observability.event(tenant_id=tenant_id, stage="analyst_config.updated",
+                              actor=changed_by,
+                              meta={"junior_depth": cfg.junior_depth,
+                                    "junior_enabled": cfg.junior.enabled,
+                                    "senior_enabled": cfg.senior.enabled,
+                                    "stakeholder_enabled": cfg.stakeholder.enabled})
+        return cfg.to_dict()
+
+    @app.get("/tenants/{tenant_id}/analyst-config/history")
+    def analyst_config_history(tenant_id: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """Config panel: versioned log of analyst-config changes (latest state too)."""
+        tenant_or_404(tenant_id)
+        return C.tenants.get_analyst_config_history(tenant_id, limit=limit)
+
+    @app.post("/tenants/{tenant_id}/senior/junior-depth")
+    def senior_junior_depth(tenant_id: str, body: JuniorDepthIn) -> Dict[str, Any]:
+        """Human promote/downgrade of the junior question depth on the senior tab."""
+        tenant_or_404(tenant_id)
+        return C.senior.set_junior_depth(tenant_id, action=body.action,
+                                         level=body.level, by=body.by or "human")
+
+    @app.get("/tenants/{tenant_id}/senior/status")
+    def senior_status(tenant_id: str) -> Dict[str, Any]:
+        """Where the senior workload sits (AI vs human) + junior depth (R4/R7)."""
+        tenant_or_404(tenant_id)
+        return C.senior.status(tenant_id)
+
+    @app.get("/senior/{tenant_id}/queue")
+    def senior_queue(tenant_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+        """Senior review inbox over completed analyst runs (R2/R3)."""
+        tenant_or_404(tenant_id)
+        return C.senior.queue(tenant_id, limit=limit)
+
+    @app.post("/senior/{tenant_id}/review")
+    def senior_review(tenant_id: str, body: SeniorReviewIn) -> Dict[str, Any]:
+        """Senior decision (approve/reject/revise) on an analysis; enforces the
+        human-signoff window + disabled-senior-AI gates (R2/R6)."""
+        tenant_or_404(tenant_id)
+        return C.senior.review(tenant_id, body.run_id, action=body.action,
+                               by=body.by or "human", notes=body.notes or "")
+
     @app.post("/tenants/{tenant_id}/datasources")
     def add_datasource(tenant_id: str, body: DataSourceIn) -> Dict[str, Any]:
         tenant_or_404(tenant_id)
@@ -492,6 +563,12 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
         if run is None:
             raise HTTPException(404, "Run not found")
         return run.to_dict()
+
+    @app.get("/analyses/{tenant_id}/{run_id}/md")
+    def get_analysis_md(tenant_id: str, run_id: str) -> Dict[str, Any]:
+        """Each analysis rendered as markdown for human review (R3)."""
+        tenant_or_404(tenant_id)
+        return C.senior.analysis_md(tenant_id, run_id)
 
     @app.get("/tenants/{tenant_id}/analyses")
     def list_analyses(tenant_id: str, limit: int = 50) -> List[Dict[str, Any]]:
@@ -710,6 +787,11 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
     @app.get("/junior/{tenant_id}/questions")
     def junior_questions(tenant_id: str, limit_per_target: int = 2) -> Dict[str, Any]:
         return _junior(tenant_id).suggest_questions(tenant_id, limit_per_target=limit_per_target)
+
+    @app.get("/junior/{tenant_id}/hypotheses")
+    def junior_hypotheses(tenant_id: str, limit: int = 4) -> Dict[str, Any]:
+        """Business hypotheses, scaled by junior depth (R4)."""
+        return _junior(tenant_id).suggest_hypotheses(tenant_id, limit=limit)
 
     @app.get("/junior/{tenant_id}/reproduce")
     def junior_reproduce(tenant_id: str, limit: int = 200) -> Dict[str, Any]:

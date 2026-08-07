@@ -98,3 +98,54 @@ def make_client_from(settings) -> LLMClient:
     return make_client(provider=settings.llm_provider, model=settings.llm_model,
                        api_key=settings.effective_api_key(),
                        ollama_base_url=settings.ollama_base_url)
+
+
+def list_models(provider: str = "openrouter", api_key: str = "",
+                base_url: str = "https://openrouter.ai/api/v1",
+                ollama_base_url: str = "http://localhost:11434",
+                timeout: float = 10.0) -> List[Dict[str, Any]]:
+    """List provider model options via a live ping (config-panel model dropdown).
+
+    OpenRouter `/models` and local Ollama `/api/tags` are supported; anything else
+    returns []. The key is used for this one call only and never persisted. Uses
+    the stdlib urlopen so the platform stays dependency-light.
+    """
+    import json as _json
+    from urllib import request as _urlreq
+
+    provider = (provider or "").lower()
+    try:
+        if provider == "ollama":
+            req = _urlreq.Request(f"{ollama_base_url.rstrip('/')}/api/tags",
+                                  method="GET")
+        else:  # openrouter (default) and unknown -> OpenRouter convention
+            url = f"{base_url.rstrip('/')}/models"
+            req = _urlreq.Request(url, method="GET")
+            if api_key:
+                req.add_header("Authorization", f"Bearer {api_key}")
+        with _urlreq.urlopen(req, timeout=timeout) as resp:  # noqa: S310 - provider URL is operator-supplied
+            data = _json.loads(resp.read().decode("utf-8"))
+    except Exception:  # noqa: BLE001 - a failed provider ping must never break the panel
+        return []
+
+    models: List[Dict[str, Any]] = []
+    if provider == "ollama":
+        for m in data.get("models", []):
+            models.append({"id": m.get("name", ""), "name": m.get("name", ""),
+                           "provider": "ollama"})
+    else:
+        for m in data.get("data", []):
+            models.append({"id": m.get("id", ""), "name": m.get("name", ""),
+                           "context": m.get("context_length") or m.get("context", 0),
+                           "provider": "openrouter"})
+    return models
+
+
+def list_provider_models(provider: str = "", api_key: str = "",
+                         ollama_base_url: str = "http://localhost:11434",
+                         timeout: float = 10.0) -> List[Dict[str, Any]]:
+    """Thin alias for the config panel; empty provider -> [] (no accidental calls)."""
+    if (provider or "").lower() in ("null", "", "none"):
+        return []
+    return list_models(provider=provider, api_key=api_key,
+                       ollama_base_url=ollama_base_url, timeout=timeout)

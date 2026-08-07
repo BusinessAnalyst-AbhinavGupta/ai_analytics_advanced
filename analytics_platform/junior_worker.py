@@ -139,6 +139,15 @@ class JuniorWorker:
         t0 = time.perf_counter()
         now = now if now is not None else self._clock()
         tid = tenant_id or self.tenant_id
+        # R6 gate: the operator can turn the junior analyst off entirely. When off,
+        # the worker never asks/solves, regardless of window/rate.
+        try:
+            junior_enabled = bool(self.junior.tenants.get_analyst_config(tid).junior.enabled)
+        except Exception:  # noqa: BLE001 - default to enabled on any config read issue
+            junior_enabled = True
+        if not junior_enabled:
+            return {"ran": False, "tenant_id": tid, "in_window": True,
+                    "rate_ok": True, "reason": "junior_disabled"}
         win = self.in_window(now)
         rate_ok = _mins_since(self._last_ran_ts(), now) >= self.min_interval_minutes
         if not win or not rate_ok:
