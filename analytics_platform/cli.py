@@ -110,6 +110,44 @@ def cmd_migrate(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_browser(args: argparse.Namespace) -> int:
+    from .execution.browser_session import make_live_executor
+    ex = make_live_executor()
+    if args.database_id is not None:
+        ex.config.database_id = args.database_id
+    if args.expected_host:
+        ex.config.expected_host = args.expected_host
+    if args.host:
+        ex.base_url = args.host.rstrip("/")
+    _print("Live Metabase executor", {
+        "database_id": ex.config.database_id,
+        "expected_host": ex.config.expected_host,
+        "base_url": ex.base_url})
+
+    status = ex.session_status(tenant_id=args.tenant_id or "")
+    _print("Session status", {
+        "state": status.state, "browser_ok": status.browser_ok,
+        "detail": status.detail})
+    if status.state != "valid":
+        print("Aborting: session is not usable; no query executed. "
+              "Log into Metabase in Chrome (active tab) and retry.", file=sys.stderr)
+        return 1
+    if not args.sql:
+        print("Session OK. Pass --sql to run a read-only query.")
+        return 0
+
+    from .execution.base import ExecutionContext
+    ctx = ExecutionContext(tenant_id=args.tenant_id or "", dialect="athena")
+    r = ex.execute(args.sql, ctx)
+    if not r.ok:
+        _print("Query failed", {"ok": False, "error": r.error})
+        return 1
+    head = r.data.head(args.head).to_dict("records") if r.data is not None else []
+    _print("Query result", {"ok": True, "row_count": r.row_count,
+                            "columns": r.columns, "head": head})
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="analytics-platform")
     sub = p.add_subparsers(dest="command", required=True)
@@ -130,6 +168,15 @@ def build_parser() -> argparse.ArgumentParser:
                     help="skip deriving DEFINITION nodes from query filters")
     mg.add_argument("--created-by", default="migration")
     mg.set_defaults(func=cmd_migrate)
+    br = sub.add_parser("browser", help="Live Metabase via the open Chrome tab "
+                                        "(uses ANALYTICS_MB_* env; read-only)")
+    br.add_argument("--tenant-id", default="", help="tenant id (informational scoping)")
+    br.add_argument("--sql", default="", help="read-only SQL to run (omit to just check the session)")
+    br.add_argument("--database-id", default=None, help="override Metabase database id")
+    br.add_argument("--expected-host", default="", help="override expected Metabase hostname")
+    br.add_argument("--host", default="", help="override Metabase base URL")
+    br.add_argument("--head", type=int, default=10, help="rows to print from the result")
+    br.set_defaults(func=cmd_browser)
     return p
 
 

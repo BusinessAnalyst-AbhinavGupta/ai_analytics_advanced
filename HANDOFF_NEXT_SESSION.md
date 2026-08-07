@@ -32,9 +32,11 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
   → `Settings.metabase_live/base_url/database_id/expected_host` (+`from_env`). `BrowserSessionExecutor`
   gained `from_env(runner=...)` classmethod + module `make_live_executor(settings=...)`; exported from
   `execution/`. database_id parsed to int when numeric. **62/62 tests.**
-- **CP-L2 — CLI `browser` live command (PENDING)**: `cli.py` subcommand `analytics-platform browser
-  [--sql ...] [--database-id N] [--expected-host HOST]`; reports `session_status()` and runs a read-only
-  query with fail-with-pause.
+- **CP-L2 — CLI `browser` live command (DONE)**: `cli.py` subcommand `analytics-platform browser
+  [--sql ...] [--database-id N] [--expected-host HOST] [--host URL] [--head N]`; prints
+  `session_status()` (valid/needs_login/unknown + detail), fails-with-pause before any query,
+  runs a read-only query and shows row_count/columns/head. Offline CLI tests in `tests/test_cli.py`
+  (5) → **67/67 tests.**
 - **CP-L3 — gated live test + docs (PENDING)**: `tests/test_metabase_live.py` (skip unless
   `ANALYTICS_MB_LIVE=1`), README + this doc refresh.
 
