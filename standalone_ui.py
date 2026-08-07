@@ -40,6 +40,12 @@ def _guarded(fn):
 
 
 _KINDS = ["", "QUERY", "DEFINITION", "IDIOM", "BUSINESS_RULE"]
+_ACTIONABLE = {"CANDIDATE", "UNDER_REVIEW", "REVISION_REQUIRED"}
+
+
+def _actionable(rows):
+    """Only nodes you can still approve/reject (REJECTED/APPROVED are excluded)."""
+    return [r for r in rows if r.get("status") in _ACTIONABLE]
 
 
 def _run_review(tenant, fn, confirm_msg):
@@ -62,6 +68,7 @@ def _queue_review(tenant):
     refresh = c[5].button("Refresh")
     rows = _guarded(lambda: _client().triage_queue(tenant, kind=kind, search=search,
                                                    limit=2000)) or []
+    rows = _actionable(rows)
     if not rows:
         st.info("Queue is empty for this filter.")
         return
@@ -148,6 +155,7 @@ def _definition_meta(node):
 def _definitions_review(tenant):
     st.subheader("Definition review (value-sets by column)")
     rows = _guarded(lambda: _client().triage_queue(tenant, kind="DEFINITION", limit=2000)) or []
+    rows = _actionable(rows)
     if not rows:
         st.info("No DEFINITION nodes to review.")
         return

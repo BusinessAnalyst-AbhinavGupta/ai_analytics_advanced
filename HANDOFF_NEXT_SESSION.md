@@ -171,6 +171,15 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
   read the definition and its provenance before deciding. Also fixed duplicate-button-ID errors
   (all review buttons now carry unique `key`s). Validated with Streamlit `AppTest` (no exceptions);
   UI restarted on `:8501 → :8001`.
+- **CP-X7 — prune value-set definitions (data task, DONE)** on `data/migration.db` tenant
+  `tnt_56a8295f82c3`, per the operator rule: first **rejected every node whose context contains a
+  "Business Problem"** (`payload.sql` for QUERY, `payload.source_sql` for DEFINITION) → **603 rejected
+  (123 QUERY + 480 DEFINITION)**; then **deduped the remaining actionable by title** (keep one, reject
+  rest) → **19 groups, 41 rejected**; result **REJECTED 644, CANDIDATE 112 (QUERY 35 + DEFINITION 77),
+  APPROVED 473**, with **0 title-conflicts among the remaining actionable** (the summary still reports
+  `conflicts: 74` — that's the global brain count, now mostly REJECTED and not actionable). Also the
+  **UI review views now filter to actionable statuses only** (REJECTED/APPROVED hidden), so the queue
+  shows just the 112 you can act on.
 
 ## How to run (all in repo root)
 ```bash
