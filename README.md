@@ -106,11 +106,15 @@ curl -s -X PUT  localhost:8000/tenants/$TID/company-profile \
 curl -s -X POST localhost:8000/tenants/$TID/questions \
   -H 'content-type: application/json' -d '{"question":"Order completion rate by month"}'
 curl -s localhost:8000/tenants/$TID/metrics
+curl -s localhost:8000/triage/$TID/summary          # senior-review inbox
+curl -s localhost:8000/junior/$TID/stage            # maturity stage (0-3)
+curl -s localhost:8000/junior/$TID/catalog          # schema / EDA of mapped tables
+curl -s localhost:8000/junior/$TID/questions        # goal-aligned suggestion questions
 ```
 
 ## Roadmap status
 - **P1–P3 foundation: DONE** — modular monolith, executor abstraction, deterministic policy,
-  governed Brain, tenancy, observability, offline execution, FastAPI (23 routes).
+  governed Brain, tenancy, observability, offline execution, FastAPI (36 routes).
 - **P2 browser-session hardening: DONE** — `BrowserSessionExecutor` hardened (host verification,
   result caps, `needs_login` fail-with-pause) with an **injectable OS runner** → fully
   unit-tested offline (no live Chrome needed) in `tests/test_browser_session.py`.
@@ -143,7 +147,11 @@ curl -s localhost:8000/tenants/$TID/metrics
   `tests/test_cli.py`, and the real-Metabase path is covered by the gated
   `TestJuniorMetabaseLive` (skipped unless `ANALYTICS_MB_LIVE=1`) — **3/3 live tests OK** on
   `metabase.om.yo-digital.com` DB 59 (incl. junior stage-3 reproduction + catalog).
+- **Triage + junior as FastAPI endpoints: DONE** — `/triage/{tenant_id}` (summary/queue/conflicts +
+  approve/reject/bulk) and `/junior/{tenant_id}` (stage/catalog/datasets/questions/reproduce)
+  expose the previous CLI-only services over HTTP (36 routes total; offline executor by default,
+  live browser executor when `ANALYTICS_MB_LIVE=1`). Covered by `tests/test_api.py` (endpoints hit
+  over a real `create_app(ctx)`, no new dependencies).
 
-Next per plan: keep triaging the ~871 remaining CANDIDATEs; expose review/junior via the FastAPI;
-and build the standalone UI (today: legacy Streamlit `app.py` as reference + FastAPI `/docs` Swagger;
-plan says React/Next.js later, Streamlit as a thin API client meanwhile).
+Next per plan: wire the `GatewayClient` LLM hook (richer stage-3 / question generation), then a
+thin Streamlit UI over the API, then keep triaging the ~871 remaining CANDIDATEs.

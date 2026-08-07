@@ -5,13 +5,13 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
 
 ## State
 - **HEAD `f6d74b3` (CP-L8), tree clean.** Original `AI analytics/` folder untouched.
-- **95/95 standalone tests pass** (all `tests/` modules except the legacy `test_ui_and_db`), plus the
+- **103/103 standalone tests pass** (all `tests/` modules except the legacy `test_ui_and_db`), plus the
   **3 live tests (2 `MetabaseLive` + 1 `TestJuniorMetabaseLive`) PASS when `ANALYTICS_MB_LIVE=1`**
   (skipped otherwise) — **live-CONFIRMED 2026-08-07, 3/3 OK in ~8s**. Run:
   `cd <repo> && .venv/bin/python -m unittest tests.test_brain tests.test_browser_session tests.test_cli
-  tests.test_ingest tests.test_integration tests.test_junior tests.test_metabase_live tests.test_migration
-  tests.test_onboarding tests.test_pipeline_e2e tests.test_policy tests.test_tenancy tests.test_triage
-  # -> 98 tests (3 live skipped)`
+  tests.test_api tests.test_ingest tests.test_integration tests.test_junior tests.test_metabase_live
+  tests.test_migration tests.test_onboarding tests.test_pipeline_e2e tests.test_policy tests.test_tenancy
+  tests.test_triage  # -> 106 tests (3 live skipped)`
   **Caveat (pre-existing, environmental):** `unittest discover -s tests` hangs on this machine in
   `test_ui_and_db.test_pipeline_with_form_metadata` — `core.IngestionPipeline.run`'s Step-4 Cypher
   generation waits on a Neo4j that isn't reachable here. It is legacy `core.*` code, unrelated to
@@ -22,7 +22,8 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
    .venv/bin/python -m unittest tests.test_metabase_live -v`
   → 3/3 OK: session valid + read-only `SELECT 1` (`MetabaseLive`) and junior stage‑3
   reproduction/catalog over the live browser executor (`TestJuniorMetabaseLive`).
-- Live API (offline demo) verified earlier; 23 routes.
+- Live API verified; **36 routes**, incl. `/triage/*` (summary/queue/conflicts/approve/reject/bulk)
+  and `/junior/*` (stage/catalog/datasets/questions/reproduce).
 
 ## Progress (Brain v2 migration — in progress)
 - **CP1 — mapper (DONE)**: added `NodeKind.IDIOM`; new `analytics_platform/migration/mapper.py`
@@ -130,15 +131,25 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
   catalogued through the live browser executor). The CP-L7 junior→live wiring is validated
   end-to-end on real Metabase.
 
+## Progress — API + LLM + UI road (current)
+- **CP-X1 — expose triage + junior as FastAPI endpoints (DONE)**: `api.py` gained `/triage/{tenant_id}`
+  (summary, queue, conflicts, approve, reject, bulk) and `/junior/{tenant_id}` (stage, catalog,
+  datasets, questions, reproduce) — previously CLI-only services now over HTTP (**36 routes**, was
+  25). Junior endpoints use the offline SamplerExecutor by default and the live
+  `BrowserSessionExecutor` only when `ANALYTICS_MB_LIVE=1` (`_api_junior_executor`). Added
+  `tests/test_api.py` (8 tests) which build a real `create_app(ctx)` and invoke the registered
+  route handlers directly (no httpx/TestClient needed) — hits wiring, tenant-404 gating, and the
+  endpoint→service path. **106 tests (3 live skipped).** README quick-start + roadmap updated.
+
 ## How to run (all in repo root)
 ```bash
 .venv/bin/python -m analytics_platform.cli demo      # offline E2E demo (synthetic company)
 .venv/bin/python -m analytics_platform serve 8000     # FastAPI → http://localhost:8000/docs
-# standalone tests (98 = 95 pass + 3 live skipped); NOTE: plain `discover -s tests`
+# standalone tests (106 = 103 pass + 3 live skipped); NOTE: plain `discover -s tests`
 # additionally includes the legacy tests/test_ui_and_db which can hang on this machine
 # (core.IngestionPipeline -> Neo4j not reachable) - see State caveat, it is untouched:
 .venv/bin/python -m unittest tests.test_brain tests.test_browser_session tests.test_cli \
-  tests.test_ingest tests.test_integration tests.test_junior tests.test_metabase_live \
+  tests.test_api tests.test_ingest tests.test_integration tests.test_junior tests.test_metabase_live \
   tests.test_migration tests.test_onboarding tests.test_pipeline_e2e tests.test_policy \
   tests.test_tenancy tests.test_triage
 ```
@@ -160,18 +171,19 @@ Deps frozen in `requirements-advanced.txt` (incl. `fastapi==0.141.1`).
 - `pipeline.py` — plan→policy→execute→analyze→persist; novel/anomalous → `REQUIRES_SENIOR_REVIEW`; `register_approved_query()`, `promote_finding()`.
 - `onboarding.py` — `OnboardingService`: provision_company / add_main_tables / ingest_legacy / candidates / review / readiness (stage 0–3) / digest.
 - `observability.py` — every hop emits span/event → `/metrics`.
-- `api.py` — `create_app(ctx)`; `make_context()`; onboarding endpoints; 23 routes.
+- `api.py` — `create_app(ctx)`; `make_context()`; onboarding + triage + junior endpoints; 36 routes.
 - `fixtures/` — synthetic retail warehouse + golden queries (athena-dialect SQL; transpiled at runtime).
 
-## Next steps (Brain v2 + Live-Metabase + Junior engine + Junior→live DONE; live E2E confirmed)
-1. **Keep triaging the remaining ~871 CANDIDATEs.** `cli review` — bulk approve by kind,
-   `--conflicts` to dedupe the value-set Definition candidates.
-2. (optional) Expose `triage`/`junior` as FastAPI endpoints + add an LLM hook for richer stage-3
-   questions (NullClient today → `GatewayClient`).
-3. (optional) **Standalone UI is not built yet.** Today's surfaces: legacy Streamlit `app.py`
-   (the working reference, `run_dashboard.command`), and the standalone FastAPI Swagger at
-   `serve 8000` → `/docs` (23 routes). Plan: "Frontend (later): React/Next.js; until then Streamlit
-   as a thin API client" (see `STANDALONE_ANALYTICS_PLATFORM_PLAN.md` §5).
+## Next steps (Brain v2 + Live-Metabase + Junior engine + Junior→live + API exposure DONE)
+1. **Wire the `GatewayClient` LLM hook.** `llm/client.py` is `NullClient` today (pipeline fully
+   deterministic); implement `GatewayClient` over the **static** `core.llm_gateway.LLMGateway`
+   (never `LLMGateway(...)`) for NL→plan/SQL and richer `suggest_questions`/stage-3, respecting the
+   LLM data controls (no raw rows / no cookies to the LLM).
+2. **Thin Streamlit UI over the API.** `app.py` (legacy, `core.*`) stays as reference; build a
+   standalone `streamlit` client hitting `/triage` + `/junior` + `/tenants` routes (a lookable
+   surface; React/Next later per plan §5).
+3. **Keep triaging the remaining ~871 CANDIDATEs.** `cli review` / `/triage` — bulk approve by
+   kind, `--conflicts` to dedupe the value-set Definition candidates.
 
 Re-run migration into any tenant's Brain (idempotent, CANDIDATE-only):
 `ANALYTICS_DB_PATH=<db> .venv/bin/python -m analytics_platform.cli migrate <tid> --snapshot extracted_data/knowledge_graph_snapshot.json`

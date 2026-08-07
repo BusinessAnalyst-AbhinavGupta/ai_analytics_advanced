@@ -1,9 +1,10 @@
 """FastAPI surface for the standalone platform.
 
 Endpoints mirror the plan's API groups (/tenants, /company-profile, /datasources,
-/questions, /analyses, /knowledge, /reviews, /metrics) as a modular-monolith API.
-Components stay in-process but every call emits telemetry, so the /metrics
-endpoint shows the pipeline as if each hop were a monitored API.
+/questions, /analyses, /knowledge, /reviews, /metrics) plus /triage (senior-review
+inbox) and /junior (maturity + schema EDA + goal-aligned questions) as a
+modular-monolith API. Components stay in-process but every call emits telemetry,
+so the /metrics endpoint shows the pipeline as if each hop were a monitored API.
 """
 from __future__ import annotations
 
@@ -21,10 +22,12 @@ from .config import Settings
 from .database import Store
 from .domain import (AnswerMode, DataSourceKind, KnowledgeNode, NodeKind, ReviewStatus, RunStatus)
 from .execution.sampler import SamplerExecutor
+from .junior import JuniorEngine
 from .observability import Observability
 from .onboarding import OnboardingService
 from .pipeline import Pipeline
 from .tenancy import TenantService
+from .triage import TriageService
 
 # --------------------------------------------------------------------------- #
 # Request models
@@ -117,6 +120,20 @@ class ReviewBatchIn(BaseModel):
     notes: str = ""
 
 
+class TriageIdsIn(BaseModel):
+    ids: List[str]
+    by: str = "senior"
+    notes: str = ""
+
+
+class TriageBulkIn(BaseModel):
+    kind: Optional[str] = None
+    action: str = "approve"     # approve | reject
+    by: str = "senior"
+    notes: str = ""
+    limit: int = 500
+
+
 # --------------------------------------------------------------------------- #
 # Application context
 # --------------------------------------------------------------------------- #
@@ -162,6 +179,28 @@ def bootstrap_demo(ctx: AppContext) -> str:
                                              by="admin", source_ref="onboarding")
     return t.id
 # <<PAPI2>>
+# --------------------------------------------------------------------------- #
+# Helpers (thin, testable glue for the endpoints)
+# --------------------------------------------------------------------------- #
+def _coerce_kind(kind: Optional[str]) -> Optional[NodeKind]:
+    if not kind:
+        return None
+    try:
+        return NodeKind(kind.upper())
+    except ValueError:
+        raise HTTPException(400, f"Invalid kind {kind}")
+
+
+def _api_junior_executor(settings: Settings, offline: Any) -> Any:
+    """Executor for the junior endpoints: live BrowserSessionExecutor when the
+    live gate (ANALYTICS_MB_LIVE=1) is set, else the offline SamplerExecutor.
+    Keeps the browser-cookie path out of the default API surface."""
+    if settings.metabase_live:
+        from .execution.browser_session import make_live_executor
+        return make_live_executor(settings=settings)
+    return offline
+
+
 # --------------------------------------------------------------------------- #
 # App
 # --------------------------------------------------------------------------- #
@@ -353,6 +392,66 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
     @app.get("/onboarding/{tenant_id}/digest")
     def onboard_digest(tenant_id: str) -> Dict[str, Any]:
         return C.onboarding.digest(tenant_id)
+
+    # -- triage (senior-review inbox over the Brain) ----------------------
+    def _triage(tenant_id: str) -> TriageService:
+        tenant_or_404(tenant_id)
+        return TriageService(ctx.store, ctx.observability)
+
+    @app.get("/triage/{tenant_id}/summary")
+    def triage_summary(tenant_id: str) -> Dict[str, Any]:
+        return _triage(tenant_id).summary(tenant_id)
+
+    @app.get("/triage/{tenant_id}/queue")
+    def triage_queue(tenant_id: str, kind: Optional[str] = None, search: str = "",
+                     limit: int = 100) -> List[Dict[str, Any]]:
+        svc = _triage(tenant_id)
+        return [n.to_dict() for n in
+                svc.queue(tenant_id, kind=_coerce_kind(kind), search=search, limit=limit)]
+
+    @app.get("/triage/{tenant_id}/conflicts")
+    def triage_conflicts(tenant_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+        return _triage(tenant_id).conflicts(tenant_id)[:limit]
+
+    @app.post("/triage/{tenant_id}/approve")
+    def triage_approve(tenant_id: str, body: TriageIdsIn) -> Dict[str, Any]:
+        return _triage(tenant_id).approve(tenant_id, body.ids, by=body.by, notes=body.notes)
+
+    @app.post("/triage/{tenant_id}/reject")
+    def triage_reject(tenant_id: str, body: TriageIdsIn) -> Dict[str, Any]:
+        return _triage(tenant_id).reject(tenant_id, body.ids, by=body.by, notes=body.notes)
+
+    @app.post("/triage/{tenant_id}/bulk")
+    def triage_bulk(tenant_id: str, body: TriageBulkIn) -> Dict[str, Any]:
+        return _triage(tenant_id).bulk(tenant_id, kind=_coerce_kind(body.kind),
+                                       action=body.action, by=body.by, notes=body.notes,
+                                       limit=body.limit)
+
+    # -- junior (maturity + schema EDA + goal-aligned questions) -----------
+    def _junior(tenant_id: str) -> JuniorEngine:
+        tenant_or_404(tenant_id)
+        return JuniorEngine(ctx.store, executor=_api_junior_executor(ctx.settings, ctx.executor),
+                            tenants=ctx.tenants, observability=ctx.observability)
+
+    @app.get("/junior/{tenant_id}/stage")
+    def junior_stage(tenant_id: str, limit: int = 200) -> Dict[str, Any]:
+        return _junior(tenant_id).stage(tenant_id, limit=limit)
+
+    @app.get("/junior/{tenant_id}/catalog")
+    def junior_catalog(tenant_id: str) -> Dict[str, Any]:
+        return _junior(tenant_id).catalog(tenant_id)
+
+    @app.get("/junior/{tenant_id}/datasets")
+    def junior_datasets(tenant_id: str) -> List[str]:
+        return _junior(tenant_id).datasets(tenant_id)
+
+    @app.get("/junior/{tenant_id}/questions")
+    def junior_questions(tenant_id: str, limit_per_target: int = 2) -> Dict[str, Any]:
+        return _junior(tenant_id).suggest_questions(tenant_id, limit_per_target=limit_per_target)
+
+    @app.get("/junior/{tenant_id}/reproduce")
+    def junior_reproduce(tenant_id: str, limit: int = 200) -> Dict[str, Any]:
+        return _junior(tenant_id).reproduce_metrics(tenant_id, limit=limit)
 
     return app
 
