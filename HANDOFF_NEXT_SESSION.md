@@ -37,8 +37,12 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
   `session_status()` (valid/needs_login/unknown + detail), fails-with-pause before any query,
   runs a read-only query and shows row_count/columns/head. Offline CLI tests in `tests/test_cli.py`
   (5) → **67/67 tests.**
-- **CP-L3 — gated live test + docs (PENDING)**: `tests/test_metabase_live.py` (skip unless
-  `ANALYTICS_MB_LIVE=1`), README + this doc refresh.
+- **CP-L3 — gated live test + docs (DONE)**: `tests/test_metabase_live.py` (`MetabaseLive`,
+  skipped unless `ANALYTICS_MB_LIVE=1`; asserts `valid` session + a read-only execute).
+  README gained a Live-Metabase "Run it" block + roadmap bullet; this doc refreshed.
+  **67/67 offline tests** (live test is skipped here). The final real E2E run happens on your
+  machine: `ANALYTICS_MB_LIVE=1 ANALYTICS_MB_DATABASE_ID=.. ANALYTICS_MB_EXPECTED_HOST=.. \
+  .venv/bin/python -m unittest discover -s tests -k MetabaseLive -v` (Chrome logged into Metabase).
 
 ## How to run (all in repo root)
 ```bash
@@ -67,18 +71,17 @@ Deps frozen in `requirements-advanced.txt` (incl. `fastapi==0.141.1`).
 - `api.py` — `create_app(ctx)`; `make_context()`; onboarding endpoints; 23 routes.
 - `fixtures/` — synthetic retail warehouse + golden queries (athena-dialect SQL; transpiled at runtime).
 
-## Next steps (Brain v2 migration is DONE — pick one next)
-1. **Junior maturity-stage engine (plan P5).** Stage-gated agent: stage 0–1 schema/EDA
+## Next steps (Live Metabase wired; Brain v2 DONE — pick one next)
+1. **Triage the migrated CANDIDATEs.** 1229 nodes await senior review; a lightweight review
+   workflow (CLI/API) to work through them — and `brain.conflicts()` (74 title conflicts) —
+   would make them usable.
+2. **Junior maturity-stage engine (plan P5).** Stage-gated agent: stage 0–1 schema/EDA
    (use `SamplerExecutor` + catalog), stage 2 metric reproduction vs approved definitions
    (the 1229 migrated CANDIDATE nodes are this engine's raw material), stage 3 goal-aligned
    questions from `CompanyProfile.targets`. Needs an LLM hook (NullClient today; swap to
    `GatewayClient` with provider config).
-2. **Bind live Metabase E2E (plan P2 finish).** `BrowserSessionExecutor` is ready but never
-   run against a real browser. Needs your logged-in Chrome on Metabase, a `database_id`, and
-   `expected_host`; add an integration test gated by env (`ANALYTICS_MB_LIVE=1`).
-3. **Triage the migrated CANDIDATEs.** 1229 nodes await senior review; a lightweight review
-   workflow (CLI/API) to work through them — and `brain.conflicts()` (74 title conflicts) —
-   would make them usable.
+3. **Final live-Metabase run (your Chrome).** Execute the gated `MetabaseLive` test /
+   `analytics-platform browser` with your `database_id` + `expected_host` to confirm E2E for real.
 
 Re-run migration into any tenant's Brain (idempotent, CANDIDATE-only):
 `ANALYTICS_DB_PATH=<db> .venv/bin/python -m analytics_platform.cli migrate <tid> --snapshot extracted_data/knowledge_graph_snapshot.json`

@@ -65,6 +65,18 @@ TID=<tenant-id>
 .venv/bin/python -m analytics_platform.cli migrate "$TID" \
   --snapshot extracted_data/knowledge_graph_snapshot.json
 ```
+```bash
+# LIVE Metabase (requires your logged-in Chrome + env)
+#   session check (read-only):  .venv/bin/python -m analytics_platform.cli browser
+#   run a real read-only query:
+ANALYTICS_MB_DATABASE_ID=<id> \
+ANALYTICS_MB_EXPECTED_HOST=<your.metabase.host> \
+.venv/bin/python -m analytics_platform.cli browser \
+  --sql "SELECT count(*) FROM <table-you-can-read>"
+# gated live E2E test (skipped unless ANALYTICS_MB_LIVE=1):
+ANALYTICS_MB_LIVE=1 \
+.venv/bin/python -m unittest discover -s tests -k MetabaseLive -v
+```
 
 ### API quick start
 ```bash
@@ -95,7 +107,12 @@ curl -s localhost:8000/tenants/$TID/metrics
   (QUERY + derived DEFINITION, IDIOM, BUSINESS_RULE) as **CANDIDATE**, idempotently via
   `cli migrate`. Verified on the real snapshot: **1229 nodes** (158 QUERY / 598 DEFINITION /
   180 IDIOM / 293 BUSINESS_RULE), **0 auto-approved**; needs senior review to become usable.
+- **Live Metabase bind: DONE (wiring + gated test)** — `Settings`/`from_env` + executor
+  `from_env`/`make_live_executor` (`ANALYTICS_MB_*`), CLI `analytics-platform browser`
+  (fail-with-pause session check + read-only execute), and a `MetabaseLive` E2E test
+  gated by `ANALYTICS_MB_LIVE=1`. Final real run happens on your machine (logged-in Chrome on
+  Metabase; see "Run it" above).
 
-Next per plan: the junior maturity-stage engine (stage-gated agent + metric reproduction
-from approved definitions), and binding live Metabase against the hardened browser executor
-end-to-end.
+Next per plan: triage the migrated CANDIDATEs (review/approve the 1229 + resolve the 74 title
+conflicts), then the junior maturity-stage engine (stage-gated agent + metric reproduction).
+Finishing the live-Metabase E2E run just needs your `ANALYTICS_MB_DATABASE_ID`/`EXPECTED_HOST`.
