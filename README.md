@@ -77,6 +77,12 @@ ANALYTICS_MB_EXPECTED_HOST=<your.metabase.host> \
 ANALYTICS_MB_LIVE=1 \
 .venv/bin/python -m unittest discover -s tests -k MetabaseLive -v
 ```
+```bash
+# Triage / senior-review the migrated CANDIDATEs:
+.venv/bin/python -m analytics_platform.cli review <tenant>            # summary + queue
+.venv/bin/python -m analytics_platform.cli review <tenant> --conflicts # title conflicts
+.venv/bin/python -m analytics_platform.cli review <tenant> --kind IDIOM --bulk-approve --quiet
+```
 
 ### API quick start
 ```bash
@@ -112,7 +118,12 @@ curl -s localhost:8000/tenants/$TID/metrics
   (fail-with-pause session check + read-only execute), and a `MetabaseLive` E2E test
   gated by `ANALYTICS_MB_LIVE=1`. Final real run happens on your machine (logged-in Chrome on
   Metabase; see "Run it" above).
+- **Triage: DONE** — `analytics_platform/triage.py` (`TriageService`: queue/summary/conflicts +
+  approve/reject/bulk by kind) and CLI `analytics-platform review <tenant>` (submit-then-approve;
+  only CANDIDATE/UNDER_REVIEW/REVISION_REQUIRED are touched). Verified E2E on the migrated
+  snapshot: 1229 CANDIDATEs → bulk-approve IDIOM (180) → actionable 1229→1049.
 
-Next per plan: triage the migrated CANDIDATEs (review/approve the 1229 + resolve the 74 title
-conflicts), then the junior maturity-stage engine (stage-gated agent + metric reproduction).
-Finishing the live-Metabase E2E run just needs your `ANALYTICS_MB_DATABASE_ID`/`EXPECTED_HOST`.
+Next per plan: the **junior maturity-stage engine** (stage-gated agent + metric reproduction
+from approved definitions). Finishing the live-Metabase E2E run just needs your
+`ANALYTICS_MB_DATABASE_ID`/`EXPECTED_HOST`; the remaining 871 CANDIDATEs are ready for senior
+triage via `cli review`.

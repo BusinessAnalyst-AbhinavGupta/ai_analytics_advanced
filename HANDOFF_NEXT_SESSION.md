@@ -52,7 +52,10 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
   <tenant> [--kind K] [--limit N] [--approve/--reject id,..] [--bulk-approve/--bulk-reject]
   [--by senior] [--conflicts] [--quiet]`. Service `approve/reject/bulk` (approve = submit-then-
   approve; only ACTIONABLE touched). CLI tests in `tests/test_cli.py` (3) → **81 tests (2 skipped).**
-- **CP-T3 — docs/API (PENDING)**: README + handoff refresh; optional API review endpoints.
+- **CP-T3 — docs + E2E smoke (DONE)**: verified on the real migrated snapshot (1229 CANDIDATEs
+  → `review --conflicts` shows value-set Definition conflicts → bulk-approve IDIOM 180 →
+  actionable 1229→1049). README gained a Triage run block + "Triage: DONE" roadmap bullet;
+  this doc refreshed. **Triage is complete (81 tests, 2 live skipped).**
 
 ## How to run (all in repo root)
 ```bash
@@ -81,17 +84,15 @@ Deps frozen in `requirements-advanced.txt` (incl. `fastapi==0.141.1`).
 - `api.py` — `create_app(ctx)`; `make_context()`; onboarding endpoints; 23 routes.
 - `fixtures/` — synthetic retail warehouse + golden queries (athena-dialect SQL; transpiled at runtime).
 
-## Next steps (Live Metabase wired; Brain v2 DONE — pick one next)
-1. **Triage the migrated CANDIDATEs.** 1229 nodes await senior review; a lightweight review
-   workflow (CLI/API) to work through them — and `brain.conflicts()` (74 title conflicts) —
-   would make them usable.
-2. **Junior maturity-stage engine (plan P5).** Stage-gated agent: stage 0–1 schema/EDA
-   (use `SamplerExecutor` + catalog), stage 2 metric reproduction vs approved definitions
-   (the 1229 migrated CANDIDATE nodes are this engine's raw material), stage 3 goal-aligned
-   questions from `CompanyProfile.targets`. Needs an LLM hook (NullClient today; swap to
-   `GatewayClient` with provider config).
-3. **Final live-Metabase run (your Chrome).** Execute the gated `MetabaseLive` test /
-   `analytics-platform browser` with your `database_id` + `expected_host` to confirm E2E for real.
+## Next steps (Triage DONE; Brain v2 + Live-Metabase wired — next up: junior engine)
+1. **Junior maturity-stage engine (plan P5).** Stage-gated agent: stage 0–1 schema/EDA
+   (use `SamplerExecutor` + catalog), stage 2 metric reproduction vs approved definitions,
+   stage 3 goal-aligned questions from `CompanyProfile.targets`. Needs an LLM hook
+   (NullClient today; swap to `GatewayClient` with provider config).
+2. **Finish the live-Metabase E2E (your Chrome).** Run the gated `MetabaseLive` test /
+   `analytics-platform browser` with your `database_id` + `expected_host`.
+3. **Keep triaging the remaining ~871 CANDIDATEs.** `cli review` — bulk approve by kind,
+   `--conflicts` to dedupe the value-set Definition candidates.
 
 Re-run migration into any tenant's Brain (idempotent, CANDIDATE-only):
 `ANALYTICS_DB_PATH=<db> .venv/bin/python -m analytics_platform.cli migrate <tid> --snapshot extracted_data/knowledge_graph_snapshot.json`
