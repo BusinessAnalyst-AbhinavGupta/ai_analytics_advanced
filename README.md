@@ -25,11 +25,12 @@ analytics_platform/
   analysis.py           wraps FastSummaryProfiler + BusinessRuleEngine; facts vs hypotheses framing
   pipeline.py           orchestration: plan -> policy -> execute -> analyze -> persist -> telemetry
   onboarding.py         P3 wizard: provision company -> main tables -> ingest legacy -> review -> readiness
+  migration/            brain-v2: knowledge-graph snapshot -> NodeSpec mapper + idempotent loader + cli 'migrate'
   observability.py      every hop emits an OpenTelemetry-style span/event + /metrics
   api.py                FastAPI (modular-monolith API; components stay in-process)
   cli.py / __main__.py  CLI demo + `python -m analytics_platform serve`
   fixtures/             synthetic retail company (warehouse + golden queries)
-tests/                  stdlib-unittest suite (26 tests)
+tests/                  stdlib-unittest suite (56 tests)
 ```
 
 ## Design invariants (from the plan)
@@ -57,6 +58,13 @@ tests/                  stdlib-unittest suite (26 tests)
 # API server (interactive: http://localhost:8000/docs)
 .venv/bin/python -m analytics_platform serve 8000
 ```
+```bash
+# migrate a prototype knowledge-graph snapshot into a tenant's Brain
+# (lands as CANDIDATE nodes only; idempotent — safe to re-run)
+TID=<tenant-id>
+.venv/bin/python -m analytics_platform.cli migrate "$TID" \
+  --snapshot extracted_data/knowledge_graph_snapshot.json
+```
 
 ### API quick start
 ```bash
@@ -82,6 +90,12 @@ curl -s localhost:8000/tenants/$TID/metrics
 - **P3 onboarding wizard: DONE** — `OnboardingService` + `/onboarding*` API: provision company,
   map main tables, ingest legacy SQL as CANDIDATE, senior review (approve/reject), and a
   readiness/stage report to gate the junior analyst.
+- **Brain v2 migration: DONE** — `analytics_platform/migration/` maps
+  `extracted_data/knowledge_graph_snapshot.json` into governed `KnowledgeNode`s
+  (QUERY + derived DEFINITION, IDIOM, BUSINESS_RULE) as **CANDIDATE**, idempotently via
+  `cli migrate`. Verified on the real snapshot: **1229 nodes** (158 QUERY / 598 DEFINITION /
+  180 IDIOM / 293 BUSINESS_RULE), **0 auto-approved**; needs senior review to become usable.
 
-Next per plan: bind live Metabase against the hardened browser executor end-to-end,
-Company Brain v2 migration from the prototype's Neo4j graph, and the junior maturity-stage engine.
+Next per plan: the junior maturity-stage engine (stage-gated agent + metric reproduction
+from approved definitions), and binding live Metabase against the hardened browser executor
+end-to-end.

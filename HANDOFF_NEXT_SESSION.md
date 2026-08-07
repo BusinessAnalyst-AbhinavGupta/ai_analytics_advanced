@@ -22,7 +22,10 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
   (16 migration tests total, **56/56 overall**). Verified on the real snapshot: 1229 nodes
   (158 QUERY / 598 DEFINITION / 180 IDIOM / 293 BUSINESS_RULE), all CANDIDATE, 0 auto-approved;
   CLI is idempotent across runs.
-- **CP3 — real migrate + handoff (PENDING)**: run against `extracted_data/knowledge_graph_snapshot.json`, verify, refresh this doc.
+- **CP3 — real migrate + docs (DONE)**: verified real migrate (1229 nodes; 158 QUERY / 598
+  DEFINITION / 180 IDIOM / 293 BUSINESS_RULE; all CANDIDATE; **0 auto-approved**; idempotent)
+  and CLI end-to-end. README roadmap marked **Brain v2 migration DONE**; this doc refreshed.
+  **Brain v2 migration is complete (56/56 tests).**
 
 ## How to run (all in repo root)
 ```bash
@@ -51,10 +54,21 @@ Deps frozen in `requirements-advanced.txt` (incl. `fastapi==0.141.1`).
 - `api.py` — `create_app(ctx)`; `make_context()`; onboarding endpoints; 23 routes.
 - `fixtures/` — synthetic retail warehouse + golden queries (athena-dialect SQL; transpiled at runtime).
 
-## Next steps (pick one)
-1. **Bind live Metabase E2E (plan P2 finish).** `BrowserSessionExecutor` is ready but never run against a real browser. Needs: your logged-in Chrome on Metabase, a `database_id`, and `expected_host`. Test: build executor, call `session_status()` (expect `valid`), then `execute()` a real query. Add an integration test gated by env (`ANALYTICS_MB_LIVE=1`).
-2. **Company Brain v2 migration (plan P4).** Port the prototype's Neo4j knowledge graph → this governed Brain. Source data: `extracted_data/knowledge_graph_snapshot.json` (and/or live Neo4j via `core/graph_learner.py`). Map golden queries/column definitions/rules → `KnowledgeNode`s with provenance, run through review lifecycle. Add `analytics_platform/migration/`.
-3. **Junior maturity-stage engine (plan P5).** Stage-gated agent: stage 0–1 schema/EDA (use `SamplerExecutor` + catalog), stage 2 metric reproduction vs approved definitions, stage 3 goal-aligned questions from `CompanyProfile.targets`. Needs an LLM hook (NullClient today; swap to `GatewayClient` with provider config).
+## Next steps (Brain v2 migration is DONE — pick one next)
+1. **Junior maturity-stage engine (plan P5).** Stage-gated agent: stage 0–1 schema/EDA
+   (use `SamplerExecutor` + catalog), stage 2 metric reproduction vs approved definitions
+   (the 1229 migrated CANDIDATE nodes are this engine's raw material), stage 3 goal-aligned
+   questions from `CompanyProfile.targets`. Needs an LLM hook (NullClient today; swap to
+   `GatewayClient` with provider config).
+2. **Bind live Metabase E2E (plan P2 finish).** `BrowserSessionExecutor` is ready but never
+   run against a real browser. Needs your logged-in Chrome on Metabase, a `database_id`, and
+   `expected_host`; add an integration test gated by env (`ANALYTICS_MB_LIVE=1`).
+3. **Triage the migrated CANDIDATEs.** 1229 nodes await senior review; a lightweight review
+   workflow (CLI/API) to work through them — and `brain.conflicts()` (74 title conflicts) —
+   would make them usable.
+
+Re-run migration into any tenant's Brain (idempotent, CANDIDATE-only):
+`ANALYTICS_DB_PATH=<db> .venv/bin/python -m analytics_platform.cli migrate <tid> --snapshot extracted_data/knowledge_graph_snapshot.json`
 
 ## Invariants (do not break)
 - LLMGateway is **static-only**: always `LLMGateway.generate(...)`, never `LLMGateway(...)`.
