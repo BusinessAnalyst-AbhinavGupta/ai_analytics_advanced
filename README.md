@@ -233,7 +233,8 @@ ANALYTICS_API_URL=http://localhost:8001 .venv/bin/streamlit run standalone_ui.py
   the UI; covered by the API + `ui_client` test suites.
 
 Next per plan (after **CP-11** config panel + depth + MD, **CP-12** live junior with persisted 1/hr +
-3/day caps + OpenRouter insight, and **CP-13** the LLM bill guard — process-wide TTL cache + persisted
-daily LLM budget + UI cache): wire the operator tail for P8 (live OIDC/SSO + per-tenant browser
-profile) and the security tail (threat model / pen test / DR / SOC2 readiness), then junior Stage 4–5
-autonomy. Senior review of the migrated Brain is complete (536 approved / 693 rejected).
+3/day caps + OpenRouter insight, **CP-13** the LLM bill guard — process-wide TTL cache + persisted
+daily LLM budget + UI cache — and **CP-14** the draining senior review + no-repeat junior): wire the
+operator tail for P8 (live OIDC/SSO + per-tenant browser profile) and the security tail (threat model
+/ pen test / DR / SOC2 readiness), then junior Stage 4–5 autonomy. Senior review of the migrated Brain
+is complete (536 approved / 693 rejected).

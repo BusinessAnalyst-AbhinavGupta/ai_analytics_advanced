@@ -8,10 +8,27 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
 > snapshot on top of it — keep the plan's spine updated when work lands.
 
 ## State
-- **HEAD `f427179` **CP-13** (`main`) — clean tree; everything committed.** P0–P9 core + CP-10 + CP-11 +
-  CP-12 + CP-13 + triage + launcher/docs are all in `git log`. Original `AI analytics/` folder untouched.
-  Latest checkpoints: `f427179` **CP-13** (LLM bill guard) · `59000c7` **CP-12** (live junior + caps)
-  · `49af43f` **CP-11** (config panel + junior depth + MD).
+- **HEAD `e99580e` **CP-14** (`main`) — clean tree; everything committed.** P0–P9 core + CP-10 + CP-11 +
+  CP-12 + CP-13 + CP-14 + triage + launcher/docs are all in `git log`. Original `AI analytics/`
+  folder untouched.
+  Latest checkpoints: `e99580e` **CP-14** (draining senior review + no-repeat junior) · `f427179`
+  **CP-13** (LLM bill guard) · `59000c7` **CP-12** (live junior + persisted caps).
+- **CP-14 (draining senior review) is IN** — the review inbox no longer grows:
+  * `SeniorService.queue` now **excludes approved AND rejected** runs (it used to leave
+    approved ones in the inbox), so approving or rejecting visibly empties a row. Approved
+    analyses are governed **FINDING** nodes in the knowledge graph (already the case via
+    `promote_finding`); rejected ones are recorded as declined.
+  * The **junior never re-asks a question it already answered**: `JuniorWorker.pick_problem_statement`
+    now skips any question present in `analysis_runs` (`_answered_questions`), so once a funnel
+    question is explored it is not asked again — it favours unexplored approved queries, then
+    freshly suggested questions, then a baseline.
+  * A **review-backlog gate** (`junior_review_backlog_max`, config `analytics_platform/config.py`,
+    env `ANALYTICS_JUNIOR_REVIEW_BACKLOG_MAX`, default 3): once that many completed analyses are
+    still awaiting/back for senior review, the worker backs off (`reason="review_backlog"`) until
+    the inbox drains; `force=True` (test/operator lever) bypasses it.
+  * The UI senior-inbox now shows a clean one-line result and **reruns** after Approve/Reject so the
+    item drops out immediately (removed the fragile `st.success(res) if ... else st.error(...)` bit
+    that surfaced a Streamlit DeltaGenerator dump).
 - **CP-13 (LLM bill guard) is IN** — the OpenRouter enrichment for suggested questions/hypotheses is
   now throttled **process-wide** (module-level TTL cache, default 60 min per tenant), so Streamlit
   reruns (any checkbox/button tick) or any API caller fires at most **one** LLM generation per tenant
@@ -31,14 +48,14 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
   toggles + model, versioned per tenant in `analyst_configs` + `analyst_config_history`); senior
   review inbox (`approve`/`reject`/`revise` → FINDING; human-on-top); junior depth + human-signoff
   window; per-analysis `.md` review files; config tab + model ping.
-- **189/189 standalone tests pass** (all `tests/` modules except the legacy `test_ui_and_db`).
+- **193/193 standalone tests pass** (all `tests/` modules except the legacy `test_ui_and_db`).
   Run: `cd <repo> && .venv/bin/python -m unittest tests.test_api tests.test_brain
   tests.test_browser_session tests.test_cli tests.test_governance_auth
   tests.test_governance_retention tests.test_ingest tests.test_junior
   tests.test_llm tests.test_llm_cache tests.test_migration tests.test_onboarding tests.test_phase9
-  tests.test_pipeline_e2e tests.test_policy tests.test_research tests.test_senior_depth
-  tests.test_stakeholder tests.test_tenancy tests.test_config_panel tests.test_triage tests.test_ui_client
-  # -> 189 tests (3 live skipped)`
+  tests.test_pipeline_e2e tests.test_policy tests.test_review_flow tests.test_research
+  tests.test_senior_depth tests.test_stakeholder tests.test_tenancy tests.test_config_panel
+  tests.test_triage tests.test_ui_client  # -> 193 tests (3 live skipped)`
   **Caveat (pre-existing, environmental):** `unittest discover -s tests` hangs on this machine in
   `test_ui_and_db.test_pipeline_with_form_metadata` — `core.IngestionPipeline.run`'s Step-4 Cypher
   generation waits on a Neo4j that isn't reachable here. It is legacy `core.*` code, unrelated to
