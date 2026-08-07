@@ -186,6 +186,12 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
   then among the remaining actionable there were **0 conflict groups** so no random-pick drops were
   needed. Final `REJECTED 644, APPROVED 516, CANDIDATE 69 (QUERY 20 + DEFINITION 49)` — 0 actionable
   title-conflicts.
+- **CP-X9 — approve all QUERY kind (DONE)**: approved the remaining **20 actionable QUERY** on
+  `data/migration.db`. QUERY kind is now **fully resolved: APPROVED 35 (15 journey-stage pass + 20
+  now), REJECTED 123, CANDIDATE 0**. Overall `REJECTED 645, APPROVED 536, CANDIDATE 48 (all DEFINITION)`.
+  *Note: during this op one DEFINITION (`kn_4550f49aca16`) was seen REJECTED with the UI-default note
+  "rejected in triage" (timestamped in this window) — a concurrent UI Conflicts-tab action, not from
+  the QUERY-approve (which only ran `approve`).*
 
 ## How to run (all in repo root)
 ```bash
@@ -237,10 +243,10 @@ Deps frozen in `requirements-advanced.txt` (incl. `fastapi==0.141.1`).
   senior reviewer.*
 
 ## Next steps (Brain v2 + Live-Metabase + Junior engine + Junior→live + API exposure + LLM hook + thin UI + first triage DONE)
-1. **Finish reviewing the remaining 69 CANDIDATEs (QUERY 20 + DEFINITION 49)** in the UI review panel
+1. **Review the remaining 48 CANDIDATE DEFINITIONs** in the UI review panel
    (`http://localhost:8501` → review API `:8001` → `data/migration.db`, tenant `tnt_56a8295f82c3`);
-   the value-set conflicts are already deduped (0 actionable title-conflicts) — approval stays the
-   hard gate.
+   QUERY is fully resolved (35 approved / 123 rejected), the value-set conflicts are deduped
+   (0 actionable title-conflicts) — approval stays the hard gate.
    Note: approving QUERYs (and setting company-profile targets) is what lifts `junior stage` to 2→3;
    DEFINITION approvals drive `defined_terms`/essential-term coverage. This review is a gate to junior
    value, but not to the orthogonal P6–P8 feature milestones below — they can proceed in parallel.
