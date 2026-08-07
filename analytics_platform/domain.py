@@ -89,6 +89,45 @@ class CompanyTarget:
 
 
 @dataclass
+class AnalystAI:
+    """Per-analyst AI capability toggle + model selection (config panel).
+
+    `enabled=False` turns that analyst's autonomous AI off. For the senior this
+    means its workload falls to a human, who performs the senior role through the
+    same interface (see SeniorService). Model fields are non-secret (provider +
+    model id); any API key is injected at runtime from env, never stored here.
+    """
+
+    role: str = "junior"          # junior | senior | stakeholder
+    enabled: bool = True
+    provider: str = ""            # e.g. openrouter | gemini | ollama
+    model: str = ""               # e.g. deepseek/deepseek-v4-flash-0731
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class AnalystConfig:
+    """All three analysts' AI + model config for one tenant."""
+
+    tenant_id: str
+    junior: AnalystAI = field(default_factory=lambda: AnalystAI("junior"))
+    senior: AnalystAI = field(default_factory=lambda: AnalystAI("senior"))
+    stakeholder: AnalystAI = field(default_factory=lambda: AnalystAI("stakeholder"))
+    updated_at: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "tenant_id": self.tenant_id,
+            "junior": self.junior.to_dict(),
+            "senior": self.senior.to_dict(),
+            "stakeholder": self.stakeholder.to_dict(),
+            "updated_at": self.updated_at,
+        }
+
+
+@dataclass
 class CompanyProfile:
     tenant_id: str
     name: str = ""

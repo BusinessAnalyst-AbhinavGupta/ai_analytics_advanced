@@ -33,6 +33,7 @@ from .junior_worker import JuniorWorker
 from .research import ResearchService
 from .retention import RetentionService
 from .scheduler import Scheduler
+from .senior import SeniorService
 from .stakeholder import StakeholderService
 from .tenancy import TenantService
 from .triage import TriageService
@@ -129,6 +130,28 @@ class ReviewBatchIn(BaseModel):
     notes: str = ""
 
 
+class AnalystToggleIn(BaseModel):
+    enabled: Optional[bool] = None
+    provider: str = ""
+    model: str = ""
+
+
+class AnalystConfigIn(BaseModel):
+    """Config panel: per-analyst AI toggles + model selection. API keys are
+    intentionally *not* accepted here — injected at runtime from env."""
+    junior: Optional[AnalystToggleIn] = None
+    senior: Optional[AnalystToggleIn] = None
+    stakeholder: Optional[AnalystToggleIn] = None
+    changed_by: Optional[str] = "owner"
+
+
+class SeniorReviewIn(BaseModel):
+    run_id: str
+    action: str = "approve"   # approve | reject | revise
+    by: str = "human"         # the human playing senior (or an AI identity)
+    notes: str = ""
+
+
 class TriageIdsIn(BaseModel):
     ids: List[str]
     by: str = "senior"
@@ -208,6 +231,7 @@ class AppContext:
     scheduler: Optional[Any] = None
     junior_worker: Optional[Any] = None
     junior: Optional[Any] = None
+    senior: Optional[Any] = None
 
 
 def make_context(settings: Optional[Settings] = None,
@@ -237,12 +261,13 @@ def make_context(settings: Optional[Settings] = None,
                           retention_days=settings.log_retention_days,
                           maintenance_interval_days=settings.maintenance_interval_days,
                           junior_worker=junior_worker)
+    senior = SeniorService(store, pipeline, tenants, observability=obs)
     return AppContext(settings=settings, store=store, tenants=tenants,
                       observability=obs, pipeline=pipeline, executor=executor,
                       onboarding=onboarding, stakeholder=stakeholder,
                       research=research, auth=auth, billing=billing,
                       retention=retention, scheduler=scheduler,
-                      junior_worker=junior_worker, junior=junior)
+                      junior_worker=junior_worker, junior=junior, senior=senior)
 
 
 def _make_junior_worker(settings: Settings, store: Store, junior: Any,
@@ -302,6 +327,9 @@ def ensure_services(ctx: AppContext) -> AppContext:
             retention_days=ctx.settings.log_retention_days,
             maintenance_interval_days=ctx.settings.maintenance_interval_days,
             junior_worker=ctx.junior_worker)
+    if ctx.senior is None:
+        ctx.senior = SeniorService(ctx.store, ctx.pipeline, ctx.tenants,
+                                   observability=ctx.observability)
     return ctx
 
 

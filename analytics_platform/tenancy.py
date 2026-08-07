@@ -8,8 +8,29 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from .database import Store, dump_json, load_json
-from .domain import (CompanyProfile, CompanyTarget, DataSource, DataSourceKind,
-                     Tenant, TenantStatus, new_id, now_iso)
+from .domain import (AnalystAI, AnalystConfig, CompanyProfile, CompanyTarget,
+                     DataSource, DataSourceKind, Tenant, TenantStatus, new_id, now_iso)
+
+# Analyst-role defaults (config panel). API keys never stored — injected at runtime.
+_ROLES = ("junior", "senior", "stakeholder")
+
+
+def _analyst_from_dict(role: str, d: Optional[Dict[str, Any]]) -> AnalystAI:
+    d = d or {}
+    return AnalystAI(role=role, enabled=bool(d.get("enabled", True)),
+                     provider=d.get("provider", "") or "",
+                     model=d.get("model", "") or "")
+
+
+def _config_from_dict(tenant_id: str, cfg: Optional[Dict[str, Any]]) -> AnalystConfig:
+    cfg = cfg or {}
+    return AnalystConfig(
+        tenant_id=tenant_id,
+        junior=_analyst_from_dict("junior", cfg.get("junior")),
+        senior=_analyst_from_dict("senior", cfg.get("senior")),
+        stakeholder=_analyst_from_dict("stakeholder", cfg.get("stakeholder")),
+        updated_at=cfg.get("updated_at", ""),
+    )
 
 
 class TenantService:
@@ -146,5 +167,62 @@ class TenantService:
         for r in self.store.rows_to_dicts(rows):
             r["tables"] = load_json(r["tables"], [])
             r["config"] = load_json(r["config"], {})
+            out.append(r)
+        return out
+
+    # -- analyst AI config (toggles + per-role model) -----------------------
+    def get_analyst_config(self, tenant_id: str) -> AnalystConfig:
+        """Current analyst AI config (junior/senior/stakeholder) + model selection."""
+        self.require_tenant(tenant_id)
+        row = self.store.query_one(
+            "SELECT config FROM analyst_configs WHERE tenant_id=?", (tenant_id,))
+        cfg = load_json(row["config"]) if row and row["config"] else {}
+        if not cfg:
+            cfg = _config_from_dict(tenant_id, {}).to_dict()
+        return _config_from_dict(tenant_id, cfg)
+
+    def set_analyst_config(self, tenant_id: str, config: Dict[str, Any],
+                           changed_by: str = "owner") -> AnalystConfig:
+        """Persist analyst toggles + model config; append a versioned history \
+        snapshot (config panel). API keys are ignored/stripped — never stored."""
+        self.require_tenant(tenant_id)
+        merged = self.get_analyst_config(tenant_id).to_dict()
+        for role in _ROLES:
+            incoming = config.get(role)
+            if isinstance(incoming, dict):
+                cur = merged.get(role, {})
+                for k in ("enabled", "provider", "model"):
+                    if k in incoming and incoming[k] is not None:
+                        cur[k] = incoming[k] if k != "enabled" else \
+                            (incoming[k] if isinstance(incoming[k], bool) else bool(incoming[k]))
+                merged[role] = cur
+        cfg = _config_from_dict(tenant_id, merged)
+        cfg.updated_at = now_iso()
+        self.store.execute(
+            "INSERT INTO analyst_configs (tenant_id, config, updated_at) VALUES (?,?,?) "
+            "ON CONFLICT(tenant_id) DO UPDATE SET config=excluded.config, "
+            "updated_at=excluded.updated_at",
+            (tenant_id, dump_json(cfg.to_dict()), cfg.updated_at))
+        # versioned history (config panel log over time)
+        prev = self.store.query_one(
+            "SELECT COALESCE(MAX(version),0) AS v FROM analyst_config_history "
+            "WHERE tenant_id=?", (tenant_id,))
+        version = (prev["v"] if prev else 0) + 1
+        self.store.execute(
+            "INSERT INTO analyst_config_history "
+            "(id, tenant_id, version, snapshot, changed_by, created_at) VALUES (?,?,?,?,?,?)",
+            (new_id("acfg"), tenant_id, version, dump_json(cfg.to_dict()),
+             changed_by, now_iso()))
+        return cfg
+
+    def get_analyst_config_history(self, tenant_id: str,
+                                   limit: int = 20) -> List[Dict[str, Any]]:
+        """Versioned log of analyst config changes (config panel history)."""
+        rows = self.store.query_all(
+            "SELECT * FROM analyst_config_history WHERE tenant_id=? "
+            "ORDER BY version DESC LIMIT ?", (tenant_id, limit))
+        out = []
+        for r in self.store.rows_to_dicts(rows):
+            r["snapshot"] = load_json(r.get("snapshot"), {})
             out.append(r)
         return out

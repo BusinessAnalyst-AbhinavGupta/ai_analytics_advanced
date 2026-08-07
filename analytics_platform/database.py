@@ -95,6 +95,13 @@ CREATE TABLE IF NOT EXISTS api_logs (
 CREATE TABLE IF NOT EXISTS scheduler_state (
     key TEXT PRIMARY KEY, value TEXT, updated_at TEXT
 );
+CREATE TABLE IF NOT EXISTS analyst_configs (
+    tenant_id TEXT PRIMARY KEY, config TEXT, updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS analyst_config_history (
+    id TEXT PRIMARY KEY, tenant_id TEXT, version INTEGER,
+    snapshot TEXT, changed_by TEXT, created_at TEXT
+);
 CREATE INDEX IF NOT EXISTS idx_api_logs_ts ON api_logs(ts);
 CREATE INDEX IF NOT EXISTS idx_api_logs_tenant ON api_logs(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_kn_tenant ON knowledge_nodes(tenant_id);
@@ -105,6 +112,8 @@ CREATE INDEX IF NOT EXISTS idx_sa_tenant ON stakeholder_answers(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_rd_tenant ON research_docs(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_audit_tenant ON audit_log(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_cph_tenant ON company_profile_history(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_acfg_tenant ON analyst_configs(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_ach_tenant ON analyst_config_history(tenant_id);
 """
 
 
