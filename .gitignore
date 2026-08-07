@@ -3,3 +3,6 @@ __pycache__
 *.pyc
 .DS_Store
 runs.db
+logs/
+checkpoints/
+data/*.db

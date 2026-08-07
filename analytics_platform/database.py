@@ -1,0 +1,132 @@
+"""SQLite persistence (stdlib sqlite3) for app state + the Company Brain.
+
+Chosen for a zero-dependency, portable MVP. The store is deliberately split by
+tenant via scoped WHERE clauses everywhere a caller queries by tenant_id. In a
+later phase this can be swapped for PostgreSQL without changing call sites.
+"""
+from __future__ import annotations
+
+import json
+import os
+import sqlite3
+import threading
+from typing import Any, Dict, List, Optional
+
+_LOCK = threading.RLock()
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS tenants (
+    id TEXT PRIMARY KEY, name TEXT, region TEXT, llm_provider TEXT,
+    retention_days INTEGER, status TEXT, created_at TEXT, purpose TEXT
+);
+CREATE TABLE IF NOT EXISTS company_profiles (
+    tenant_id TEXT PRIMARY KEY,
+    name TEXT, industry TEXT, region TEXT, description TEXT,
+    customers TEXT, product TEXT, value_creation TEXT, revenue_model TEXT,
+    constraints TEXT, risks TEXT, competitors TEXT, preferred_metrics TEXT,
+    targets TEXT
+);
+CREATE TABLE IF NOT EXISTS data_sources (
+    id TEXT PRIMARY KEY, tenant_id TEXT, name TEXT, kind TEXT, dialect TEXT,
+    connected INTEGER, tables TEXT, config TEXT, created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS knowledge_nodes (
+    id TEXT PRIMARY KEY, tenant_id TEXT, kind TEXT, status TEXT, version INTEGER,
+    title TEXT, summary TEXT, payload TEXT,
+    confidence TEXT, evidence_ref TEXT, source_ref TEXT,
+    created_at TEXT, updated_at TEXT, created_by TEXT, reviewed_by TEXT,
+    review_notes TEXT, supersedes TEXT
+);
+CREATE TABLE IF NOT EXISTS questions (
+    id TEXT PRIMARY KEY, tenant_id TEXT, text TEXT, mode_budget TEXT, created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS analysis_runs (
+    id TEXT PRIMARY KEY, tenant_id TEXT, trace_id TEXT, question_id TEXT,
+    question_text TEXT, sql TEXT, dialect TEXT, executor TEXT, status TEXT,
+    answer_mode TEXT, review_status TEXT, generated_at TEXT, execution_ms REAL,
+    row_count INTEGER, profile_summary TEXT, rule_triggers TEXT, answer TEXT,
+    facts TEXT, hypotheses TEXT, uncertainties TEXT, next_actions TEXT,
+    cost_estimate REAL, policy_reasons TEXT, source_node_ids TEXT
+);
+CREATE TABLE IF NOT EXISTS telemetry (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT, tenant_id TEXT, trace_id TEXT, stage TEXT, actor TEXT,
+    resource TEXT, status TEXT, duration_ms REAL, bytes_in INTEGER,
+    tokens_in INTEGER, tokens_out INTEGER, meta TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_kn_tenant ON knowledge_nodes(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_runs_tenant ON analysis_runs(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_tel_tenant ON telemetry(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_tel_trace ON telemetry(trace_id);
+"""
+
+
+def get_conn(db_path: str) -> sqlite3.Connection:
+    parent = os.path.dirname(os.path.abspath(db_path))
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    conn = sqlite3.connect(db_path, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    return conn
+
+
+def init_db(conn: sqlite3.Connection) -> None:
+    with _LOCK:
+        conn.executescript(SCHEMA)
+        conn.commit()
+
+
+def dump_json(obj: Any) -> str:
+    return json.dumps(obj, default=str)
+
+
+def load_json(raw: Optional[str], default: Any = None) -> Any:
+    if not raw:
+        return default
+    try:
+        return json.loads(raw)
+    except Exception:
+        return default
+
+
+class Store:
+    """Thin wrapper: safe single write + serialization helpers."""
+
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+        self.conn = get_conn(db_path)
+        init_db(self.conn)
+
+    def connect(self) -> sqlite3.Connection:
+        return self.conn
+
+    def query_all(self, sql: str, params: tuple = ()) -> List[sqlite3.Row]:
+        with _LOCK:
+            return self.conn.execute(sql, params).fetchall()
+
+    def query_one(self, sql: str, params: tuple = ()) -> Optional[sqlite3.Row]:
+        with _LOCK:
+            cur = self.conn.execute(sql, params)
+            return cur.fetchone()
+
+    def execute(self, sql: str, params: tuple = ()) -> None:
+        with _LOCK:
+            self.conn.execute(sql, params)
+            self.conn.commit()
+
+    def execute_many(self, statements: List[tuple]) -> None:
+        with _LOCK:
+            for sql, params in statements:
+                self.conn.execute(sql, params)
+            self.conn.commit()
+
+    def close(self) -> None:
+        try:
+            self.conn.close()
+        except Exception:
+            pass
+
+    def rows_to_dicts(self, rows: List[sqlite3.Row]) -> List[Dict[str, Any]]:
+        return [dict(r) for r in rows]

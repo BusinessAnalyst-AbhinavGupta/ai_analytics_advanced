@@ -1,0 +1,45 @@
+"""Policy engine tests."""
+from __future__ import annotations
+
+import unittest
+
+from analytics_platform.config import PolicySettings
+from analytics_platform.execution.policy import QueryPolicy
+
+
+class TestPolicy(unittest.TestCase):
+    def setUp(self):
+        self.policy = QueryPolicy(PolicySettings())
+
+    def test_allows_read_only_select(self):
+        d = self.policy.validate("SELECT color, COUNT(*) n FROM shirt GROUP BY 1")
+        self.assertTrue(d.allowed, d.reasons)
+
+    def test_appends_limit_when_absent(self):
+        d = self.policy.validate("SELECT * FROM shirt")
+        self.assertTrue(d.allowed)
+        self.assertIn("LIMIT", d.approved_sql.upper())
+
+    def test_blocks_dml(self):
+        for stmt in ("UPDATE shirt SET x=1", "DELETE FROM shirt", "INSERT INTO shirt VALUES (1)"):
+            d = self.policy.validate(stmt)
+            self.assertFalse(d.allowed)
+            self.assertTrue(any("read-only" in r.lower() or "blocked" in r.lower()
+                                for r in d.reasons), d.reasons)
+
+    def test_blocks_multi_statement(self):
+        d = self.policy.validate("SELECT 1; DROP TABLE shirt;").allowed
+        self.assertFalse(d)
+
+    def test_blocks_unlisted_table_when_allowlist_given(self):
+        d = self.policy.validate("SELECT * FROM secrets", allowed_tables=["public.shirt"])
+        self.assertFalse(d.allowed)
+        self.assertTrue(any("allow-list" in r for r in d.reasons), d.reasons)
+
+    def test_allows_listed_table(self):
+        d = self.policy.validate("SELECT * FROM shirt", allowed_tables=["public.shirt"])
+        self.assertTrue(d.allowed, d.reasons)
+
+
+if __name__ == "__main__":
+    unittest.main()

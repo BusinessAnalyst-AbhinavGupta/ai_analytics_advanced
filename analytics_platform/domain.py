@@ -1,0 +1,226 @@
+"""Typed domain models shared across the platform."""
+from __future__ import annotations
+
+import time
+import uuid
+from dataclasses import dataclass, field, asdict
+from enum import Enum
+from typing import Any, Dict, List, Optional
+
+
+def new_id(prefix: str) -> str:
+    return f"{prefix}_{uuid.uuid4().hex[:12]}"
+
+
+def now_iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+class TenantStatus(str, Enum):
+    ACTIVE = "ACTIVE"
+    PROVISIONING = "PROVISIONING"
+    SUSPENDED = "SUSPENDED"
+
+
+class DataSourceKind(str, Enum):
+    METABASE_BROWSER = "metabase_browser"   # open-browser cookie session (default)
+    DIRECT_DB = "direct_db"                  # optional, future
+    METABASE_API = "metabase_api"            # optional, future
+
+
+class ReviewStatus(str, Enum):
+    CANDIDATE = "CANDIDATE"
+    UNDER_REVIEW = "UNDER_REVIEW"
+    APPROVED = "APPROVED"
+    APPROVED_WITH_CAVEATS = "APPROVED_WITH_CAVEATS"
+    REVISION_REQUIRED = "REVISION_REQUIRED"
+    REJECTED = "REJECTED"
+    STALE = "STALE"
+    SUPERSEDED = "SUPERSEDED"
+    ARCHIVED = "ARCHIVED"
+
+    def is_usable(self) -> bool:
+        return self in (ReviewStatus.APPROVED, ReviewStatus.APPROVED_WITH_CAVEATS)
+
+
+class NodeKind(str, Enum):
+    METRIC = "METRIC"
+    DEFINITION = "DEFINITION"
+    FINDING = "FINDING"
+    QUERY = "QUERY"
+    JOIN_RULE = "JOIN_RULE"
+    BUSINESS_RULE = "BUSINESS_RULE"
+
+
+class AnswerMode(str, Enum):
+    DIRECT_FROM_APPROVED_KNOWLEDGE = "DIRECT_FROM_APPROVED_KNOWLEDGE"
+    REFRESHED_APPROVED_QUERY = "REFRESHED_APPROVED_QUERY"
+    ADAPTED_APPROVED_QUERY = "ADAPTED_APPROVED_QUERY"
+    NEW_LOW_RISK_ANALYSIS = "NEW_LOW_RISK_ANALYSIS"
+    REQUIRES_SENIOR_REVIEW = "REQUIRES_SENIOR_REVIEW"
+    CANNOT_ANSWER = "CANNOT_ANSWER"
+
+
+class RunStatus(str, Enum):
+    PLANNED = "PLANNED"
+    POLICY_REJECTED = "POLICY_REJECTED"
+    EXECUTED = "EXECUTED"
+    FAILED = "FAILED"
+    COMPLETED = "COMPLETED"
+
+
+@dataclass
+class CompanyTarget:
+    name: str
+    description: str = ""
+    category: str = "growth"          # growth | margin | funnel | retention | risk | efficiency | satisfaction
+    priority: int = 1
+    owner: str = ""
+    time_horizon: str = "quarterly"
+    target_value: Optional[float] = None
+    metric_refs: List[str] = field(default_factory=list)
+    constraints: List[str] = field(default_factory=list)
+    last_reviewed: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class CompanyProfile:
+    tenant_id: str
+    name: str = ""
+    industry: str = ""
+    region: str = ""
+    description: str = ""             # what the business does
+    customers: str = ""               # who its customers are
+    product: str = ""                 # what the product is
+    value_creation: str = ""          # how it creates value
+    revenue_model: str = ""           # how it makes money
+    targets: List[CompanyTarget] = field(default_factory=list)
+    constraints: List[str] = field(default_factory=list)
+    risks: List[str] = field(default_factory=list)
+    competitors: List[str] = field(default_factory=list)
+    preferred_metrics: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = asdict(self)
+        d["targets"] = [t.to_dict() for t in self.targets]
+        return d
+
+
+@dataclass
+class Tenant:
+    id: str
+    name: str
+    region: str = "global"
+    llm_provider: str = "null"        # null | openrouter | gemini | ollama ...
+    retention_days: int = 90
+    status: TenantStatus = TenantStatus.ACTIVE
+    created_at: str = field(default_factory=now_iso)
+    purpose: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = asdict(self)
+        d["status"] = d["status"].value if d["status"] else d["status"]
+        return d
+
+
+@dataclass
+class DataSource:
+    id: str
+    tenant_id: str
+    name: str
+    kind: DataSourceKind
+    dialect: str = "ANSI"
+    connected: bool = True
+    tables: List[str] = field(default_factory=list)
+    config: Dict[str, Any] = field(default_factory=dict)   # NEVER store credentials here
+    created_at: str = field(default_factory=now_iso)
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = asdict(self)
+        d["kind"] = d["kind"].value if d["kind"] else d["kind"]
+        return d
+
+
+@dataclass
+class KnowledgeNode:
+    id: str
+    tenant_id: str
+    kind: NodeKind
+    status: ReviewStatus = ReviewStatus.CANDIDATE
+    version: int = 1
+    title: str = ""
+    summary: str = ""
+    payload: Dict[str, Any] = field(default_factory=dict)
+    confidence: Dict[str, float] = field(default_factory=dict)  # evidence/review/definition/freshness/...
+    evidence_ref: str = ""            # links to a query / analysis id
+    source_ref: str = ""              # legacy card / file / question
+    created_at: str = field(default_factory=now_iso)
+    updated_at: str = field(default_factory=now_iso)
+    created_by: str = "system"
+    reviewed_by: str = ""
+    review_notes: str = ""
+    supersedes: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = asdict(self)
+        d["kind"] = d["kind"].value
+        d["status"] = d["status"].value
+        return d
+
+
+@dataclass
+class PolicyDecision:
+    allowed: bool
+    reasons: List[str] = field(default_factory=list)
+    approved_sql: str = ""
+
+    @property
+    def denied(self) -> bool:
+        return not self.allowed
+
+
+@dataclass
+class Question:
+    id: str
+    tenant_id: str
+    text: str
+    mode_budget: str = "low_cost"
+    created_at: str = field(default_factory=now_iso)
+
+
+@dataclass
+class AnalysisRun:
+    id: str
+    tenant_id: str
+    trace_id: str
+    question_id: str
+    question_text: str
+    sql: str
+    dialect: str
+    executor: str
+    status: RunStatus = RunStatus.PLANNED
+    answer_mode: Optional[AnswerMode] = None
+    review_status: ReviewStatus = ReviewStatus.CANDIDATE
+    generated_at: str = field(default_factory=now_iso)
+    execution_ms: float = 0.0
+    row_count: int = 0
+    profile_summary: Dict[str, Any] = field(default_factory=dict)
+    rule_triggers: List[Dict[str, Any]] = field(default_factory=list)
+    answer: str = ""
+    facts: List[str] = field(default_factory=list)
+    hypotheses: List[str] = field(default_factory=list)
+    uncertainties: List[str] = field(default_factory=list)
+    next_actions: List[str] = field(default_factory=list)
+    cost_estimate: float = 0.0
+    policy_reasons: List[str] = field(default_factory=list)
+    source_node_ids: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = asdict(self)
+        d["status"] = d["status"].value if d["status"] else d["status"]
+        d["answer_mode"] = d["answer_mode"].value if d["answer_mode"] else d["answer_mode"]
+        d["review_status"] = d["review_status"].value if d["review_status"] else d["review_status"]
+        return d
