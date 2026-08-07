@@ -57,6 +57,17 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
   actionable 1229→1049). README gained a Triage run block + "Triage: DONE" roadmap bullet;
   this doc refreshed. **Triage is complete (81 tests, 2 live skipped).**
 
+## Progress — Junior maturity-stage engine (current)
+- **CP-J1 — engine core (DONE)**: `analytics_platform/junior.py` — `JuniorEngine` (read-only):
+  `approved_queries()` (usable QUERY with sql), `reproduce_metrics()` (runs approved queries via
+  injectable executor; reports attempted/reproduced/failed), `stage()` (0 provisioning → 1
+  schema/EDA → 2 metric-understanding → 3 process-analysis, requiring reproduced + targets).
+  `tests/test_junior.py` (4). **85 tests (2 skipped).**
+- **CP-J2 — schema/EDA catalog (PENDING)**: stage-0/1 `catalog()` describing registered tables
+  (columns/types via SamplerExecutor) for the "data discovery" gate.
+- **CP-J3 — goal-aligned questions + CLI `junior` (PENDING)**: stage-3 `suggest_questions()` from
+  `CompanyProfile.targets` ↔ approved definitions/definitions + `cli.py` `junior` command.
+
 ## How to run (all in repo root)
 ```bash
 .venv/bin/python -m analytics_platform.cli demo      # offline E2E demo (synthetic company)
