@@ -21,7 +21,10 @@ analytics_platform/
   execution/browser_session.py  production executor: AppleScript->JS into the authenticated
                         Chrome tab; same-origin fetch; login detected -> needs_login (fail-with-pause);
                         injectable OS runner => unit-tested offline
-  llm/client.py         injectable LLMClient (NullClient offline / GatewayClient around LLMGateway)
+  llm/client.py         injectable LLMClient (NullClient offline / GatewayClient around LLMGateway);
+                        make_client_from(settings); wired into junior suggest_questions
+  ui_client.py          thin HTTP client for the API (used by the Streamlit UI)
+  standalone_ui.py      Streamlit page = thin API client over the running FastAPI (plan §5)
   analysis.py           wraps FastSummaryProfiler + BusinessRuleEngine; facts vs hypotheses framing
   pipeline.py           orchestration: plan -> policy -> execute -> analyze -> persist -> telemetry
   onboarding.py         P3 wizard: provision company -> main tables -> ingest legacy -> review -> readiness
@@ -112,6 +115,15 @@ curl -s localhost:8000/junior/$TID/catalog          # schema / EDA of mapped tab
 curl -s localhost:8000/junior/$TID/questions        # goal-aligned suggestion questions
 ```
 
+### Standalone UI (thin Streamlit client)
+```bash
+# terminal 1 - the API
+.venv/bin/python -m analytics_platform serve 8000          # http://localhost:8000/docs
+# terminal 2 - the UI (thin APIClient -> the running API)
+.venv/bin/streamlit run standalone_ui.py                   # http://localhost:8501
+# (override the API base with ANALYTICS_API_URL if not localhost:8000)
+```
+
 ## Roadmap status
 - **P1–P3 foundation: DONE** — modular monolith, executor abstraction, deterministic policy,
   governed Brain, tenancy, observability, offline execution, FastAPI (36 routes).
@@ -158,6 +170,11 @@ curl -s localhost:8000/junior/$TID/questions        # goal-aligned suggestion qu
   deterministic. `GatewayClient` wraps the **static** `core.llm_gateway.LLMGateway.generate`
   (never instantiated; no raw rows/cookies to the LLM). Covered by `tests/test_llm.py` + junior
   enrichment/failure tests.
+- **Thin Streamlit UI over the API: DONE** — `standalone_ui.py` is a pure API client
+  (`analytics_platform/ui_client.py`) hitting `/tenants`, `/junior/*`, `/triage/*` (list/create
+  tenant, stage + catalog + questions, triage summary/queue/approve/bulk). Covered by
+  `tests/test_ui_client.py`; boots headless against the running API. Legacy `app.py` (`core.*`)
+  remains the reference; React/Next later per plan §5.
 
-Next per plan: build a thin Streamlit UI over the API, then keep triaging the ~871 remaining
-CANDIDATEs.
+Next per plan: keep triaging the ~871 remaining CANDIDATEs (`cli review` / `/triage`), then P6
+stakeholder workflow, P7 external research, P8 commercial hardening.

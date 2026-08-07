@@ -5,13 +5,14 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
 
 ## State
 - **HEAD `f6d74b3` (CP-L8), tree clean.** Original `AI analytics/` folder untouched.
-- **113/113 standalone tests pass** (all `tests/` modules except the legacy `test_ui_and_db`), plus the
+- **118/118 standalone tests pass** (all `tests/` modules except the legacy `test_ui_and_db`), plus the
   **3 live tests (2 `MetabaseLive` + 1 `TestJuniorMetabaseLive`) PASS when `ANALYTICS_MB_LIVE=1`**
   (skipped otherwise) — **live-CONFIRMED 2026-08-07, 3/3 OK in ~8s**. Run:
   `cd <repo> && .venv/bin/python -m unittest tests.test_brain tests.test_browser_session tests.test_cli
-  tests.test_api tests.test_llm tests.test_ingest tests.test_integration tests.test_junior
-  tests.test_metabase_live tests.test_migration tests.test_onboarding tests.test_pipeline_e2e
-  tests.test_policy tests.test_tenancy tests.test_triage  # -> 116 tests (3 live skipped)`
+  tests.test_api tests.test_llm tests.test_ui_client tests.test_ingest tests.test_integration
+  tests.test_junior tests.test_metabase_live tests.test_migration tests.test_onboarding
+  tests.test_pipeline_e2e tests.test_policy tests.test_tenancy tests.test_triage
+  # -> 121 tests (3 live skipped)`
   **Caveat (pre-existing, environmental):** `unittest discover -s tests` hangs on this machine in
   `test_ui_and_db.test_pipeline_with_form_metadata` — `core.IngestionPipeline.run`'s Step-4 Cypher
   generation waits on a Neo4j that isn't reachable here. It is legacy `core.*` code, unrelated to
@@ -148,23 +149,30 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
   wraps the **static** `core.llm_gateway.LLMGateway.generate` (never instantiated). Added
   `tests/test_llm.py` (6) + junior enrichment/failure tests (3). **116 tests (3 live skipped).**
   *Honest: with the default `null` provider the LLM path is inert — needs a provider + key to go live.*
+- **CP-X3 — thin Streamlit UI over the API (DONE)**: `analytics_platform/ui_client.py` (`APIClient`,
+  thin `requests`-based client hitting `/tenants`, `/junior/*`, `/triage/*`) + `standalone_ui.py`
+  (repo-root Streamlit page = pure API client: list/create tenant, junior stage+catalog+questions,
+  triage summary/queue/approve/bulk; `ANALYTICS_API_URL` override). Legacy `app.py` (`core.*`) stays
+  the reference; React/Next later (plan §5). Added `tests/test_ui_client.py` (5); boots headless
+  (HTTP 200) against the running API. **121 tests (3 live skipped).**
 
 ## How to run (all in repo root)
 ```bash
 .venv/bin/python -m analytics_platform.cli demo      # offline E2E demo (synthetic company)
 .venv/bin/python -m analytics_platform serve 8000     # FastAPI → http://localhost:8000/docs
-# standalone tests (116 = 113 pass + 3 live skipped); NOTE: plain `discover -s tests`
+.venv/bin/streamlit run standalone_ui.py              # thin UI over the API → :8501 (ANALYTICS_API_URL)
+# standalone tests (121 = 118 pass + 3 live skipped); NOTE: plain `discover -s tests`
 # additionally includes the legacy tests/test_ui_and_db which can hang on this machine
 # (core.IngestionPipeline -> Neo4j not reachable) - see State caveat, it is untouched:
 .venv/bin/python -m unittest tests.test_brain tests.test_browser_session tests.test_cli \
-  tests.test_api tests.test_llm tests.test_ingest tests.test_integration tests.test_junior \
-  tests.test_metabase_live tests.test_migration tests.test_onboarding tests.test_pipeline_e2e \
-  tests.test_policy tests.test_tenancy tests.test_triage
+  tests.test_api tests.test_llm tests.test_ui_client tests.test_ingest tests.test_integration \
+  tests.test_junior tests.test_metabase_live tests.test_migration tests.test_onboarding \
+  tests.test_pipeline_e2e tests.test_policy tests.test_tenancy tests.test_triage
 ```
 Env overrides: `ANALYTICS_DB_PATH`, `ANALYTICS_LLM_PROVIDER/MODEL/API_KEY`, `ANALYTICS_OLLAMA_URL`.
 Deps frozen in `requirements-advanced.txt` (incl. `fastapi==0.141.1`).
 
-## What exists (`analytics_platform/`, 24 modules)
+## What exists (`analytics_platform/`, 25 modules)
 - `domain.py`/`config.py` — typed models; `Settings.source_dialect` default `"athena"`; read-only policy defaults.
 - `database.py` — SQLite store (stdlib), tenant-scoped schema, JSON columns.
 - `tenancy.py` — tenants, structured company profile (targets), data sources.
@@ -175,6 +183,7 @@ Deps frozen in `requirements-advanced.txt` (incl. `fastapi==0.141.1`).
 - `execution/sampler.py` — offline executor: **`sqlglot` transpile source→duckdb**, runs on pandas frames.
 - `execution/browser_session.py` — PRODUCTION executor: AppleScript→JS into authenticated Chrome tab; same-origin `fetch` (cookie stays in browser); `runner=` param injectable → offline-testable; `needs_login` fail-with-pause; `expected_host` guard. Requires `database_id`.
 - `llm/client.py` — `LLMClient` protocol; `NullClient` (offline); `GatewayClient` wraps **static** `core.llm_gateway.LLMGateway` (never instantiate it); `make_client`/`make_client_from(settings)`; wired into `junior` `suggest_questions` LLM enrichment.
+- `ui_client.py` — thin HTTP client (`APIClient`) for the FastAPI; used by `standalone_ui.py`.
 - `analysis.py` — reuses `core.profiler.FastSummaryProfiler` + `core.rules.BusinessRuleEngine`; frames facts/hypotheses.
 - `pipeline.py` — plan→policy→execute→analyze→persist; novel/anomalous → `REQUIRES_SENIOR_REVIEW`; `register_approved_query()`, `promote_finding()`.
 - `onboarding.py` — `OnboardingService`: provision_company / add_main_tables / ingest_legacy / candidates / review / readiness (stage 0–3) / digest.
@@ -182,13 +191,10 @@ Deps frozen in `requirements-advanced.txt` (incl. `fastapi==0.141.1`).
 - `api.py` — `create_app(ctx)`; `make_context()`; onboarding + triage + junior endpoints; 36 routes.
 - `fixtures/` — synthetic retail warehouse + golden queries (athena-dialect SQL; transpiled at runtime).
 
-## Next steps (Brain v2 + Live-Metabase + Junior engine + Junior→live + API exposure + LLM hook DONE)
-1. **Thin Streamlit UI over the API.** `app.py` (legacy, `core.*`) stays as reference; build a
-   standalone `streamlit` client hitting `/triage` + `/junior` + `/tenants` routes (a lookable
-   surface; React/Next later per plan §5).
-2. **Keep triaging the remaining ~871 CANDIDATEs.** `cli review` / `/triage` — bulk approve by
+## Next steps (Brain v2 + Live-Metabase + Junior engine + Junior→live + API exposure + LLM hook + thin UI DONE)
+1. **Keep triaging the remaining ~871 CANDIDATEs.** `cli review` / `/triage` — bulk approve by
    kind, `--conflicts` to dedupe the value-set Definition candidates.
-3. (later) Plan phases P6 stakeholder workflow (evidence/freshness/escalation), P7 external
+2. (later) Plan phases P6 stakeholder workflow (evidence/freshness/escalation), P7 external
    research, P8 commercial hardening (SSO/RBAC, per-tenant browser profile).
 
 Re-run migration into any tenant's Brain (idempotent, CANDIDATE-only):
