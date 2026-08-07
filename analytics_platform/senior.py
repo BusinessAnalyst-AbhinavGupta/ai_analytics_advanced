@@ -114,7 +114,11 @@ class SeniorService:
 
     # -- senior review inbox -------------------------------------------------
     def queue(self, tenant_id: str, limit: int = 50) -> List[Dict[str, Any]]:
-        """Analyses awaiting senior sign-off (completed runs not yet approved)."""
+        """Analyses still *awaiting* senior sign-off: completed runs that are
+        CANDIDATE or back need re-work (REVISION_REQUIRED). Approved or rejected
+        runs leave the inbox (CP-14) — approved ones are already governed FINDING
+        nodes in the knowledge graph; rejected ones are recorded as declined.
+        """
         cfg = self.tenants.get_analyst_config(tenant_id)
         rows = self.store.query_all(
             "SELECT * FROM analysis_runs WHERE tenant_id=? "
@@ -123,8 +127,8 @@ class SeniorService:
         out = []
         for r in self.store.rows_to_dicts(rows):
             rv = r.get("review_status") or ReviewStatus.CANDIDATE.value
-            if rv in (ReviewStatus.REJECTED.value, ReviewStatus.SUPERSEDED.value,
-                      ReviewStatus.ARCHIVED.value):
+            if rv in (ReviewStatus.APPROVED.value, ReviewStatus.REJECTED.value,
+                      ReviewStatus.SUPERSEDED.value, ReviewStatus.ARCHIVED.value):
                 continue
             out.append({
                 "run_id": r["id"], "question": r.get("question_text", ""),

@@ -303,6 +303,7 @@ def _make_junior_worker(settings: Settings, store: Store, junior: Any,
             work_end=settings.junior_work_end,
             min_interval_minutes=settings.junior_min_interval_minutes,
             daily_cap=settings.junior_daily_cap,
+            review_backlog_max=settings.junior_review_backlog_max,
             observability=obs, default_tenant=target["id"])
     except Exception:
         return None
@@ -830,6 +831,7 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
                               work_end=ctx.settings.junior_work_end,
                               min_interval_minutes=ctx.settings.junior_min_interval_minutes,
                               daily_cap=ctx.settings.junior_daily_cap,
+                              review_backlog_max=ctx.settings.junior_review_backlog_max,
                               observability=ctx.observability)
         return worker.run_cycle(tenant_id=tenant_id, force=body.force)
 

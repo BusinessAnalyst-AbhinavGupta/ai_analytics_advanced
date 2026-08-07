@@ -48,6 +48,7 @@ class JuniorWorker:
                  work_start: str = "10:00", work_end: str = "19:00",
                  min_interval_minutes: int = 60,
                  daily_cap: int = 3,
+                 review_backlog_max: int = 3,
                  observability: Optional[Observability] = None,
                  clock: Any = time.time, default_tenant: Optional[str] = None,
                  reviews_dir: str = "data/reviews",
@@ -59,6 +60,9 @@ class JuniorWorker:
         self.work_end = work_end
         self.min_interval_minutes = int(min_interval_minutes)
         self.daily_cap = int(daily_cap)  # at most N analyses per UTC day (persisted)
+        # CP-14: pause generating once this many completed analyses are still
+        # awaiting (or returned for) senior review, so the inbox never grows unbounded.
+        self.review_backlog_max = int(review_backlog_max)
         self.obs = observability or Observability(store)
         self._clock = clock
         self._lock = threading.Lock()   # serial gate: one query at a time
@@ -135,26 +139,32 @@ class JuniorWorker:
             pass
         # -- pipeline -------------------------------------------------------- #
     def pick_problem_statement(self) -> Dict[str, Any]:
-        """Choose an approved, reproducible query this junior hasn't just answered.
+        """Choose an approved, reproducible question this junior hasn't already asked.
 
         The question text is the approved query's title (a real, goal-aligned
         question in the governed Brain), so each exploratory analysis is distinct
-        and grounded. Falls back to the junior's suggested questions, then a
-        baseline, so the worker always has something safe to do.
+        and grounded. CP-14: any question the junior already ran (`analysis_runs`)
+        is skipped — approved runs are FINDING nodes in the knowledge graph the
+        junior leans on, not things to re-ask — so it favours unexplored angles.
+        Falls back to the junior's freshly suggested questions, then a baseline,
+        so the worker always has something safe to do without repeating itself.
         """
+        answered = self._answered_questions()
         picks = self._reproducible_approved()
         if picks:
-            recent = self._recent_sqls(len(picks))
-            chosen = next((p for p in picks if p["sql"] not in recent), picks[0])
-            return {"target": "", "category": "approved", "priority": 0,
-                    "question": chosen["question"], "columns": [],
-                    "source": "approved", "sql": chosen["sql"]}
+            fresh = [p for p in picks if p["question"] not in answered]
+            if fresh:
+                recent = self._recent_sqls(len(fresh))
+                chosen = next((p for p in fresh if p["sql"] not in recent), fresh[0])
+                return {"target": "", "category": "approved", "priority": 0,
+                        "question": chosen["question"], "columns": [],
+                        "source": "approved", "sql": chosen["sql"]}
         try:
             s = self.junior.suggest_questions(self.tenant_id, limit_per_target=1)
             for sg in s.get("suggestions", []):
-                if sg.get("question"):
+                if sg.get("question") and sg["question"] not in answered:
                     return sg
-        except Exception:
+        except Exception:  # noqa: BLE001 - best-effort
             pass
         return {"target": "", "category": "", "priority": 0,
                 "question": "", "columns": [], "source": "none"}
@@ -185,6 +195,36 @@ class JuniorWorker:
             return {r["sql"] for r in rows}
         except Exception:  # noqa: BLE001 - best-effort
             return set()
+
+    def _answered_questions(self) -> set:
+        """Question texts the junior already answered (any completed run).
+
+        CP-14: the worker records which questions it has asked (`analysis_runs`),
+        so it never re-asks the same one. A question stays 'answered' whichever
+        way the senior ruled on it — approved (now a FINDING in the knowledge
+        graph) or rejected (declined) — the junior moves on to unexplored angles.
+        """
+        try:
+            rows = self.store.query_all(
+                "SELECT DISTINCT question_text FROM analysis_runs "
+                "WHERE tenant_id=? AND executor='junior-bg' AND status IN (?,?)",
+                (self.tenant_id, RunStatus.COMPLETED.value, RunStatus.EXECUTED.value))
+            return {r["question_text"] for r in rows}
+        except Exception:  # noqa: BLE001 - best-effort
+            return set()
+
+    def _pending_review_count(self, tenant_id: Optional[str] = None) -> int:
+        """Completed junior analyses still waiting on (or returned for) senior review."""
+        tid = tenant_id or self.tenant_id
+        try:
+            row = self.store.query_one(
+                "SELECT COUNT(*) AS c FROM analysis_runs WHERE tenant_id=? "
+                "AND executor='junior-bg' AND status IN (?,?) AND review_status IN (?,?)",
+                (tid, RunStatus.COMPLETED.value, RunStatus.EXECUTED.value,
+                 ReviewStatus.CANDIDATE.value, ReviewStatus.REVISION_REQUIRED.value))
+            return int(row["c"]) if row else 0
+        except Exception:  # noqa: BLE001 - best-effort
+            return 0
 
     def resolve_sql(self, statement: Dict[str, Any]) -> str:
         """Prefer a reproducible approved query (no Metabase template tags); else
@@ -249,6 +289,16 @@ class JuniorWorker:
             return {"ran": False, "tenant_id": tid, "in_window": True,
                     "rate_ok": True, "daily_ok": False,
                     "reason": "daily_cap",
+                    "duration_ms": round((time.perf_counter() - t0) * 1000.0, 2)}
+        # CP-14 review-backlog gate: don't keep generating while humans are backed
+        # up. Once `review_backlog_max` completed analyses await senior review, the
+        # junior pauses (force bypasses for tests) until the inbox drains.
+        pending = self._pending_review_count(tid)
+        if not force and pending >= self.review_backlog_max:
+            return {"ran": False, "tenant_id": tid, "in_window": True,
+                    "rate_ok": True, "daily_ok": True,
+                    "review_backlog": pending, "review_backlog_max": self.review_backlog_max,
+                    "reason": "review_backlog",
                     "duration_ms": round((time.perf_counter() - t0) * 1000.0, 2)}
 
         statement = self.pick_problem_statement()

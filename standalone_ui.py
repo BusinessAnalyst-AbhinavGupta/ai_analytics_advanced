@@ -694,11 +694,21 @@ if tenant:
             st.rerun()
 
         with st.expander("Senior review inbox (analyst runs → .md for human review)"):
+            last_review_key = f"last_review_{tenant}"
+            last = st.session_state.get(last_review_key)
+            if last:
+                if last.get("ok"):
+                    st.success(f"**{last.get('action', 'reviewed')}** `{last.get('run_id')}`")
+                else:
+                    st.error(last.get("error") or "Review request failed.")
             runs = _guarded(lambda: _client().senior_queue(tenant, limit=50)) or []
+            st.caption(f"{len(runs)} awaiting review")
             if not runs:
                 st.caption("No completed analyses awaiting senior review yet.")
             for r in runs:
-                st.markdown(f"**{r.get('review_status', '?')}** · `{r.get('run_id')}` — "
+                rv = r.get("review_status", "")
+                tag = "revision" if rv == "REVISION_REQUIRED" else "pending"
+                st.markdown(f"**{tag}** · `{r.get('run_id')}` — "
                             f"{(r.get('question') or '').strip()[:90]}")
                 with st.container(border=True):
                     rcols = st.columns([3, 2, 2])
@@ -707,18 +717,19 @@ if tenant:
                         if md:
                             st.session_state[f"mdtext_{r.get('run_id')}"] = md
                     if rcols[1].button("Approve", key=f"appr_{r.get('run_id')}"):
-                        res = _guarded(lambda: _client().senior_review(tenant, r.get("run_id"),
-                                                                       action="approve", by="human"))
-                        st.session_state[f"mdres_{r.get('run_id')}"] = res
+                        res = _guarded(lambda: _client().senior_review(
+                            tenant, r.get("run_id"), action="approve", by="human"))
+                        st.session_state[last_review_key] = res or {
+                            "ok": False, "error": "review request failed"}
+                        st.rerun()
                     if rcols[2].button("Reject", key=f"rej_{r.get('run_id')}"):
-                        res = _guarded(lambda: _client().senior_review(tenant, r.get("run_id"),
-                                                                       action="reject", by="human"))
-                        st.session_state[f"mdres_{r.get('run_id')}"] = res
+                        res = _guarded(lambda: _client().senior_review(
+                            tenant, r.get("run_id"), action="reject", by="human"))
+                        st.session_state[last_review_key] = res or {
+                            "ok": False, "error": "review request failed"}
+                        st.rerun()
                     if f"mdtext_{r.get('run_id')}" in st.session_state:
                         st.code(st.session_state[f"mdtext_{r.get('run_id')}"].get("md", ""))
-                    if f"mdres_{r.get('run_id')}" in st.session_state:
-                        res = st.session_state[f"mdres_{r.get('run_id')}"]
-                        st.success(res) if res.get("ok") else st.error(res.get("error", res))
         rt1, rt2, rt3 = st.tabs(["Definitions", "Queue review", "Conflicts"])
         with rt1:
             _definitions_review(tenant)
