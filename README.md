@@ -29,11 +29,18 @@ analytics_platform/
   pipeline.py           orchestration: plan -> policy -> execute -> analyze -> persist -> telemetry
   onboarding.py         P3 wizard: provision company -> main tables -> ingest legacy -> review -> readiness
   migration/            brain-v2: knowledge-graph snapshot -> NodeSpec mapper + idempotent loader + cli 'migrate'
+  junior.py             junior engine: maturity stages, EDA catalog, goal-aligned questions (LLM hook)
+  junior_worker.py      P9 background junior: system-window, 1/hr, serial single-flight
+  senior.py             CP-10 senior: per-analyst AI config + review inbox (approve/reject/revise -> FINDING)
+  scheduler.py          P9 weekly auto-purge scheduler (persisted due-state)
+  triage.py             senior-review inbox service (approve/reject/bulk + conflicts dedupe)
+  stakeholder.py        P6 stakeholder analyst (classify -> approved-knowledge-first -> escalate)
+  research.py           P7 external research (allow/block sources, citations, senior-gated promote)
   observability.py      every hop emits an OpenTelemetry-style span/event + /metrics
   api.py                FastAPI (modular-monolith API; components stay in-process)
   cli.py / __main__.py  CLI demo + `python -m analytics_platform serve`
   fixtures/             synthetic retail company (warehouse + golden queries)
-tests/                  stdlib-unittest suite (56 tests)
+tests/                  stdlib-unittest suite (169 tests)
 ```
 
 ## Design invariants (from the plan)
@@ -190,8 +197,8 @@ ANALYTICS_API_URL=http://localhost:8001 .venv/bin/streamlit run standalone_ui.py
   metrics, a **Definitions** review tab (grouped by column; shows each value-set + its source SQL
   before you approve/reject), per-row approve/reject via `st.data_editor`, bulk by kind, a node
   inspector, and a **Conflicts** tab (keep-one/reject-rest dedupe). Fixed a latent UI bug
-  (GET `/tenants` returns `id`, POST returns `tenant_id`). Tabs now: Junior / Triage /
-  **Stakeholder** / **Research** / **Governance**.
+  (GET `/tenants` returns `id`, POST returns `tenant_id`). Tabs now: Business / Junior /
+  Triage / Stakeholder / Research / Governance / Observability.
 - **P6 Stakeholder analyst: DONE** — `stakeholder.py` (`StakeholderService`): classify →
   approved-knowledge-first → refresh/cite → low-cost route → escalate high-risk → feedback +
   quality. `/stakeholder/{tid}/*`. `tests/test_stakeholder.py`.
