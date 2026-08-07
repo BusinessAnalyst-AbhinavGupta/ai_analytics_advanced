@@ -1,7 +1,9 @@
 #!/bin/bash
 
 # ==============================================================================
-# ⚡ AI Analytics - Knowledge Graph & SQL Generation Dashboard Launcher
+# ⚡ AI Analytics - Standalone Analytics Platform Launcher
+# Launches the CURRENT standalone UI (streamlit thin API client) + its FastAPI
+# backend. This is standalone_ui.py, NOT the legacy SQL-generator app.py.
 # ==============================================================================
 
 # Navigate to project root directory
@@ -38,14 +40,16 @@ else
     exit 1
 fi
 
-# 3. Check Neo4j Connectivity (Port 7687)
-echo "🔍 Checking Neo4j Graph Database (bolt://localhost:7687)..."
-nc -z 127.0.0.1 7687 2>/dev/null
-if [ $? -eq 0 ]; then
-    echo "✅ Neo4j Database is active and ready."
+# 3. Ensure the FastAPI backend (analytics_platform.serve) is running on 8000
+export ANALYTICS_API_URL="${ANALYTICS_API_URL:-http://localhost:8000}"
+if lsof -nP -iTCP:8000 -sTCP:LISTEN >/dev/null 2>&1; then
+    echo "🛡 Backend API already running on ${ANALYTICS_API_URL}."
 else
-    echo "⚠️  Warning: Neo4j is not responding on port 7687."
-    echo "   Please ensure Neo4j Desktop or the Neo4j DBMS is running."
+    echo "🛜 Starting backend API on ${ANALYTICS_API_URL} ..."
+    nohup .venv/bin/python -m analytics_platform serve 8000 \
+        >/tmp/ai_analytics_api.log 2>&1 &
+    sleep 3
+    echo "   Backend log: /tmp/ai_analytics_api.log"
 fi
 
 # 4. Auto-free port 8501 if previously occupied
@@ -57,7 +61,7 @@ if [ -n "$OCCUPIED_PID" ]; then
 fi
 
 echo ""
-echo "🌐 Starting Streamlit web app on http://localhost:8501 ..."
+echo "🌐 Starting Standalone UI on http://localhost:8501 (API: ${ANALYTICS_API_URL})..."
 echo "ℹ️  Press [Ctrl + C] in this window anytime to stop the server."
 echo "========================================================================"
 echo ""
@@ -65,8 +69,8 @@ echo ""
 # Open browser after a short delay in background
 (sleep 2 && open "http://localhost:8501") &
 
-# 5. Launch Streamlit Application
-PYTHONPATH=. .venv/bin/streamlit run app.py \
+# 5. Launch the CURRENT standalone UI (thin API client over the backend)
+PYTHONPATH=. .venv/bin/streamlit run standalone_ui.py \
     --server.port 8501 \
     --server.headless false \
     --browser.gatherUsageStats false
