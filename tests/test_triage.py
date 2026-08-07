@@ -1,0 +1,97 @@
+"""Triage service tests — review inbox over the governed Brain."""
+from __future__ import annotations
+
+import unittest
+
+from analytics_platform.domain import NodeKind, ReviewStatus
+from analytics_platform.triage import ACTIONABLE, TriageService
+from tests.helpers import make_ctx
+
+
+def add_candidates(brain, kind, titles, status=ReviewStatus.CANDIDATE):
+    for t in titles:
+        brain.create(kind, t, summary=f"summary {t}", status=status)
+
+
+class TestTriage(unittest.TestCase):
+    def setUp(self):
+        self.ctx = make_ctx()
+        self.tid = self.ctx.tenants.create_tenant("ReviewCo").id
+        self.brain = self.ctx.pipeline.brain(self.tid)
+        self.svc = TriageService(self.ctx.store, self.ctx.obs)
+
+    def tearDown(self):
+        self.ctx.close()
+
+    def test_summary_counts_and_actionable(self):
+        add_candidates(self.brain, NodeKind.QUERY, ["a", "b"])
+        add_candidates(self.brain, NodeKind.IDIOM, ["c"], status=ReviewStatus.APPROVED)
+        s = self.svc.summary(self.tid)
+        self.assertEqual(s["total"], 3)
+        self.assertEqual(s["actionable"], 2)
+        self.assertEqual(s["approved"], 1)
+        self.assertEqual(s["by_kind"][NodeKind.QUERY.value], 2)
+
+    def test_queue_filter_by_kind_and_search(self):
+        add_candidates(self.brain, NodeKind.QUERY, ["revenue", "orders"])
+        add_candidates(self.brain, NodeKind.IDIOM, ["row-number idiom"])
+        q = self.svc.queue(self.tid, kind=NodeKind.QUERY)
+        self.assertEqual(len(q), 2)
+        q = self.svc.queue(self.tid, search="rev")
+        self.assertEqual([n.title for n in q], ["revenue"])
+
+    def test_approve_single_promotes_to_approved(self):
+        add_candidates(self.brain, NodeKind.QUERY, ["revenue"])
+        nid = self.brain.all(limit=10)[0].id
+        res = self.svc.approve(self.tid, [nid], by="senior")
+        self.assertEqual(res["approved"], [nid])
+        node = self.brain.get(nid)
+        self.assertEqual(node.status, ReviewStatus.APPROVED)
+        self.assertEqual(node.confidence["review"], 1.0)
+        self.assertEqual(node.reviewed_by, "senior")
+
+    def test_approve_never_touches_non_actionable(self):
+        add_candidates(self.brain, NodeKind.QUERY, ["approved"], status=ReviewStatus.APPROVED)
+        nid = self.brain.all(limit=10)[0].id
+        before = self.brain.get(nid).status
+        res = self.svc.approve(self.tid, [nid])
+        self.assertEqual(res["approved"], [])
+        self.assertEqual(len(res["skipped"]), 1)
+        self.assertEqual(self.brain.get(nid).status, before)
+
+    def test_reject(self):
+        add_candidates(self.brain, NodeKind.QUERY, ["junk"])
+        nid = self.brain.all(limit=10)[0].id
+        res = self.svc.reject(self.tid, [nid], notes="dup")
+        self.assertEqual(res["rejected"], [nid])
+        self.assertEqual(self.brain.get(nid).status, ReviewStatus.REJECTED)
+
+    def test_bulk_approve_by_kind_only(self):
+        add_candidates(self.brain, NodeKind.QUERY, ["q1", "q2"])
+        add_candidates(self.brain, NodeKind.IDIOM, ["i1"])
+        res = self.svc.bulk(self.tid, kind=NodeKind.QUERY, action="approve")
+        self.assertEqual(len(res["approved"]), 2)
+        statuses = {self.brain.get(n.id).status for n in self.brain.all(limit=10)}
+        self.assertIn(ReviewStatus.APPROVED, statuses)
+        # the idiom stayed CANDIDATE
+        idiom = next(n for n in self.brain.all(limit=10) if n.kind == NodeKind.IDIOM)
+        self.assertEqual(idiom.status, ReviewStatus.CANDIDATE)
+
+    def test_bulk_reject(self):
+        add_candidates(self.brain, NodeKind.IDIOM, ["i1", "i2"])
+        res = self.svc.bulk(self.tid, kind=NodeKind.IDIOM, action="reject")
+        self.assertEqual(len(res["rejected"]), 2)
+
+    def test_conflicts_reported(self):
+        add_candidates(self.brain, NodeKind.QUERY, ["same title"])
+        add_candidates(self.brain, NodeKind.QUERY, ["same title"])
+        self.assertEqual(len(self.svc.conflicts(self.tid)), 1)
+
+    def test_actionable_contains_candidate_and_under_review(self):
+        self.assertIn(ReviewStatus.CANDIDATE, ACTIONABLE)
+        self.assertIn(ReviewStatus.UNDER_REVIEW, ACTIONABLE)
+        self.assertNotIn(ReviewStatus.APPROVED, ACTIONABLE)
+
+
+if __name__ == "__main__":
+    unittest.main()

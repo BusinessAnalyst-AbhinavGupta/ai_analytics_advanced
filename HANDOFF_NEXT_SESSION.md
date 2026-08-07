@@ -44,6 +44,15 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
   machine: `ANALYTICS_MB_LIVE=1 ANALYTICS_MB_DATABASE_ID=.. ANALYTICS_MB_EXPECTED_HOST=.. \
   .venv/bin/python -m unittest discover -s tests -k MetabaseLive -v` (Chrome logged into Metabase).
 
+## Progress — Triage (current)
+- **CP-T1 — service reads (DONE)**: `analytics_platform/triage.py` — `TriageService`
+  (`queue`, `summary`, `conflicts` read-only inbox over the Brain; `ACTIONABLE` =
+  CANDIDATE/UNDER_REVIEW/REVISION_REQUIRED). `tests/test_triage.py` (9). **78 tests (2 skipped).**
+- **CP-T2 — approve/reject/bulk + CLI `review` (PENDING)**: service `approve/reject/bulk` +
+  `cli.py` `analytics-platform review <tenant> [--kind K] [--limit N] [--approve/--reject
+  id,..] [--bulk-approve/--bulk-reject] [--by] [--conflicts]`.
+- **CP-T3 — docs/API (PENDING)**: README + handoff refresh; optional API review endpoints.
+
 ## How to run (all in repo root)
 ```bash
 .venv/bin/python -m analytics_platform.cli demo      # offline E2E demo (synthetic company)
