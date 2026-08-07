@@ -1,9 +1,67 @@
 # STANDALONE_ANALYTICS_PLATFORM_PLAN
 
-**Prepared:** 2026-08-07 · **Status:** Approved implementation plan · **Target:** standalone, company-independent AI analytics copilot with future commercial potential
+**Prepared:** 2026-08-07 · **Status:** Approved implementation plan — **in execution; core complete as of 2026-08-08 (see [Plan Status & Progress](#plan-status--progress-living-spine))** · **Target:** standalone, company-independent AI analytics copilot with future commercial potential
 
 > Source of truth for the current system: `Handoff Document — Autonomous AI Analytics Copilot` (c2bba8d1-c1c5-4e88-b36c-08ce5c26aafb).
 > North-star goal and clarification history captured from the prior work session. All "current state" claims verified against the codebase on 2026-08-07.
+
+---
+
+## Plan Status & Progress (living spine)
+
+> **This section is the spine of the repo — keep it updated as work lands.** Last updated: 2026-08-08 · HEAD `0a82a1c` (`main`).
+
+**Overall:** implementation **in progress — core complete**. Phases **P0–P9 are DONE (core)**; the platform ships as a supervised analytics copilot. Remaining work = operator/security tail (live OIDC/SSO, per-tenant browser profiles, threat model/pen-test/DR/SOC2) + the OpenRouter config panel + junior Stage-4/5 autonomy. No knowledge is lost; everything below is committed.
+
+### Completed stages (vs. §11 Delivery Roadmap)
+
+| Stage | Status | What is in place (repo) |
+|---|---|---|
+| **P0 — Stabilize & measure** | ✅ DONE | git repo, reference copy frozen (`AI analytics/` untouched), Neo4j snapshot exported (`extracted_data/knowledge_graph_snapshot.json`), offline E2E harness (`scratch/test_copilot_e2e.py`), trace/span events |
+| **P1 — Extract core from Streamlit** | ✅ DONE | typed domain models (`domain.py`), `LLMClient` wrapping the static gateway, run state machine, FastAPI (`api.py`), Streamlit = thin API client (`standalone_ui.py`) |
+| **P2 — Browser-session executor + policy** | ✅ DONE | `QueryExecutor` interface, hardened `BrowserSessionExecutor` (injectable runner, offline-tested), sqlglot read-only policy, offline duckdb sampler; **live Metabase E2E confirmed (3/3)** |
+| **P3 — Company-independent onboarding** | ✅ DONE | `OnboardingService`, tenant + company profile, data sources, guided wizard + **version history** |
+| **P4 — Company Brain v2** | ✅ DONE (core) | `brain/store.py` (lifecycle CANDIDATE→…→APPROVED/REJECTED/STALE, multi-dimension confidence, conflicts, isolation), `brain/ingest.py` (AST ingestion), migration from the Neo4j snapshot (CP1–CP3). Vector retrieval deferred |
+| **P5 — Junior + senior workflows** | ✅ DONE (core) | `JuniorEngine` (maturity stages, EDA catalog, goal-aligned questions, LLM hook), `TriageService` review inbox, **`SeniorService` approve/reject/revise → promote to governed FINDING (CP-10)** |
+| **P6 — Stakeholder analyst** | ✅ DONE (core) | `StakeholderService`: classify → approved-knowledge-first → refresh/cite → escalate → feedback + quality |
+| **P7 — External research** | ✅ DONE (core) | `ResearchService`: allow/block sources, credibility, citations, EXTERNAL nodes start **CANDIDATE** (senior gate). Live provider connections deferred |
+| **P8 — Commercial hardening** | ✅ DONE (core) | `auth.py` (signed tokens, RBAC, OIDC seam; **off by default**), `billing.py`, `retention.py`. Live OIDC/SSO + per-tenant browser profiles + security tail deferred |
+| **P9 — Owner observability + background junior** | ✅ DONE (core) | `api_logs` + HTTP access-log middleware (30-day retention), weekly auto-purge `Scheduler`, background `JuniorWorker` (10:00–19:00 window, 1/hr, serial single-flight), `/observability/*`, UI **Observability** tab |
+| **Brain migration + triage** | ✅ DONE | migrated tenant triaged to completion: **APPROVED 536 / REJECTED 693 / 0 CANDIDATEs** (CP-X1–X10) |
+
+**Test status:** 169/169 standalone tests pass (all `tests/` modules except legacy `test_ui_and_db`, which hangs only because it targets an unreachable Neo4j). Live Metabase tests: 3/3.
+
+### Built beyond the plan (additions)
+
+| Addition | Where | Notes |
+|---|---|---|
+| **Background autonomous `JuniorWorker` + `Scheduler`** | `analytics_platform/junior_worker.py`, `scheduler.py` | System-time window, one problem/hr, serial single-flight lock, persisted purge state — concrete automation beyond the plan's described autonomy |
+| **API access-log middleware + retention/purge** | `api.py`, `database.py`, `scheduler.py` | 30-day `api_logs` retention with weekly auto-purge (never logs credentials) |
+| **Analyst AI config panel** | `domain.py` (`AnalystAI`/`AnalystConfig`), `tenancy.py`, `senior.py` | Per-analyst junior/senior/stakeholder toggles + provider/model, versioned per tenant (`analyst_configs` + `analyst_config_history`) |
+| **Senior review inbox at run level → governed FINDING** | `senior.py`, `pipeline.promote_finding` | `analysis_runs.review_status` lifecycle; the human plays senior when the senior AI is off (**human-on-top**) |
+| **Triage Conflicts dedupe (keep-one)** | `api.py` `POST /triage/{tid}/dedupe`, UI | reject (actionable) + supersede (approved) per conflict group |
+| **Definitions review tab** | `standalone_ui.py` | Grouped value-set review showing source SQL before approve/reject |
+| **Company-profile version history** | `tenancy.py`, `api.py` | Business-context snapshots versioned over time |
+| **Standalone UI 7-tab thin client** | `standalone_ui.py`, `ui_client.py` | Business / Junior / Triage / Stakeholder / Research / Governance / Observability |
+| **One-click launcher** | `run_dashboard.command` | Starts the backend (if needed) + opens the standalone UI; retired the legacy `app.py` boot |
+
+### Material deviations from the plan
+
+- **SQLite (`data/migration.db`) instead of PostgreSQL** for app state + the Company Brain — single storage seam, swap-ready.
+- **Company Brain v2 persisted in SQLite tables** (Neo4j semantics: stable IDs, tenant, status, version, source_ref, confidence dims), not Neo4j. Neo4j remains only for the legacy `core.*` prototype; the exported snapshot is the migration baseline into the platform.
+- **No object storage / job queue / worker pool yet** — results + jobs live in SQLite; jobs run in-process (`Scheduler`/`JuniorWorker`).
+- **React/Next frontend deferred** — the Streamlit thin client is the shipped UI (plan §5.2 explicitly allows this).
+- **Auth ships off by default** (`ANALYTICS_AUTH_ENABLED=1` to enable) — intentional for the pilot.
+
+### Backlog (next up)
+
+1. **OpenRouter config panel** — live provider-model ping, save config, log config state/changes (the remaining "next per plan" item).
+2. **P8 operator tail** — live OIDC/SSO provider + per-tenant browser profiles.
+3. **P7 provider connections** — wire approved external search providers.
+4. **Security tail** — threat model / pen test / DR / SOC2 readiness.
+5. **Junior Stage 4–5** — external/competitive research autonomy + governed proactive investigations.
+6. **Senior review depth** — per-analysis MD renderings; depth scales with senior approval.
+7. **Vector retrieval** for unstructured notes (plan §8).
 
 ---
 
@@ -357,15 +415,18 @@ Every component call emits an **event + OpenTelemetry span** with `{tenant, trac
 ---
 ## 11. Delivery Roadmap (each phase ends with an exit criterion)
 
-- **P0 — Stabilize & measure (≈2 wk).** Freeze a reference copy; add git (this folder has none); regression fixtures + **`scratch/test_copilot_e2e.py`** (offline, no Metabase); export the Neo4j knowledge graph snapshot; document Streamlit / browser-session / Athena-cookie couplings; verify anomaly auto-correction + `get_column_business_definitions()`; add trace IDs. *Exit: ≥10 representative workflows reproducible; module-reuse scorecard approved.*
-- **P1 — Extract core from Streamlit (≈3–4 wk).** Typed request/response models; strip Streamlit from core; introduce `LLMClient` wrapping the static gateway; query-run state model; question/runs/versions persisted to PostgreSQL; Streamlit becomes a thin API client. *Exit: one question processed with no Streamlit import anywhere in the pipeline; LLM providers swappable via config; regressions still pass.*
-- **P2 — Formalize the browser-session executor + policy engine (≈4–6 wk).** Define `QueryExecutor`; implement hardened `BrowserSessionExecutor` (session/detected-login guard → `needs_login` pause/resume, per-tenant browser profile, redirect guards, timeouts, result caps, no cookie logging); add `sqlglot` AST validation; deterministic read-only / cost / row-limit / required-date-filter policy. *Exit: E2E execution decoupled from `app.py` internals; policy-rejected SQL never reaches the browser; expiry pauses cleanly.*
-- **P3 — Company-independent onboarding (≈4–6 wk).** Tenant + company profile models; guided questionnaire; data-source setup; schema discovery; legacy ingestion via AST; candidate metric/join extraction + approval workflow. *Exit: a second synthetic company onboards with zero code changes; terminology lives in config/knowledge, not prompts.*
-- **P4 — Company Brain v2 (≈5–7 wk).** Ontology + stable IDs; provenance + review records; lifecycle statuses; versioning + supersession; conflict & freshness; migrate Neo4j knowledge; optional vector retrieval for unstructured notes. *Exit: every approved finding links to evidence + review; stale/conflicting knowledge is visible; retrieval can restrict to approved knowledge.*
-- **P5 — Junior + senior analyst workflows (≈5–7 wk).** Maturity stages; exploration budgets + allowed query types; review rubrics; revision/resubmission loops; stage-promotion controls; proactive question generation aligned to objectives; reviewer-agreement evaluation. *Exit: junior stays within stage; senior can approve/reject/revise/promote/advance; transitions audited; novel hypotheses clearly separated from facts.*
-- **P6 — Stakeholder analyst (≈4–6 wk).** Question classification; retrieve approved knowledge first; refresh/adapt accepted queries; low-cost model routing; citations + caveats; escalation rules; feedback collection; answer-quality evaluation. *Exit: repeated questions reuse approved knowledge; high-risk items escalate; answers carry evidence + freshness; cost per answer tracked.*
-- **P7 — External research (≈3–5 wk).** Approved search providers; source storage + citations; allow/block lists; source-credibility classification; competitor/best-practice workflows. *Exit: external claims cited; internal vs. external distinguished; research can never silently promote to company fact.*
-- **P8 — Commercial hardening (≈6–10 wk).** SSO + enterprise RBAC; customer-VPC browser-session agent; billing/usage metering; retention + deletion; threat model + pen test; DR; SOC2 readiness path. *Exit: cross-tenant isolation passes; per-tenant usage/cost attributable; customer data deletable per policy.*
+- **P0 — Stabilize & measure (≈2 wk) — ✅ DONE.** Freeze a reference copy; add git (this folder has none); regression fixtures + **`scratch/test_copilot_e2e.py`** (offline, no Metabase); export the Neo4j knowledge graph snapshot; document Streamlit / browser-session / Athena-cookie couplings; verify anomaly auto-correction + `get_column_business_definitions()`; add trace IDs. *Exit: ≥10 representative workflows reproducible; module-reuse scorecard approved.*
+- **P1 — Extract core from Streamlit (≈3–4 wk) — ✅ DONE.** Typed request/response models; strip Streamlit from core; introduce `LLMClient` wrapping the static gateway; query-run state model; question/runs/versions persisted to PostgreSQL; Streamlit becomes a thin API client. *Exit: one question processed with no Streamlit import anywhere in the pipeline; LLM providers swappable via config; regressions still pass.*
+- **P2 — Formalize the browser-session executor + policy engine (≈4–6 wk) — ✅ DONE.** Define `QueryExecutor`; implement hardened `BrowserSessionExecutor` (session/detected-login guard → `needs_login` pause/resume, per-tenant browser profile, redirect guards, timeouts, result caps, no cookie logging); add `sqlglot` AST validation; deterministic read-only / cost / row-limit / required-date-filter policy. *Exit: E2E execution decoupled from `app.py` internals; policy-rejected SQL never reaches the browser; expiry pauses cleanly.*
+- **P3 — Company-independent onboarding (≈4–6 wk) — ✅ DONE.** Tenant + company profile models; guided questionnaire; data-source setup; schema discovery; legacy ingestion via AST; candidate metric/join extraction + approval workflow. *Exit: a second synthetic company onboards with zero code changes; terminology lives in config/knowledge, not prompts.*
+- **P4 — Company Brain v2 (≈5–7 wk) — ✅ DONE (core).** Ontology + stable IDs; provenance + review records; lifecycle statuses; versioning + supersession; conflict & freshness; migrate Neo4j knowledge; optional vector retrieval for unstructured notes. *Exit: every approved finding links to evidence + review; stale/conflicting knowledge is visible; retrieval can restrict to approved knowledge.*
+- **P5 — Junior + senior analyst workflows (≈5–7 wk) — ✅ DONE (core).** Maturity stages; exploration budgets + allowed query types; review rubrics; revision/resubmission loops; stage-promotion controls; proactive question generation aligned to objectives; reviewer-agreement evaluation. *Exit: junior stays within stage; senior can approve/reject/revise/promote/advance; transitions audited; novel hypotheses clearly separated from facts.*
+- **P6 — Stakeholder analyst (≈4–6 wk) — ✅ DONE (core).** Question classification; retrieve approved knowledge first; refresh/adapt accepted queries; low-cost model routing; citations + caveats; escalation rules; feedback collection; answer-quality evaluation. *Exit: repeated questions reuse approved knowledge; high-risk items escalate; answers carry evidence + freshness; cost per answer tracked.*
+- **P7 — External research (≈3–5 wk) — ✅ DONE (core).** Approved search providers; source storage + citations; allow/block lists; source-credibility classification; competitor/best-practice workflows. *Exit: external claims cited; internal vs. external distinguished; research can never silently promote to company fact.*
+- **P8 — Commercial hardening (≈6–10 wk) — ✅ DONE (core).** SSO + enterprise RBAC; customer-VPC browser-session agent; billing/usage metering; retention + deletion; threat model + pen test; DR; SOC2 readiness path. *Exit: cross-tenant isolation passes; per-tenant usage/cost attributable; customer data deletable per policy.*
+
+- **P9 — Owner-facing observability + background junior worker (added; not in the original P0–P8 roadmap) — ✅ DONE (core).** HTTP access-log middleware on `api_logs` (30-day retention), weekly auto-purge `Scheduler` (persisted due-state), autonomous background `JuniorWorker` (system-time window 10:00–19:00, one problem statement/hour, serial single-flight lock), `/observability/{status,logs,purge,junior/run}` routes + UI **Observability** tab. *Exit: the owner can answer "what fired, did it work, what did it cost" and the junior advances while the human is away.*
+- **CP-10 — Senior-analyst tool (added).** Per-analyst AI config (junior/senior/stakeholder toggles + provider/model, versioned per tenant) + a run-level senior review inbox (`approve`/`reject`/`revise` → promote to a governed FINDING via `pipeline.promote_finding`); the human plays the senior role through the same surface when the senior AI is off (**human-on-top**). — ✅ DONE.
 
 ## 12. MVP Definition & Pilot Acceptance
 
@@ -396,6 +457,8 @@ Every component call emits an **event + OpenTelemetry span** with `{tenant, trac
 | Weights mistaken for truth | High | Approval status as hard gate; confidence only ranks |
 
 ## 14. Immediate 30-Day Action Plan
+
+> **Status: executed / superseded by implementation** — Phases P0–P9 core are complete (see [Plan Status & Progress](#plan-status--progress-living-spine)). Retained below for historical reference.
 
 - **Week 1:** freeze a reference copy; `git init`; export the Neo4j graph; regression fixtures + `scratch/test_copilot_e2e.py`; document Streamlit, browser-session, and Athena/cookie couplings; verify anomaly auto-correction + column-definition extraction; add structured logs + trace IDs.
 - **Week 2:** module-reuse scorecard; core domain models; query-run state machine; `QueryExecutor` interface; Company Brain ontology draft; approve the re-platforming decision.
