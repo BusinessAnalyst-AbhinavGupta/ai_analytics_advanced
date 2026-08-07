@@ -4,15 +4,15 @@ Prepared: 2026-08-07 · Repo: `/Users/abhinav.gupta/Documents/ai_analytics_advan
 Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANALYTICS_PLATFORM_PLAN.md`).
 
 ## State
-- **HEAD `95fd299` (CP-X10), tree clean.** Original `AI analytics/` folder untouched.
-- **118/118 standalone tests pass** (all `tests/` modules except the legacy `test_ui_and_db`), plus the
+- **HEAD `5c10b87` (CP-P6/P7/P8), tree clean.** Original `AI analytics/` folder untouched.
+- **146/146 standalone tests pass** (all `tests/` modules except the legacy `test_ui_and_db`), plus the
   **3 live tests (2 `MetabaseLive` + 1 `TestJuniorMetabaseLive`) PASS when `ANALYTICS_MB_LIVE=1`**
   (skipped otherwise) — **live-CONFIRMED 2026-08-07, 3/3 OK in ~8s**. Run:
   `cd <repo> && .venv/bin/python -m unittest tests.test_brain tests.test_browser_session tests.test_cli
   tests.test_api tests.test_llm tests.test_ui_client tests.test_ingest tests.test_integration
   tests.test_junior tests.test_metabase_live tests.test_migration tests.test_onboarding
   tests.test_pipeline_e2e tests.test_policy tests.test_tenancy tests.test_triage
-  # -> 121 tests (3 live skipped)`
+  # -> 146 tests (3 live skipped)`
   **Caveat (pre-existing, environmental):** `unittest discover -s tests` hangs on this machine in
   `test_ui_and_db.test_pipeline_with_form_metadata` — `core.IngestionPipeline.run`'s Step-4 Cypher
   generation waits on a Neo4j that isn't reachable here. It is legacy `core.*` code, unrelated to
