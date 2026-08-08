@@ -22,11 +22,14 @@ from analytics_platform.ui_client import APIClient
 st.set_page_config(page_title="Standalone Platform", layout="wide")
 
 BASE_URL = os.environ.get("ANALYTICS_API_URL", "http://localhost:8000")
+# High enough to let a cold junior refresh (live LLM call + executor schema probes)
+# complete; server-side LLM allows up to 120s. Tighten via ANALYTICS_API_TIMEOUT.
+API_TIMEOUT = float(os.environ.get("ANALYTICS_API_TIMEOUT", "120"))
 
 
 def _client() -> APIClient:
     if "client" not in st.session_state:
-        st.session_state.client = APIClient(BASE_URL)
+        st.session_state.client = APIClient(BASE_URL, timeout=API_TIMEOUT)
     return st.session_state.client
 
 

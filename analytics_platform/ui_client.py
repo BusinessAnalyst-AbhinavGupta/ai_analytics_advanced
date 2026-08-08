@@ -6,15 +6,23 @@ platform — per the plan's "Streamlit as a thin API client" (React/Next later,
 """
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, List, Optional
 
 import requests
 
+# Default read timeout. The junior read endpoints (questions/hypotheses -> a live
+# LLM call, catalog/stage -> executor schema probes) can run well past a 15s cap on
+# a cold refresh (the server-side LLM client allows up to 120s). Default to match that
+# window and let operators tighten it via ANALYTICS_API_TIMEOUT (in seconds).
+_DEFAULT_TIMEOUT_S = float(os.environ.get("ANALYTICS_API_TIMEOUT", "120.0"))
+
 
 class APIClient:
-    def __init__(self, base_url: str = "http://localhost:8000", timeout: float = 15.0):
+    def __init__(self, base_url: str = "http://localhost:8000",
+                 timeout: Optional[float] = None):
         self.base = base_url.rstrip("/")
-        self.timeout = timeout
+        self.timeout = _DEFAULT_TIMEOUT_S if timeout is None else float(timeout)
 
     def _req(self, method: str, path: str, **kw: Any) -> Any:
         r = requests.request(method, f"{self.base}{path}", timeout=self.timeout, **kw)
