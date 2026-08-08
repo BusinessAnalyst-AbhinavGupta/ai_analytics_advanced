@@ -9,7 +9,7 @@
 
 ## Plan Status & Progress (living spine)
 
-> **This section is the spine of the repo — keep it updated as work lands.** Last updated: 2026-08-08 · HEAD `5a26cfe` **CP-15** (`main`).
+> **This section is the spine of the repo — keep it updated as work lands.** Last updated: 2026-08-08 · HEAD `dcd3a7e` **CP-15** (`main`).
 
 **Overall:** implementation **in progress — core complete**. Phases **P0–P9 are DONE (core)**; the platform ships as a supervised analytics copilot. CP-11 (config panel + junior depth + MD renderings) and **CP-12 (live junior)** landed; **CP-13 is the LLM bill guard** (process-wide TTL cache + persisted daily LLM budget + UI cache); **CP-14 drained the senior review queue** (approved+rejected leave the inbox, the junior never re-asks, review-backlog gate). **CP-15 makes the junior two-tier, driven by promotion/demotion** (`junior_depth`, the existing `⬆/⬇` on the senior tab): below depth 2 the junior roams a broad **low-level exploratory taxonomy** (schema, fill rates, success trends, breakdown/funnel-by-dimension, univariate contribution) that **auto-folds to governed FINDINGs** under a per-tenant cap (never cluttering the human inbox); at **depth 2 the junior unlocks high-level hypothesis formation / RCA**, which is **human-governed** and may spawn **on-the-spot low-level supporting probes** that are **exempt from the 1/hr + 3/day caps** and written as a **separate workpaper** attached to the high-level review. Remaining work = operator/security tail (live OIDC/SSO, per-tenant browser profiles, threat model/pen-test/DR/SOC2) + deeper junior Stage-4/5 autonomy. Everything below is committed.
 
