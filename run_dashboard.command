@@ -30,6 +30,11 @@ if [ -f ".env" ]; then
     export $(grep -v '^#' .env | xargs) 2>/dev/null
 fi
 
+# Client read timeout (seconds). Default high enough for a *cold* junior refresh
+# (which may trigger a live LLM call + executor schema probes; the server-side LLM
+# client allows up to 120s). Tighten with ANALYTICS_API_TIMEOUT if you prefer.
+export ANALYTICS_API_TIMEOUT="${ANALYTICS_API_TIMEOUT:-120}"
+
 # 2. Check Python Virtual Environment
 if [ -f ".venv/bin/streamlit" ]; then
     echo "✅ Found virtual environment (.venv)."
@@ -48,8 +53,28 @@ else
     echo "🛜 Starting backend API on ${ANALYTICS_API_URL} ..."
     nohup .venv/bin/python -m analytics_platform serve 8000 \
         >/tmp/ai_analytics_api.log 2>&1 &
-    sleep 3
     echo "   Backend log: /tmp/ai_analytics_api.log"
+    # Wait until the backend actually answers before starting the UI, so a
+    # double-click "just works" instead of the UI racing a still-booting API.
+    HEALTH_URL="${ANALYTICS_API_URL}/tenants"
+    echo -n "⏳ Waiting for backend to answer at ${HEALTH_URL}"
+    API_READY=0
+    for _ in $(seq 1 30); do
+        if curl -sfS -m 2 "$HEALTH_URL" >/dev/null 2>&1; then
+            API_READY=1
+            echo " ✅"
+            break
+        fi
+        echo -n "."
+        sleep 1
+    done
+    if [ "$API_READY" -ne 1 ]; then
+        echo ""
+        echo "⚠️  Backend did not respond on ${ANALYTICS_API_URL} after ~30s."
+        echo "   Open /tmp/ai_analytics_api.log for the API error."
+        read -r -p "Press [Enter] to exit ..."
+        exit 1
+    fi
 fi
 
 # 4. Auto-free port 8501 if previously occupied
