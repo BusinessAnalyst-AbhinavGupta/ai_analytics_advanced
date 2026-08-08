@@ -21,6 +21,7 @@ cookies anywhere. Offline-safe and deterministically testable.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from typing import Any, Dict, List, Optional
@@ -41,6 +42,8 @@ def _mins_since(ts: Optional[float], now: float) -> float:
         return float("inf")
     return (now - ts) / 60.0
 
+
+log = logging.getLogger("ai_analytics.junior_worker")
 
 class JuniorWorker:
     """One-tenant, serial, rate-limited background junior (Phase 9)."""
@@ -76,6 +79,7 @@ class JuniorWorker:
         self._lock = threading.Lock()   # serial gate: one query at a time
         self.default_tenant = default_tenant or tenant_id
         self.reviews_dir = reviews_dir
+        self._last_log_ts = 0.0
         self.row_limit = int(row_limit)
 
     # -- window + rate limit -------------------------------------------------- #
@@ -356,6 +360,14 @@ class JuniorWorker:
         t0 = time.perf_counter()
         now = now if now is not None else self._clock()
         tid = tenant_id or self.tenant_id
+        # Log alive status every 15 mins
+        if now - getattr(self, "_last_log_ts", 0.0) >= 900.0:
+            log.info("JuniorWorker[%s] alive: in_window=%s rate_ok=%s daily=%s/%s",
+                     tid, self.in_window(now),
+                     _mins_since(self._last_ran_ts(), now) >= self.min_interval_minutes,
+                     self._runs_today(now), self.daily_cap)
+            self._last_log_ts = now
+
         # R6 gate: the operator can turn the junior analyst off entirely. When off,
         # the worker never asks/solves, regardless of window/rate.
         try:

@@ -59,6 +59,30 @@ def _cached_junior_catalog(tenant: str) -> dict:
     return _client().junior_catalog(tenant)
 
 
+
+@st.cache_data(ttl=_CACHE_TTL_S, show_spinner=False)
+def _cached_triage_queue(tenant: str, kind: str = "", search: str = "", limit: int = 100) -> list:
+    return _client().triage_queue(tenant, kind=kind, search=search, limit=limit)
+
+@st.cache_data(ttl=_CACHE_TTL_S, show_spinner=False)
+def _cached_triage_conflicts(tenant: str) -> list:
+    return _client().triage_conflicts(tenant)
+
+@st.cache_data(ttl=_CACHE_TTL_S, show_spinner=False)
+def _cached_triage_summary(tenant: str) -> dict:
+    return _client().triage_summary(tenant)
+
+@st.cache_data(ttl=_CACHE_TTL_S, show_spinner=False)
+def _cached_senior_queue(tenant: str, limit: int = 100) -> list:
+    return _client().senior_queue(tenant, limit=limit)
+
+def _clear_triage_caches():
+    _cached_triage_queue.clear()
+    _cached_triage_conflicts.clear()
+    _cached_triage_summary.clear()
+    _cached_senior_queue.clear()
+
+
 def _guarded(fn):
     """Run an API call; return None and show the error on failure."""
     try:
@@ -77,6 +101,7 @@ def _actionable(rows):
     return [r for r in rows if r.get("status") in _ACTIONABLE]
 
 
+
 def _run_review(tenant, fn, confirm_msg):
     """Run an API triage write and reflect the outcome, re-running the app."""
     res = _guarded(fn)
@@ -85,6 +110,7 @@ def _run_review(tenant, fn, confirm_msg):
                    f"rejected={len(res.get('rejected', []))} "
                    f"superseded={len(res.get('superseded', []))} "
                    f"skipped={len(res.get('skipped', []))}")
+        _clear_triage_caches()
         st.rerun()
 
 
@@ -95,9 +121,10 @@ def _queue_review(tenant):
     search = c[1].text_input("Search title/summary", key="qsearch")
     by = c[2].text_input("Reviewer", value="senior", key="reviewer")
     notes = c[3].text_input("Notes (optional)", key="qnotes")
-    refresh = c[5].button("Refresh")
-    rows = _guarded(lambda: _client().triage_queue(tenant, kind=kind, search=search,
-                                                   limit=2000)) or []
+    if c[5].button("Refresh"):
+        _clear_triage_caches()
+        st.rerun()
+    rows = _guarded(lambda: _cached_triage_queue(tenant, kind=kind, search=search, limit=2000)) or []
     rows = _actionable(rows)
     if not rows:
         st.info("Queue is empty for this filter.")
@@ -144,9 +171,9 @@ def _queue_review(tenant):
 
 def _conflicts_review(tenant):
     st.subheader("Conflicts (probable value-set dups)")
-    conflicts = _guarded(lambda: _client().triage_conflicts(tenant)) or []
+    conflicts = _guarded(lambda: _cached_triage_conflicts(tenant)) or []
     # status map so each group can show WHY a node will be superseded vs rejected
-    rows = _guarded(lambda: _client().triage_queue(tenant, limit=2000)) or []
+    rows = _guarded(lambda: _cached_triage_queue(tenant, limit=2000)) or []
     status_by_id = {r.get("id"): r.get("status", "?") for r in rows}
     st.caption(f"{len(conflicts)} conflict groups — pick one per group to keep. "
                "Dropping others: CANDIDATE/UNDER_REVIEW are rejected, APPROVED are "
@@ -190,7 +217,7 @@ def _definition_meta(node):
 
 def _definitions_review(tenant):
     st.subheader("Definition review (value-sets by column)")
-    rows = _guarded(lambda: _client().triage_queue(tenant, kind="DEFINITION", limit=2000)) or []
+    rows = _guarded(lambda: _cached_triage_queue(tenant, kind="DEFINITION", limit=2000)) or []
     rows = _actionable(rows)
     if not rows:
         st.info("No DEFINITION nodes to review.")
@@ -673,7 +700,7 @@ if tenant:
         st.json(_guarded(lambda: _cached_junior_catalog(tenant)) or {})
 
     with tabs[2]:
-        summary = _guarded(lambda: _client().triage_summary(tenant)) or {}
+        summary = _guarded(lambda: _cached_triage_summary(tenant)) or {}
         if summary:
             m = st.columns(4)
             m[0].metric("Total nodes", summary.get("total", 0))
@@ -707,7 +734,7 @@ if tenant:
                     st.success(f"**{last.get('action', 'reviewed')}** `{last.get('run_id')}`")
                 else:
                     st.error(last.get("error") or "Review request failed.")
-            runs = _guarded(lambda: _client().senior_queue(tenant, limit=50)) or []
+            runs = _guarded(lambda: _cached_senior_queue(tenant, limit=50)) or []
             st.caption(f"{len(runs)} awaiting review")
             if not runs:
                 st.caption("No completed analyses awaiting senior review yet.")
@@ -727,12 +754,14 @@ if tenant:
                             tenant, r.get("run_id"), action="approve", by="human"))
                         st.session_state[last_review_key] = res or {
                             "ok": False, "error": "review request failed"}
+                        _clear_triage_caches()
                         st.rerun()
                     if rcols[2].button("Reject", key=f"rej_{r.get('run_id')}"):
                         res = _guarded(lambda: _client().senior_review(
                             tenant, r.get("run_id"), action="reject", by="human"))
                         st.session_state[last_review_key] = res or {
                             "ok": False, "error": "review request failed"}
+                        _clear_triage_caches()
                         st.rerun()
                     if f"mdtext_{r.get('run_id')}" in st.session_state:
                         st.code(st.session_state[f"mdtext_{r.get('run_id')}"].get("md", ""))
