@@ -274,6 +274,9 @@ class AnalysisRun:
     executor: str
     status: RunStatus = RunStatus.PLANNED
     answer_mode: Optional[AnswerMode] = None
+    level: Optional[str] = None          # CP-15: "low" exploratory | "high" hypothesis/RCA
+    category: Optional[str] = None       # taxonomy id (schema/fill_rate/success_trend/breakdown/.../rca/hypothesis)
+    supportive_of: Optional[str] = None  # parent high-level run this low-level probe supports
     review_status: ReviewStatus = ReviewStatus.CANDIDATE
     generated_at: str = field(default_factory=now_iso)
     execution_ms: float = 0.0

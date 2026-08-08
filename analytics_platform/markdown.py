@@ -97,4 +97,37 @@ def write_analysis_md(run: AnalysisRun, base_dir: str) -> str:
         return ""
 
 
-__all__ = ["render_analysis_md", "write_analysis_md"]
+def render_workpaper_md(run: AnalysisRun) -> str:
+    """A low-level supporting probe that backs a high-level analysis (CP-15).
+
+    Rendered as a workpaper (not a standalone review item): it is exempt from
+    the daily caps and grouped under the parent high-level run it supports, so a
+    human reviewing the high-level analysis sees its evidence inline.
+    """
+    parent = run.supportive_of or "?"
+    body = render_analysis_md(run)
+    return "\n".join([
+        "> **Supporting workpaper** (exempt from daily caps) for high-level "
+        f"analysis `{parent}`.",
+        "",
+        body,
+    ])
+
+
+def write_workpaper_md(run: AnalysisRun, base_dir: str) -> str:
+    """Persist a supporting workpaper under the parent run's namespace:
+    ``<parent_id>__<run_id>.md`` so it never surfaces as an independent review item."""
+    try:
+        parent = run.supportive_of or run.id
+        directory = os.path.join(base_dir, run.tenant_id)
+        os.makedirs(directory, exist_ok=True)
+        path = os.path.join(directory, f"{parent}__{run.id}.md")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(render_workpaper_md(run))
+        return path
+    except Exception:  # noqa: BLE001 - persisting a file must never break the flow
+        return ""
+
+
+__all__ = ["render_analysis_md", "write_analysis_md",
+           "render_workpaper_md", "write_workpaper_md"]

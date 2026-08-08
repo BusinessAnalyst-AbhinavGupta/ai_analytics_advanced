@@ -34,6 +34,15 @@ class SeniorService:
         """Where the senior workload currently sits (AI vs human, from config)."""
         cfg = self.tenants.get_analyst_config(tenant_id)
         s = cfg.senior
+        try:
+            row = self.store.query_one(
+                "SELECT COUNT(*) AS c FROM analysis_runs WHERE tenant_id=? "
+                "AND executor='junior-bg' AND review_status=? "
+                "AND COALESCE(supportive_of, '')=''",
+                (tenant_id, ReviewStatus.APPROVED.value))
+            auto_accepted = int(row["c"]) if row else 0
+        except Exception:  # noqa: BLE001 - best-effort
+            auto_accepted = 0
         return {
             "tenant_id": tenant_id,
             "role": "senior",
@@ -45,6 +54,7 @@ class SeniorService:
             "junior_depth": clamp_junior_depth(cfg.junior_depth),
             "junior_depth_label": cfg.depth_label,
             "human_signoff_days": int(cfg.human_signoff_days),
+            "auto_accepted": auto_accepted,  # CP-15 low-level exploratory auto-folds
         }
 
     # -- junior depth (human controls the quality/depth the junior learns) ------
@@ -122,7 +132,8 @@ class SeniorService:
         cfg = self.tenants.get_analyst_config(tenant_id)
         rows = self.store.query_all(
             "SELECT * FROM analysis_runs WHERE tenant_id=? "
-            "AND status IN (?,?) ORDER BY generated_at DESC LIMIT ?",
+            "AND status IN (?,?) AND COALESCE(supportive_of, '')='' "
+            "ORDER BY generated_at DESC LIMIT ?",
             (tenant_id, RunStatus.COMPLETED.value, RunStatus.EXECUTED.value, limit))
         out = []
         for r in self.store.rows_to_dicts(rows):

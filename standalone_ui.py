@@ -685,6 +685,9 @@ if tenant:
         scols[1].markdown(f"Junior depth: **{sstatus.get('junior_depth_label', '?')}** "
                           f"({sstatus.get('junior_depth', '?')}/2)")
         scols[2].markdown(f"Human-signoff: **{sstatus.get('human_signoff_days', '?')} days**")
+        st.caption(f"Low-level auto-accepted as FINDINGs (under cap, not in inbox): "
+                   f"**{sstatus.get('auto_accepted', 0)}** · senior review carries only "
+                   f"high-level + escalated runs")
         jb = st.columns([1, 1])
         if jb[0].button("⬆ Promote junior", key="tri_depth_up"):
             _guarded(lambda: _client().senior_junior_depth(tenant, action="up", by="human"))

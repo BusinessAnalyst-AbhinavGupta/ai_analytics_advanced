@@ -240,16 +240,90 @@ class JuniorEngine:
                 + (f" — explore {col} segments and cohorts?" if col
                    else " — what changed in the funnel, and for whom?"))
 
+    def _lo(self, category: str, question: str, columns: List[str], sql: str,
+            depth: int) -> Dict[str, Any]:
+        """One low-level taxonomy entry (CP-15). Level is always 'low' so these
+        auto-fold to FINDINGs (under cap) and never need a human."""
+        return {"target": "", "category": category, "priority": 0, "question": question,
+                "columns": columns, "source": "low_level_taxonomy", "depth": depth,
+                "level": "low", "sql": sql}
+
+    def _low_level_pool(self, depth: int, catalog: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Low-level exploratory taxonomy: schema, fill rate, success trends,
+        breakdown/funnel by dimension, univariate contribution — single-table, safe
+        SQL built from the catalog. Promotion/demotion controls breadth (depth 0 =
+        narrower set; depth 1 adds contribution)."""
+        out: List[Dict[str, Any]] = []
+        for t in catalog.get("tables") or []:
+            cols = t.get("columns") or []
+            if not cols:
+                continue
+            name = t["table"]
+            first = cols[0]
+            dim = next((c for c in cols
+                        if not any(k in str(c).lower() for k in
+                                   ("id", "date", "time", "_at", "created", "updated",
+                                    "timestamp"))), first)
+            date_col = next((c for c in cols
+                             if any(k in str(c).lower() for k in
+                                    ("date", "time", "created", "updated", "timestamp"))), None)
+            # schema (a probe: no data -> never promoted, by design)
+            out.append(self._lo("schema",
+                                f"Describe the schema of `{name}` (columns + types).",
+                                cols, f"SELECT {', '.join(cols[:8])} FROM {name} LIMIT 0",
+                                depth))
+            # fill rate / coverage of a meaningful column
+            out.append(self._lo("fill_rate",
+                                f"What is the fill rate (non-null coverage) of `{first}` in `{name}`?",
+                                [first],
+                                f"SELECT COUNT(*) AS total, COUNT({first}) AS non_null FROM {name}",
+                                depth))
+            # success trend over time (when a date column exists)
+            if date_col:
+                out.append(self._lo("success_trend",
+                                    f"How has activity in `{name}` trended over time ({date_col})?",
+                                    [date_col],
+                                    f"SELECT {date_col} AS day, COUNT(*) AS volume FROM {name} "
+                                    f"GROUP BY {date_col} ORDER BY 1", depth))
+            # breakdown / funnel by a dimension
+            out.append(self._lo(
+                "breakdown" if len(catalog.get("tables") or []) == 1 else "funnel_by_dim",
+                f"How is `{name}` distributed across `{dim}`?", [dim],
+                f"SELECT {dim} AS dim, COUNT(*) AS n FROM {name} "
+                f"GROUP BY {dim} ORDER BY n DESC LIMIT 50", depth))
+            # univariate contribution / share-of (depth 1+ adds breadth)
+            if depth >= 1:
+                out.append(self._lo(
+                    "contribution_uni",
+                    f"What share (contribution) does each `{dim}` in `{name}` make?", [dim],
+                    f"SELECT {dim} AS dim, COUNT(*) AS n, "
+                    f"ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 2) AS pct "
+                    f"FROM {name} GROUP BY {dim} ORDER BY pct DESC LIMIT 50", depth))
+        return out
+
     def suggest_questions(self, tenant_id: str, *, limit_per_target: int = 2) -> Dict[str, Any]:
-        """Turn CompanyProfile.targets (+ approved definitions/queries) into questions."""
+        """Turn CompanyProfile.targets + the catalog into the full junior question set.
+
+        CP-15 two-tier: the low-level exploratory taxonomy (schema, fill rate,
+        success trends, breakdown/funnel by dimension, univariate contribution) is
+        always offered and auto-folds to FINDINGs (never human-gated); high-level
+        (hypothesis formation / RCA) is offered ONLY when the junior is promoted
+        (`junior_depth>=2`) and is human-governed. Promotion/demotion on the senior
+        tab is therefore the control for the level of work.
+        """
         self.tenants.require_tenant(tenant_id)
         profile = self.tenants.get_company_profile(tenant_id)
         defs = self._usable_definitions(tenant_id)
         query_titles = [n.title for n in self.approved_queries(tenant_id)]
-        catalog_columns = {c for t in self.catalog(tenant_id)["tables"] for c in t["columns"]}
+        catalog = self.catalog(tenant_id)
+        catalog_columns = {c for t in catalog["tables"] for c in t["columns"]}
         targets = list(profile.targets) if profile else []
         suggestions = []
         depth = self.junior_depth(tenant_id)
+
+        level_by_depth = {0: "low", 1: "low", 2: "high"}
+        cat_by_depth = {0: "overview", 1: "success_trend", 2: "rca"}
+        my_level = level_by_depth.get(depth, "low")
         for t in targets:
             col = next((c for c in (t.metric_refs or []) if c in catalog_columns), None)
             if col is None:
@@ -257,37 +331,37 @@ class JuniorEngine:
             source = ("approved_definition" if col in defs
                       else "metric" if col in catalog_columns else "adapted")
             question = self._depth_question(t, col, depth)
-            suggestions.append({"target": t.name, "category": t.category,
+            suggestions.append({"target": t.name, "category": cat_by_depth.get(depth, "low"),
                                 "priority": t.priority, "question": question,
                                 "columns": [col] if col else [], "source": source,
-                                "depth": depth})
+                                "depth": depth, "level": my_level})
             if depth >= 2:
-                # advanced: push one deeper business question per target too
-                suggestions.append({"target": t.name, "category": t.category,
+                # promoted junior: high-level hypothesis / RCA per target
+                suggestions.append({"target": t.name, "category": "hypothesis",
                                     "priority": t.priority,
                                     "question": self._hypothesis_question(t, col),
-                                    "columns": [col] if col else [],
-                                    "source": "deep", "depth": depth})
-            if t.priority:
-                # prioritize high-priority targets first; cap below
-                pass
-        # cap
+                                    "columns": [col] if col else [], "source": "deep",
+                                    "depth": depth, "level": "high"})
+        # cap the target-derived questions
         per = max(len(targets), 1)
         limit = per * limit_per_target if depth < 2 else per * max(limit_per_target, 2)
         suggestions = suggestions[:limit]
 
-        # fallback when no targets / to enrich: approved queries + definitions
+        # low-level exploratory taxonomy (always available; auto-folds to FINDINGs)
+        suggestions.extend(self._low_level_pool(depth, catalog))
+
+        # fallback when no targets: approved queries + definitions (low-level)
         if not targets:
             for title in query_titles[:limit_per_target]:
-                suggestions.append({"target": "", "category": "", "priority": 0,
+                suggestions.append({"target": "", "category": "reproduce", "priority": 0,
                                     "question": f"{title} — refresh/reproduce?",
                                     "columns": [], "source": "approved_query",
-                                    "depth": depth})
+                                    "depth": depth, "level": "low"})
             for col, vals in list(defs.items())[:limit_per_target]:
-                suggestions.append({"target": "", "category": "", "priority": 0,
+                suggestions.append({"target": "", "category": "breakdown", "priority": 0,
                                     "question": f"Analyze {col} distribution of {vals[:3]}?",
                                     "columns": [col], "source": "approved_definition",
-                                    "depth": depth})
+                                    "depth": depth, "level": "low"})
         # optional LLM enrichment (only when a live client is configured) -----
         self._enrich_with_llm(tenant_id, suggestions, profile)
         return {"tenant_id": tenant_id, "depth": depth, "count": len(suggestions),

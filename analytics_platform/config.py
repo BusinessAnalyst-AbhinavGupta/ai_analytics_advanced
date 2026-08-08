@@ -45,6 +45,11 @@ class Settings:
     junior_min_interval_minutes: int = 60  # one problem statement per hour max
     junior_daily_cap: int = 3           # at most N junior analyses per UTC day
     junior_review_backlog_max: int = 3  # pause generating once N analyses await senior review
+    # CP-15: low-level exploratory analyses auto-fold to FINDINGs, capped so schema
+    # probes never spam the Brain; high-level runs may spawn supporting low-level
+    # probes, bounded per high-level cycle and exempt from the daily/rate caps.
+    junior_autopromote_cap: int = 500  # max approved FINDINGs per tenant from auto-accept
+    junior_supporting_cap: int = 5     # max on-the-spot supporting probes per high-level run
     junior_llm_cache_ttl_minutes: int = 60  # LLM enrichment cached per tenant (bill guard)
     llm_daily_cap: int = 20         # at most N LLM generations per tenant per UTC day (persisted)
     junior_human_signoff_days: int = 7 # initial window: every analysis -> human review
@@ -96,6 +101,10 @@ class Settings:
                 os.environ.get("ANALYTICS_JUNIOR_REVIEW_BACKLOG_MAX", "3")),
             junior_llm_cache_ttl_minutes=int(
                 os.environ.get("ANALYTICS_JUNIOR_LLM_CACHE_TTL_MINUTES", "60")),
+            junior_autopromote_cap=int(
+                os.environ.get("ANALYTICS_JUNIOR_AUTOPROMOTE_CAP", "500")),
+            junior_supporting_cap=int(
+                os.environ.get("ANALYTICS_JUNIOR_SUPPORTING_CAP", "5")),
             llm_daily_cap=int(
                 os.environ.get("ANALYTICS_LLM_DAILY_CAP", "20")),
             junior_human_signoff_days=int(

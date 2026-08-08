@@ -27,11 +27,12 @@ from typing import Any, Dict, List, Optional
 
 from .analysis import (analyze_results, evaluate_rules, profile_df,
                        synthesize_analysis_llm)
+from .brain.store import CompanyBrain
 from .database import Store, dump_json, load_json
 from .domain import (AnalysisRun, AnswerMode, NodeKind, ReviewStatus, RunStatus,
-                     new_id, now_iso)
+                     clamp_junior_depth, new_id, now_iso)
 from .execution.base import ExecutionContext
-from .markdown import write_analysis_md
+from .markdown import write_analysis_md, write_workpaper_md
 from .observability import Observability, new_trace
 
 
@@ -49,6 +50,8 @@ class JuniorWorker:
                  min_interval_minutes: int = 60,
                  daily_cap: int = 3,
                  review_backlog_max: int = 3,
+                 autopromote_cap: int = 500,
+                 supporting_cap: int = 5,
                  observability: Optional[Observability] = None,
                  clock: Any = time.time, default_tenant: Optional[str] = None,
                  reviews_dir: str = "data/reviews",
@@ -63,6 +66,11 @@ class JuniorWorker:
         # CP-14: pause generating once this many completed analyses are still
         # awaiting (or returned for) senior review, so the inbox never grows unbounded.
         self.review_backlog_max = int(review_backlog_max)
+        # CP-15: low-level exploratory analyses auto-fold to FINDINGs, bounded so
+        # schema probes never spam the Brain; high-level runs may spawn supporting
+        # low-level probes (exempt from daily/rate caps) up to `supporting_cap`.
+        self.autopromote_cap = int(autopromote_cap)
+        self.supporting_cap = int(supporting_cap)
         self.obs = observability or Observability(store)
         self._clock = clock
         self._lock = threading.Lock()   # serial gate: one query at a time
@@ -139,35 +147,52 @@ class JuniorWorker:
             pass
         # -- pipeline -------------------------------------------------------- #
     def pick_problem_statement(self) -> Dict[str, Any]:
-        """Choose an approved, reproducible question this junior hasn't already asked.
+        """Pick the next problem statement across the two-tier taxonomy (CP-15).
 
-        The question text is the approved query's title (a real, goal-aligned
-        question in the governed Brain), so each exploratory analysis is distinct
-        and grounded. CP-14: any question the junior already ran (`analysis_runs`)
-        is skipped — approved runs are FINDING nodes in the knowledge graph the
-        junior leans on, not things to re-ask — so it favours unexplored angles.
-        Falls back to the junior's freshly suggested questions, then a baseline,
-        so the worker always has something safe to do without repeating itself.
+        Prefers genuinely new questions (never re-asks an answered one), rotates
+        across categories for variety, and honours promotion/demotion: high-level
+        questions are available only when `junior_depth>=2`. Reproducible approved
+        queries are kept in the pool as low-level `reproduce` items so prior work
+        stays usable alongside new schema/fill/breakdown/contribution probes.
+        Falls back to a baseline so the worker always has a safe no-op.
         """
+        tid = self.tenant_id
+        depth = self._junior_depth(tid)
         answered = self._answered_questions()
-        picks = self._reproducible_approved()
-        if picks:
-            fresh = [p for p in picks if p["question"] not in answered]
-            if fresh:
-                recent = self._recent_sqls(len(fresh))
-                chosen = next((p for p in fresh if p["sql"] not in recent), fresh[0])
-                return {"target": "", "category": "approved", "priority": 0,
-                        "question": chosen["question"], "columns": [],
-                        "source": "approved", "sql": chosen["sql"]}
+        cands: List[Dict[str, Any]] = []
         try:
-            s = self.junior.suggest_questions(self.tenant_id, limit_per_target=1)
-            for sg in s.get("suggestions", []):
-                if sg.get("question") and sg["question"] not in answered:
-                    return sg
+            s = self.junior.suggest_questions(tid, limit_per_target=2)
+            cands = [x for x in s.get("suggestions", [])
+                     if x.get("question")
+                     and x["question"] not in answered
+                     and ((x.get("level") or "low") != "high" or depth >= 2)]
         except Exception:  # noqa: BLE001 - best-effort
-            pass
-        return {"target": "", "category": "", "priority": 0,
-                "question": "", "columns": [], "source": "none"}
+            cands = []
+        # approved, reproducible queries stay in the pool (low-level, reuse prior work)
+        for p in self._reproducible_approved():
+            if p["question"] not in answered:
+                cands.append({"target": "", "category": "reproduce", "priority": 0,
+                              "question": p["question"], "columns": [],
+                              "source": "approved", "level": "low", "sql": p["sql"]})
+        if not cands:
+            return {"target": "", "category": "", "priority": 0,
+                    "question": "", "columns": [], "source": "none"}
+        # promoted junior leads with high-level work; otherwise low-level first.
+        if depth >= 2:
+            order = ("rca", "hypothesis", "fill_rate", "success_trend", "breakdown",
+                     "funnel_by_dim", "contribution_uni", "overview", "schema", "reproduce")
+        else:
+            order = ("fill_rate", "success_trend", "breakdown", "funnel_by_dim",
+                     "contribution_uni", "overview", "schema", "reproduce", "rca", "hypothesis")
+        last_cat = self._last_category(tid)
+        start = (order.index(last_cat) + 1) if last_cat in order else 0
+        for i in range(len(order)):  # rotate forward from the last used category
+            cat = order[(start + i) % len(order)]
+            hit = next((c for c in cands if c.get("category") == cat), None)
+            if hit:
+                return {**hit, "sql": hit.get("sql") or self.resolve_sql(hit)}
+        chosen = cands[0]
+        return {**chosen, "sql": chosen.get("sql") or self.resolve_sql(chosen)}
 
     def _reproducible_approved(self) -> List[Dict[str, Any]]:
         """Approved, template-free (reproducible) queries for this tenant.
@@ -219,12 +244,81 @@ class JuniorWorker:
         try:
             row = self.store.query_one(
                 "SELECT COUNT(*) AS c FROM analysis_runs WHERE tenant_id=? "
-                "AND executor='junior-bg' AND status IN (?,?) AND review_status IN (?,?)",
+                "AND executor='junior-bg' AND status IN (?,?) AND review_status IN (?,?) "
+                "AND COALESCE(supportive_of, '')=''",
                 (tid, RunStatus.COMPLETED.value, RunStatus.EXECUTED.value,
                  ReviewStatus.CANDIDATE.value, ReviewStatus.REVISION_REQUIRED.value))
             return int(row["c"]) if row else 0
         except Exception:  # noqa: BLE001 - best-effort
             return 0
+
+    def _junior_depth(self, tid: Optional[str] = None) -> int:
+        """Current junior_depth (0..2) for the run tenant; defaults to 1."""
+        tid = tid or self.tenant_id
+        try:
+            return clamp_junior_depth(
+                self.junior.tenants.get_analyst_config(tid).junior_depth)
+        except Exception:  # noqa: BLE001 - best-effort
+            return 1
+
+    def _last_category(self, tid: str) -> Optional[str]:
+        """Category of the most recent standalone junior run (variety rotation)."""
+        try:
+            row = self.store.query_one(
+                "SELECT category FROM analysis_runs WHERE tenant_id=? AND executor='junior-bg' "
+                "AND COALESCE(supportive_of,'')='' AND category IS NOT NULL AND category<>'' "
+                "ORDER BY generated_at DESC LIMIT 1", (tid,))
+            return row["category"] if row else None
+        except Exception:  # noqa: BLE001 - best-effort
+            return None
+
+    def _autopromote_count(self, tid: str) -> int:
+        """Approved FINDINGs for the tenant (bounds auto-accept Brain spam)."""
+        try:
+            row = self.store.query_one(
+                "SELECT COUNT(*) AS c FROM knowledge_nodes WHERE tenant_id=? AND kind=? "
+                "AND status=?", (tid, NodeKind.FINDING.value, ReviewStatus.APPROVED.value))
+            return int(row["c"]) if row else 0
+        except Exception:  # noqa: BLE001 - best-effort
+            return 0
+
+    def _maybe_autopromote(self, tid: str, run: Optional[AnalysisRun]) -> Optional[Any]:
+        """Auto-fold a low-level exploratory run to an approved FINDING (CP-15).
+
+        Guarded: only a COMPLETED low-level run that produced data and no
+        HIGH/CRITICAL anomaly escalates a rule trigger — and only up to
+        `autopromote_cap` approved FINDINGs per tenant. Schema/EDA probes (no
+        rows) never promote.
+        """
+        if run is None or run.status != RunStatus.COMPLETED:
+            return None
+        if (run.level or "low") == "high":
+            return None
+        if any(r.get("severity") in ("CRITICAL", "HIGH")
+               for r in (run.rule_triggers or [])):
+            return None
+        if not run.row_count:
+            return None  # schema/EDA probe produced no data
+        if self._autopromote_count(tid) >= self.autopromote_cap:
+            self.obs.event(tenant_id=tid, stage="junior.autopromote_capped",
+                           actor="junior", resource=run.id, status="WARN",
+                           meta={"cap": self.autopromote_cap})
+            return None
+        brain = CompanyBrain(self.store, tid)
+        node = brain.create(
+            NodeKind.FINDING, title=run.question_text, summary=run.answer,
+            payload={"facts": run.facts, "hypotheses": run.hypotheses,
+                     "rule_triggers": run.rule_triggers, "sql": run.sql,
+                     "row_count": run.row_count, "category": run.category,
+                     "level": run.level, "supportive_of": run.supportive_of},
+            evidence_ref=run.id, source_ref=run.question_id, created_by="junior")
+        brain.submit(node.id, by="junior")
+        node = brain.approve(node.id, by="junior",
+                             notes="auto: low-level exploratory (CP-15)")
+        self.obs.event(tenant_id=tid, stage="junior.autopromote", actor="junior",
+                       resource=node.id, status="OK",
+                       meta={"run": run.id, "category": run.category})
+        return node
 
     def resolve_sql(self, statement: Dict[str, Any]) -> str:
         """Prefer a reproducible approved query (no Metabase template tags); else
@@ -340,16 +434,27 @@ class JuniorWorker:
                     analysis["insights"].append(
                         {"text": llm_insight, "novel": True, "kind": "llm"})
 
-        self._record_ran(now)  # each attempt consumes the 1/hr + 3/day caps (conservative)
+        self._record_ran(now)  # each standalone attempt consumes the 1/hr + 3/day caps
         run = self._save_run(tid, question, sql, ok, row_count, error, t0, statement, analysis)
+        promoted = bool(run and run.status == RunStatus.COMPLETED
+                        and self._maybe_autopromote(tid, run))
+        # CP-15: a completed high-level run may spawn on-the-spot supporting
+        # low-level probes (exempt from the caps; separate workpapers).
+        supporting: List[str] = []
+        if run and run.status == RunStatus.COMPLETED and (run.level or "low") == "high":
+            supporting = self._run_supporting(tid, run, t0)
         self.obs.event(tenant_id=tid, stage="junior.bg_completed", actor="junior",
                        resource=question[:60], status="OK" if ok else "FAILED",
                        duration_ms=(time.perf_counter() - t0) * 1000.0,
-                       meta={"sql": sql, "row_count": row_count, "run_id": run.id,
+                       meta={"sql": sql, "row_count": row_count,
+                             "run_id": run.id if run else None, "level": statement.get("level"),
+                             "promoted": promoted, "supporting": len(supporting),
                              "error": error[:200] if error else ""})
         return {"ran": True, "tenant_id": tid, "in_window": win, "rate_ok": True,
-                "run_id": run.id, "question": question, "sql": sql, "ok": ok,
+                "run_id": run.id if run else None, "question": question, "sql": sql, "ok": ok,
                 "row_count": row_count, "error": error, "source": statement.get("source"),
+                "level": (run.level if run else None), "category": (run.category if run else None),
+                "promoted": promoted, "supporting": supporting,
                 "insights": len(analysis["insights"]),
                 "duration_ms": round((time.perf_counter() - t0) * 1000.0, 2)}
 
@@ -379,24 +484,96 @@ class JuniorWorker:
         frame["rule_triggers"] = rules
         return frame
 
+    def _run_supporting(self, tid: str, parent: AnalysisRun, t0: float) -> List[str]:
+        """On-the-spot low-level supporting probes for a high-level analysis (CP-15).
+
+        Each probe is `supportive_of=<parent>`: EXEMPT from the 1/hr + 3/day caps,
+        EXEMPT from the don't-re-ask dedup, and written as a separate workpaper
+        under the parent's namespace — never an independent review item.
+        Bounded by `supporting_cap`; best-effort and serial.
+        """
+        if self.supporting_cap <= 0:
+            return []
+        suggestions: List[Dict[str, Any]] = []
+        try:
+            s = self.junior.suggest_questions(self.tenant_id, limit_per_target=1)
+            suggestions = [x for x in s.get("suggestions", [])
+                           if (x.get("level") or "low") == "low" and x.get("question")]
+        except Exception:  # noqa: BLE001 - best-effort
+            suggestions = []
+        ids: List[str] = []
+        for sg in suggestions[:self.supporting_cap]:
+            q = sg["question"]
+            sql = sg.get("sql") or self.resolve_sql(sg)
+            t1 = time.perf_counter()
+            ok, row_count, error = False, 0, ""
+            result = None
+            with self._lock:
+                try:
+                    result = self.junior.executor.execute(
+                        sql, ExecutionContext(tenant_id=tid, question=q,
+                                              trace_id=new_trace(), row_limit=50000,
+                                              dialect="athena"))
+                    ok, row_count = bool(result.ok), int(result.row_count or 0)
+                    if not ok:
+                        error = result.error or ""
+                except Exception as e:  # never kill the worker
+                    error = str(e)
+            analysis = self._baseline_analysis(error, ok)
+            if ok and getattr(result, "data", None) is not None and not result.data.empty:
+                analysis = self._analyze(tid, q, sql, result.data)
+            run = self._save_run(tid, q, sql, ok, row_count, error, t1,
+                                 {**sg, "level": "low", "category": sg.get("category")},
+                                 analysis, supportive_of=parent.id)
+            if run:
+                self._maybe_autopromote(tid, run)
+                ids.append(run.id)
+                self.obs.event(tenant_id=tid, stage="junior.supporting", actor="junior",
+                               resource=run.id, status="OK",
+                               meta={"parent": parent.id, "category": run.category})
+        return ids
+
     def _save_run(self, tid: str, question: str, sql: str, ok: bool,
                   row_count: int, error: str, t0: float,
                   statement: Dict[str, Any],
-                  analysis: Dict[str, Any]) -> Optional[AnalysisRun]:
-        """Persist a full analysis run (CP-12) and write its reviewable `.md`.
+                  analysis: Dict[str, Any],
+                  supportive_of: Optional[str] = None) -> Optional[AnalysisRun]:
+        """Persist a full analysis run (CP-12/15).
 
-        Sets `review_status=CANDIDATE` so the run surfaces in the senior review
-        inbox (human is the senior while the AI senior is off / signoff window).
+        CP-15 routing:
+          * low-level, analyzable, no anomaly          -> auto-accepted; promoted to
+            a FINDING in `run_cycle` (bounded by `autopromote_cap`), not in the inbox;
+          * low-level with HIGH/CRITICAL rule trigger  -> REQUIRES_SENIOR_REVIEW (inbox);
+          * high-level (hypothesis/RCA, depth 2)       -> REQUIRES_SENIOR_REVIEW (inbox);
+          * supporting workpapers (`supportive_of`)    -> APPROVED, never in the inbox;
+          * schema/EDA probes / failures               -> recorded, never promoted.
         """
         status = RunStatus.COMPLETED if ok else RunStatus.FAILED
         anomalies = [r for r in analysis.get("rule_triggers", [])
                      if r.get("severity") in ("CRITICAL", "HIGH")]
-        answer_mode = (AnswerMode.REQUIRES_SENIOR_REVIEW if anomalies
-                       else AnswerMode.NEW_LOW_RISK_ANALYSIS)
+        level = statement.get("level") or "low"
+        low = (level == "low")
+        category = statement.get("category")
+        if supportive_of:
+            review_status, answer_mode = (ReviewStatus.APPROVED,
+                                          AnswerMode.NEW_LOW_RISK_ANALYSIS)
+        elif anomalies:
+            review_status, answer_mode = (ReviewStatus.CANDIDATE,
+                                          AnswerMode.REQUIRES_SENIOR_REVIEW)
+        elif not low:
+            review_status, answer_mode = (ReviewStatus.CANDIDATE,
+                                          AnswerMode.REQUIRES_SENIOR_REVIEW)
+        elif ok and row_count:
+            review_status, answer_mode = (ReviewStatus.APPROVED,
+                                          AnswerMode.NEW_LOW_RISK_ANALYSIS)
+        else:
+            review_status, answer_mode = (ReviewStatus.CANDIDATE,
+                                          AnswerMode.NEW_LOW_RISK_ANALYSIS)
         run = AnalysisRun(
             id=new_id("run"), tenant_id=tid, trace_id=new_trace(), question_id="",
             question_text=question, sql=sql, dialect="athena", executor="junior-bg",
-            status=status, answer_mode=answer_mode, review_status=ReviewStatus.CANDIDATE,
+            status=status, answer_mode=answer_mode, review_status=review_status,
+            level=level, category=category, supportive_of=supportive_of,
             execution_ms=round((time.perf_counter() - t0) * 1000.0, 2),
             row_count=row_count,
             profile_summary=analysis.get("profile", {}),
@@ -414,11 +591,12 @@ class JuniorWorker:
         )
         try:
             self.store.execute(
-                "INSERT INTO analysis_runs (id,tenant_id,trace_id,question_id,question_text,sql,"
-                "dialect,executor,status,answer_mode,review_status,generated_at,execution_ms,"
-                "row_count,profile_summary,rule_triggers,answer,facts,hypotheses,uncertainties,"
-                "next_actions,insights,assumptions,cost_estimate,policy_reasons,source_node_ids) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO analysis_runs (id,tenant_id,trace_id,question_id,question_text,"
+                "sql,dialect,executor,status,answer_mode,review_status,generated_at,"
+                "execution_ms,row_count,profile_summary,rule_triggers,answer,facts,"
+                "hypotheses,uncertainties,next_actions,insights,assumptions,"
+                "level,category,supportive_of,cost_estimate,policy_reasons,source_node_ids) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (run.id, run.tenant_id, run.trace_id, run.question_id, run.question_text,
                  run.sql, run.dialect, run.executor, run.status.value,
                  run.answer_mode.value, run.review_status.value, run.generated_at,
@@ -426,9 +604,13 @@ class JuniorWorker:
                  dump_json(run.rule_triggers), run.answer, dump_json(run.facts),
                  dump_json(run.hypotheses), dump_json(run.uncertainties),
                  dump_json(run.next_actions), dump_json(run.insights),
-                 dump_json(run.assumptions), run.cost_estimate,
-                 dump_json(run.policy_reasons), dump_json(run.source_node_ids)))
-            write_analysis_md(run, self.reviews_dir)
+                 dump_json(run.assumptions), run.level, run.category, run.supportive_of,
+                 run.cost_estimate, dump_json(run.policy_reasons),
+                 dump_json(run.source_node_ids)))
+            if supportive_of:
+                write_workpaper_md(run, self.reviews_dir)
+            else:
+                write_analysis_md(run, self.reviews_dir)
         except Exception:  # noqa: BLE001 - persisting the run must never break the worker
             return None
         return run

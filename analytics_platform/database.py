@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS analysis_runs (
     row_count INTEGER, profile_summary TEXT, rule_triggers TEXT, answer TEXT,
     facts TEXT, hypotheses TEXT, uncertainties TEXT, next_actions TEXT,
     insights TEXT, assumptions TEXT,
+    level TEXT, category TEXT, supportive_of TEXT,
     cost_estimate REAL, policy_reasons TEXT, source_node_ids TEXT
 );
 CREATE TABLE IF NOT EXISTS telemetry (
@@ -144,6 +145,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
     try:
         cols = {row[1] for row in conn.execute("PRAGMA table_info(analysis_runs)").fetchall()}
         for col in ("insights", "assumptions"):
+            if col not in cols:
+                conn.execute(f"ALTER TABLE analysis_runs ADD COLUMN {col} TEXT")
+        # CP-15: two-tier junior (low/high) + supporting-workpaper linkage
+        for col in ("level", "category", "supportive_of"):
             if col not in cols:
                 conn.execute(f"ALTER TABLE analysis_runs ADD COLUMN {col} TEXT")
         conn.commit()
