@@ -8,11 +8,28 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
 > snapshot on top of it — keep the plan's spine updated when work lands.
 
 ## State
-- **HEAD `e99580e` **CP-14** (`main`) — clean tree; everything committed.** P0–P9 core + CP-10 + CP-11 +
-  CP-12 + CP-13 + CP-14 + triage + launcher/docs are all in `git log`. Original `AI analytics/`
-  folder untouched.
-  Latest checkpoints: `e99580e` **CP-14** (draining senior review + no-repeat junior) · `f427179`
-  **CP-13** (LLM bill guard) · `59000c7` **CP-12** (live junior + persisted caps).
+- **HEAD `5a26cfe` **CP-15** (`main`) — clean tree; everything committed.** P0–P9 core + CP-10..CP-15 +
+  triage + launcher/docs are all in `git log`. Original `AI analytics/` folder untouched.
+  Latest checkpoints: `5a26cfe` **CP-15** (two-tier junior by promotion/demotion) · `e99580e`
+  **CP-14** (draining senior review + no-repeat junior) · `f427179` **CP-13** (LLM bill guard).
+- **CP-15 (two-tier junior, driven by promotion/demotion) is IN:**
+  * **Below depth 2** the junior roams a broad **low-level exploratory taxonomy** built over the
+    catalog (`junior.py:_low_level_pool`): `schema`, `fill_rate`, `success_trend`, `breakdown` /
+    `funnel_by_dim`, `contribution_uni` (univariate; multi-variate deferred unless a JOIN_RULE /
+    dimension or LLM SQL is available). These are **auto-accepted → approved FINDINGs** under
+    `junior_autopromote_cap` (default 500/tenant; schema probes {row_count 0} and HIGH/CRITICAL
+    anomaly escalations never fold) and **never land in the human inbox**.
+  * **At depth 2** the junior unlocks **high-level (hypothesis formation / RCA)** questions, which
+    are **human-governed** (`REQUIRES_SENIOR_REVIEW` → inbox) and **never auto-fold**.
+  * A completed high-level run may spawn ≤ `junior_supporting_cap` (default 5) **on-the-spot
+    low-level supporting probes** (`supportive_of=<high run>`): **exempt from the 1/hr + 3/day
+    caps**, **exempt from the don't-re-ask dedup**, written as a **separate `…_workpapers.md`**
+    (`markdown.py:write_workpaper_md`) and never shown as an independent review item.
+  * Data model: `analysis_runs.level / category / supportive_of` (migrated); `SeniorService.queue`
+    + the review-backlog gate are scoped to **human-reviewable** runs only; `senior.status`
+    exposes `auto_accepted`; UI shows the auto-accepted count.
+  * Config: `junior_autopromote_cap` (`ANALYTICS_JUNIOR_AUTOPROMOTE_CAP`, 500),
+    `junior_supporting_cap` (`ANALYTICS_JUNIOR_SUPPORTING_CAP`, 5).
 - **CP-14 (draining senior review) is IN** — the review inbox no longer grows:
   * `SeniorService.queue` now **excludes approved AND rejected** runs (it used to leave
     approved ones in the inbox), so approving or rejecting visibly empties a row. Approved
@@ -48,7 +65,7 @@ Goal: standalone, company-independent AI analytics copilot (see `STANDALONE_ANAL
   toggles + model, versioned per tenant in `analyst_configs` + `analyst_config_history`); senior
   review inbox (`approve`/`reject`/`revise` → FINDING; human-on-top); junior depth + human-signoff
   window; per-analysis `.md` review files; config tab + model ping.
-- **193/193 standalone tests pass** (all `tests/` modules except the legacy `test_ui_and_db`).
+- **196/196 standalone tests pass** (all `tests/` modules except the legacy `test_ui_and_db`).
   Run: `cd <repo> && .venv/bin/python -m unittest tests.test_api tests.test_brain
   tests.test_browser_session tests.test_cli tests.test_governance_auth
   tests.test_governance_retention tests.test_ingest tests.test_junior
