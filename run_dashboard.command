@@ -30,6 +30,21 @@ if [ -f ".env" ]; then
     export $(grep -v '^#' .env | xargs) 2>/dev/null
 fi
 
+# 0. Handle Tenant Isolation
+TENANT_DIR=$1
+if [ -n "$TENANT_DIR" ]; then
+    echo "🏢 Booting isolated tenant from: $TENANT_DIR"
+    export ANALYTICS_DATA_DIR="$TENANT_DIR"
+    
+    # Source tenant-specific .env if it exists
+    if [ -f "$TENANT_DIR/.env" ]; then
+        echo "🔑 Loading tenant secrets from $TENANT_DIR/.env"
+        set -a
+        source "$TENANT_DIR/.env"
+        set +a
+    fi
+fi
+
 # Client read timeout (seconds). Default high enough for a *cold* junior refresh
 # (which may trigger a live LLM call + executor schema probes; the server-side LLM
 # client allows up to 120s). Tighten with ANALYTICS_API_TIMEOUT if you prefer.
@@ -77,25 +92,27 @@ else
     fi
 fi
 
-# 4. Auto-free port 8501 if previously occupied
-OCCUPIED_PID=$(lsof -ti :8501 2>/dev/null)
+# 4. Auto-free port 3000 if previously occupied
+OCCUPIED_PID=$(lsof -ti :3000 2>/dev/null)
 if [ -n "$OCCUPIED_PID" ]; then
-    echo "🧹 Freeing port 8501 (terminating previous instance PID: $OCCUPIED_PID)..."
+    echo "🧹 Freeing port 3000 (terminating previous instance PID: $OCCUPIED_PID)..."
     kill -9 $OCCUPIED_PID 2>/dev/null || true
     sleep 1
 fi
 
 echo ""
-echo "🌐 Starting Standalone UI on http://localhost:8501 (API: ${ANALYTICS_API_URL})..."
+echo "🌐 Starting Next.js UI on http://localhost:3000 (API: ${ANALYTICS_API_URL})..."
 echo "ℹ️  Press [Ctrl + C] in this window anytime to stop the server."
 echo "========================================================================"
 echo ""
 
 # Open browser after a short delay in background
-(sleep 2 && open "http://localhost:8501") &
+(sleep 3 && open "http://localhost:3000") &
 
-# 5. Launch the CURRENT standalone UI (thin API client over the backend)
-PYTHONPATH=. .venv/bin/streamlit run standalone_ui.py \
-    --server.port 8501 \
-    --server.headless false \
-    --browser.gatherUsageStats false
+# 5. Launch the Next.js frontend
+cd frontend
+if [ ! -d "node_modules" ]; then
+    echo "📦 Installing frontend dependencies..."
+    npm install
+fi
+npm run dev
