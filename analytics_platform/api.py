@@ -274,9 +274,7 @@ def make_context(settings: Optional[Settings] = None,
     billing = BillingService(store, settings=settings, observability=obs)
     retention = RetentionService(store, tenants=tenants, observability=obs)
     junior = JuniorEngine(store, executor=executor, tenants=tenants,
-                          observability=obs, llm=make_client_from(settings),
-                          llm_cache_ttl_minutes=settings.junior_llm_cache_ttl_minutes,
-                          llm_daily_cap=settings.llm_daily_cap)
+                          observability=obs, settings=settings)
     junior_worker = _make_junior_worker(settings, store, junior, obs)
     scheduler = Scheduler(store, observability=obs,
                           retention_days=settings.log_retention_days,
@@ -342,9 +340,7 @@ def ensure_services(ctx: AppContext) -> AppContext:
         ctx.junior = JuniorEngine(ctx.store, executor=ctx.executor,
                                   tenants=ctx.tenants,
                                   observability=ctx.observability,
-                                  llm=make_client_from(ctx.settings),
-                                  llm_cache_ttl_minutes=ctx.settings.junior_llm_cache_ttl_minutes,
-                                  llm_daily_cap=ctx.settings.llm_daily_cap)
+                                  settings=ctx.settings)
     if ctx.junior_worker is None:
         ctx.junior_worker = _make_junior_worker(ctx.settings, ctx.store,
                                                 ctx.junior, ctx.observability)
@@ -789,9 +785,7 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
         tenant_or_404(tenant_id)
         return JuniorEngine(ctx.store, executor=_api_junior_executor(ctx.settings, ctx.executor),
                             tenants=ctx.tenants, observability=ctx.observability,
-                            llm=make_client_from(ctx.settings),
-                            llm_cache_ttl_minutes=ctx.settings.junior_llm_cache_ttl_minutes,
-                            llm_daily_cap=ctx.settings.llm_daily_cap)
+                            settings=ctx.settings)
 
     @app.get("/junior/{tenant_id}/stage")
     def junior_stage(tenant_id: str, limit: int = 200) -> Dict[str, Any]:
@@ -832,9 +826,7 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
         from .junior_worker import JuniorWorker
         eng = JuniorEngine(ctx.store, executor=_api_junior_executor(ctx.settings, ctx.executor),
                            tenants=ctx.tenants, observability=ctx.observability,
-                           llm=make_client_from(ctx.settings),
-                           llm_cache_ttl_minutes=ctx.settings.junior_llm_cache_ttl_minutes,
-                           llm_daily_cap=ctx.settings.llm_daily_cap)
+                           settings=ctx.settings)
         worker = JuniorWorker(ctx.store, eng, tenant_id=tenant_id,
                               work_start=ctx.settings.junior_work_start,
                               work_end=ctx.settings.junior_work_end,

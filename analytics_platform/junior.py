@@ -21,9 +21,11 @@ import time
 from typing import Any, Dict, List, Optional
 
 from .brain.store import CompanyBrain
+from .config import Settings
 from .database import Store
 from .domain import KnowledgeNode, NodeKind, ReviewStatus, clamp_junior_depth
 from .execution.base import ExecutionContext, QueryExecutor
+from .llm.client import make_role_client
 from .observability import Observability
 from .tenancy import TenantService
 
@@ -43,18 +45,22 @@ class JuniorEngine:
     def __init__(self, store: Store, executor: Optional[QueryExecutor] = None,
                  tenants: Optional[TenantService] = None,
                  observability: Optional[Observability] = None,
-                 llm: Optional[Any] = None,
-                 llm_cache_ttl_minutes: int = 60,
-                 llm_daily_cap: int = 20):
+                 settings: Optional[Settings] = None):
         from .execution.sampler import SamplerExecutor
-        from .llm.client import NullClient
+        from .config import Settings
         self.store = store
         self.executor = executor or SamplerExecutor()
         self.tenants = tenants or TenantService(store)
         self.obs = observability or Observability(store)
-        self.llm = llm or NullClient()  # injectable; NullClient (offline) by default
-        self.llm_cache_ttl_seconds = int(llm_cache_ttl_minutes) * 60
-        self.llm_daily_cap = int(llm_daily_cap)
+        self.settings = settings or Settings()
+
+    @property
+    def llm_cache_ttl_seconds(self) -> int:
+        return int(getattr(self.settings, "junior_llm_cache_ttl_minutes", 60)) * 60
+
+    @property
+    def llm_daily_cap(self) -> int:
+        return int(getattr(self.settings, "llm_daily_cap", 20))
 
     # -- LLM enrichment cache + daily budget (bill guard) --------------------
     def _llm_cache_key(self, tenant_id: str, kind: str, depth: int) -> tuple:
@@ -324,6 +330,24 @@ class JuniorEngine:
         level_by_depth = {0: "low", 1: "low", 2: "high"}
         cat_by_depth = {0: "overview", 1: "success_trend", 2: "rca"}
         my_level = level_by_depth.get(depth, "low")
+        
+        # Check for unresolved anomalies first
+        brain = self.brain(tenant_id)
+        # In anomaly.py we did: pipeline.ingest([{...}], tenant_id, by="anomaly_trigger")
+        for n in brain.all(limit=1000):
+            if getattr(n, "created_by", "") == "anomaly_trigger" and getattr(n.status, "value", "") == "candidate":
+                suggestions.append({
+                    "target": getattr(n, "title", "Anomaly"), 
+                    "category": "rca",
+                    "priority": 100, 
+                    "question": getattr(n, "summary", "Diagnose anomaly."),
+                    "columns": [], 
+                    "source": "anomaly",
+                    "depth": 2, 
+                    "level": "high",
+                    "sql": n.payload.get("sql", "")
+                })
+
         for t in targets:
             col = next((c for c in (t.metric_refs or []) if c in catalog_columns), None)
             if col is None:
@@ -391,9 +415,9 @@ class JuniorEngine:
         return {"tenant_id": tenant_id, "depth": depth, "count": len(hyps),
                 "hypotheses": hyps}
 
-    def _llm_live(self) -> bool:
+    def _llm_live(self, llm: Any) -> bool:
         """True when an actual LLM client (not the offline NullClient) is configured."""
-        return getattr(self.llm, "name", "null") != "null"
+        return getattr(llm, "name", "null") != "null"
 
     def _llm_lines(self, text: str, limit: int) -> List[str]:
         """Parse newline-delimited LLM lines, stripping numbering/bullets."""
@@ -414,7 +438,11 @@ class JuniorEngine:
         `llm_daily_cap` times per UTC day (persisted) — so UI reruns and
         background calls share the budget and cannot multiply the bill.
         """
-        if not self._llm_live():
+        cfg = self.tenants.get_analyst_config(tenant_id)
+        if not cfg.junior.enabled:
+            return
+        llm = make_role_client(self.settings, cfg.junior)
+        if not self._llm_live(llm):
             return
         depth = self.junior_depth(tenant_id)
         key = self._llm_cache_key(tenant_id, "questions", depth)
@@ -442,7 +470,7 @@ class JuniorEngine:
             "Return only the questions, one per line, no numbering."
         )
         try:
-            res = self.llm.generate(prompt=prompt, system_prompt=(
+            res = llm.generate(prompt=prompt, system_prompt=(
                 "You are a senior product-analytics assistant. Be concrete and measurable."),
                 temperature=0.3)
             lines = self._llm_lines(res.text, 2)
@@ -459,9 +487,13 @@ class JuniorEngine:
                            status="FAILED", meta={"error": str(e)})
 
     def _enrich_hypotheses_llm(self, tenant_id: str, hyps: List[Dict[str, Any]],
-                               profile: Optional[Any], depth: int) -> None:
+                                profile: Optional[Any], depth: int) -> None:
         """Optional LLM-authored business hypotheses, additive + throttled (CP-13)."""
-        if not self._llm_live() or depth < 2:
+        cfg = self.tenants.get_analyst_config(tenant_id)
+        if not cfg.junior.enabled:
+            return
+        llm = make_role_client(self.settings, cfg.junior)
+        if not self._llm_live(llm) or depth < 2:
             return
         key = self._llm_cache_key(tenant_id, "hypotheses", depth)
         cached = self._llm_cache_get(key)
@@ -488,7 +520,7 @@ class JuniorEngine:
             "Return only the hypotheses, one per line, no numbering."
         )
         try:
-            res = self.llm.generate(prompt=prompt, system_prompt=(
+            res = llm.generate(prompt=prompt, system_prompt=(
                 "You are a senior product-analytics assistant. Hypotheses must be "
                 "specific and falsifiable with the company's own data."),
                 temperature=0.4)

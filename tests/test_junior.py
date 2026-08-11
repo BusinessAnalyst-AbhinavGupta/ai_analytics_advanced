@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import unittest
 
+from unittest.mock import patch
+
 from analytics_platform.domain import DataSourceKind, NodeKind, ReviewStatus
 from analytics_platform.fixtures import WEEKLY_ORDER_SQL, build_retail_warehouse
 from analytics_platform.junior import JuniorEngine
 from tests.helpers import make_ctx
+
 
 
 def approve_query(brain, sql, title="approved metric"):
@@ -113,23 +116,26 @@ class TestJunior(unittest.TestCase):
         s = self.engine.suggest_questions(self.tid)
         self.assertFalse(any(x["source"] == "llm" for x in s["suggestions"]))
 
-    def test_suggest_questions_llm_enrichment(self):
+    @patch("analytics_platform.junior.make_role_client")
+    def test_suggest_questions_llm_enrichment(self, mock_make_role_client):
+        mock_make_role_client.return_value = _FakeLLM("1. What drives the view_to_order drop?\n"
+                                                       "2. Segment completion rate by region")
         eng = JuniorEngine(self.ctx.store, executor=self.ctx.executor,
-                           tenants=self.ctx.tenants,
-                           llm=_FakeLLM("1. What drives the view_to_order drop?\n"
-                                        "2. Segment completion rate by region"))
+                           tenants=self.ctx.tenants)
         s = eng.suggest_questions(self.tid)
         self.assertTrue(any(x["source"] == "llm" for x in s["suggestions"]))
         self.assertGreaterEqual(s["count"], 1)
         texts = {x["question"] for x in s["suggestions"]}
         self.assertTrue(any("view_to_order" in t or "completion" in t for t in texts))
 
-    def test_suggest_questions_llm_failure_is_non_fatal(self):
+    @patch("analytics_platform.junior.make_role_client")
+    def test_suggest_questions_llm_failure_is_non_fatal(self, mock_make_role_client):
         class _Boom(_FakeLLM):
             def generate(self, prompt, system_prompt="", **kw):
                 raise RuntimeError("boom")
+        mock_make_role_client.return_value = _Boom("")
         eng = JuniorEngine(self.ctx.store, executor=self.ctx.executor,
-                           tenants=self.ctx.tenants, llm=_Boom(""))
+                           tenants=self.ctx.tenants)
         s = eng.suggest_questions(self.tid)  # must not raise
         self.assertFalse(any(x["source"] == "llm" for x in s["suggestions"]))
 

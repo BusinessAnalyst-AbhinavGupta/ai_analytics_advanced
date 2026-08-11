@@ -221,7 +221,7 @@ def cmd_junior(args: argparse.Namespace) -> int:
     executor = _resolve_junior_executor(ctx.settings, ctx.executor or SamplerExecutor())
     eng = JuniorEngine(ctx.store, executor=executor,
                        tenants=ctx.tenants, observability=ctx.observability,
-                       llm=make_client_from(ctx.settings))
+                       settings=ctx.settings)
     _print("Junior readiness", eng.stage(args.tenant_id, limit=args.limit))
     cat = eng.catalog(args.tenant_id)
     _print("Catalog", {"tables_known": cat["tables_known"],

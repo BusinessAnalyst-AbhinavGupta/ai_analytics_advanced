@@ -20,7 +20,6 @@ from analytics_platform.brain.store import CompanyBrain
 from analytics_platform.domain import DataSourceKind, NodeKind, ReviewStatus
 from analytics_platform.junior import JuniorEngine
 from analytics_platform.junior_worker import JuniorWorker
-from analytics_platform.llm.client import NullClient
 from analytics_platform.senior import SeniorService
 from tests.helpers import make_ctx
 
@@ -29,7 +28,7 @@ _WAREHOUSE = {"things": pd.DataFrame({"col": [1, 2, 3, 4]})}
 
 def _worker(ctx, tid: str, review_backlog_max: int = 3, **kw):
     eng = JuniorEngine(ctx.store, executor=ctx.executor, tenants=ctx.tenants,
-                       observability=ctx.obs, llm=NullClient())
+                       observability=ctx.obs)
     return JuniorWorker(ctx.store, eng, tenant_id=tid,
                         observability=ctx.obs, reviews_dir=kw.get("reviews_dir", "data/reviews"),
                         work_start=kw.get("work_start", "10:00"),
@@ -52,8 +51,7 @@ class TestSeniorReviewQueue(unittest.TestCase):
         # depth 2 => high-level (human-governed) work, so runs land in the inbox
         self.ctx.tenants.set_analyst_config(self.tid, {"junior_depth": 2}, changed_by="human")
         self.eng = JuniorEngine(self.ctx.store, executor=self.ctx.executor,
-                                tenants=self.ctx.tenants, observability=self.ctx.obs,
-                                llm=NullClient())
+                                tenants=self.ctx.tenants, observability=self.ctx.obs)
         self.worker = _worker(self.ctx, self.tid, reviews_dir=self.reviews, supporting_cap=0)
         self.senior = SeniorService(self.ctx.store, self.ctx.pipeline, self.ctx.tenants,
                                     observability=self.ctx.obs, reviews_dir=self.reviews)
