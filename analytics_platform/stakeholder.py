@@ -15,9 +15,11 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 from .brain.store import CompanyBrain
+from .config import Settings
 from .database import Store, dump_json
 from .domain import AnswerMode, NodeKind, new_id, now_iso
 from .execution.base import ExecutionContext
+from .llm.client import make_role_client
 from .observability import Observability, new_trace
 from .tenancy import TenantService
 
@@ -39,16 +41,15 @@ class StakeholderService:
     def __init__(self, store: Store, tenants: Optional[TenantService] = None,
                  executor: Optional[Any] = None,
                  observability: Optional[Observability] = None,
-                 llm: Optional[Any] = None,
                  cost_per_1k_input: float = 0.30,
-                 cost_per_1k_output: float = 1.20):
+                 cost_per_1k_output: float = 1.20,
+                 settings: Optional[Settings] = None):
         from .execution.sampler import SamplerExecutor
-        from .llm.client import NullClient
         self.store = store
         self.tenants = tenants or TenantService(store)
         self.executor = executor or SamplerExecutor()
         self.obs = observability or Observability(store)
-        self.llm = llm or NullClient()
+        self.settings = settings or Settings()
         self.cost_per_1k_input = cost_per_1k_input
         self.cost_per_1k_output = cost_per_1k_output
 
@@ -70,12 +71,12 @@ class StakeholderService:
         return category in ("metric_lookup", "trend", "comparison") and "revenue" in q
 
     # -- retrieve ----------------------------------------------------------
-    def _retrieve(self, tenant_id: str, question: str) -> Tuple[Optional[Any], Optional[Any]]:
-        """Approved knowledge first: a reusable QUERY, else a DEFINITION."""
+    def _retrieve(self, tenant_id: str, question: str) -> Tuple[List[Any], List[Any]]:
+        """Approved knowledge first: reusable QUERY nodes, else DEFINITION nodes."""
         brain = self.brain(tenant_id)
         q = brain.search(question, kind=NodeKind.QUERY, usable_only=True, limit=3)
         d = brain.search(question, kind=NodeKind.DEFINITION, usable_only=True, limit=3)
-        return (q[0] if q else None), (d[0] if d else None)
+        return (q or []), (d or [])
 
     def _refresh(self, tenant_id: str, node: Any, question: str) -> Dict[str, Any]:
         ec = ExecutionContext(tenant_id=tenant_id, question=question,
@@ -99,67 +100,120 @@ class StakeholderService:
         self.tenants.require_tenant(tenant_id)
         trace = new_trace()
         category = self.classify(question)
-        query_node, defn_node = self._retrieve(tenant_id, question)
+
+        cfg = self.tenants.get_analyst_config(tenant_id)
+        if not cfg.stakeholder.enabled:
+            answer = "AI Stakeholder analyst is disabled for this tenant."
+            out = self._record(tenant_id, question, user_id, category, trace, answer,
+                               AnswerMode.CANNOT_ANSWER, "CANNOT_ANSWER", False, [],
+                               caveats=["stakeholder analyst AI disabled in tenant configuration"])
+            self.obs.event(tenant_id=tenant_id, trace_id=trace, stage="stakeholder.answer",
+                           actor="stakeholder", resource=out["answer_id"], status="DISABLED",
+                           meta={"category": category, "mode": AnswerMode.CANNOT_ANSWER.value})
+            return out
+
+        llm = make_role_client(self.settings, cfg.stakeholder)
+        query_nodes, defn_nodes = self._retrieve(tenant_id, question)
 
         if self.is_high_risk(question, category):
-            source_ids = [n.id for n in (query_node, defn_node) if n]
+            source_ids = [n.id for n in (query_nodes + defn_nodes)]
             if source_ids:
                 self.brain(tenant_id).submit(source_ids[0], by="stakeholder")
             out = self._record(tenant_id, question, user_id, category, trace, "",
                                AnswerMode.REQUIRES_SENIOR_REVIEW, "ESCALATED", True,
-                               source_ids, caveats=["high-risk question matched escalation rules"])
+                               source_ids, caveats=["high-risk question matched escalation rules"],
+                               queries_run=[n.payload.get("sql", "") for n in query_nodes])
             self.obs.event(tenant_id=tenant_id, trace_id=trace, stage="stakeholder.escalate",
                            actor="stakeholder", resource=out["answer_id"], status="OK",
                            meta={"category": category})
             return out
 
-        if query_node is not None:
-            refreshed = self._refresh(tenant_id, query_node, question)
-            if refreshed["ok"]:
-                answer = ("Reused approved query '" + query_node.title + "' ("
-                          + str(refreshed["row_count"]) + " rows).")
+        if query_nodes:
+            all_details = []
+            queries_run = []
+            citations = []
+            facts = []
+            caveats = ["values from approved queries at review time"]
+            any_failed = False
+            last_err = ""
+            for q_node in query_nodes:
+                sql = q_node.payload.get("sql", "")
+                if sql:
+                    queries_run.append(sql)
+                refreshed = self._refresh(tenant_id, q_node, question)
+                all_details.append(refreshed)
+                if not refreshed["ok"]:
+                    any_failed = True
+                    last_err = refreshed["error"]
+                else:
+                    facts.append(f"reused approved query: {q_node.title}")
+                    citations.append({
+                        "node_id": q_node.id, 
+                        "title": q_node.title,
+                        "evidence_ref": q_node.evidence_ref,
+                        "freshness": q_node.confidence.get("freshness", 0.0)
+                    })
+            
+            if not any_failed:
+                if len(query_nodes) == 1:
+                    answer = f"Reused approved query '{query_nodes[0].title}' ({all_details[0]['row_count']} rows)."
+                else:
+                    answer = f"Reused {len(query_nodes)} approved queries."
                 mode = AnswerMode.REFRESHED_APPROVED_QUERY
-                caveats = ["value from the approved query at review time"]
             else:
-                answer = ("Matched approved query '" + query_node.title + "' but it failed "
-                          "to run: " + str(refreshed["error"]))
+                answer = f"Matched {len(query_nodes)} approved queries, but execution failed: {last_err}"
                 mode = AnswerMode.CANNOT_ANSWER
-                caveats = [str(refreshed["error"])]
-            freshness = query_node.confidence.get("freshness", 0.0)
+                caveats = [str(last_err)]
+                
+            chart_config = None
+            if not any_failed and self._llm_live(llm) and len(all_details) > 0:
+                data_arg = all_details[0].get("data") or all_details[0].get("preview")
+                _, _, chart_config = self._synthesize(llm, question, category, data_arg)
+
             out = self._record(tenant_id, question, user_id, category, trace, answer, mode,
-                               "ANSWERED", False, [query_node.id],
-                               [{"node_id": query_node.id, "title": query_node.title,
-                                 "evidence_ref": query_node.evidence_ref,
-                                 "freshness": freshness}],
-                               facts=["reused approved query: " + query_node.title] if refreshed["ok"] else [],
-                               caveats=caveats)
-            out["_detail"] = refreshed
+                               "ANSWERED", False, [n.id for n in query_nodes],
+                               citations, facts=facts, caveats=caveats, queries_run=queries_run)
+            out["_detail"] = all_details
+            out["chart_config"] = chart_config
+            out["chart_data"] = all_details[0].get("data", {}).get("rows", []) if all_details and isinstance(all_details[0].get("data"), dict) else (all_details[0].get("preview", []) if all_details else [])
             self.obs.event(tenant_id=tenant_id, trace_id=trace, stage="stakeholder.answer",
                            actor="stakeholder", resource=out["answer_id"], status="OK",
                            meta={"category": category, "mode": mode.value})
             return out
-
-        if defn_node is not None:
-            answer = ("Definition: " + defn_node.title + ". " + (defn_node.summary or "")).strip()
+        if defn_nodes:
+            answers = []
+            facts = []
+            citations = []
+            for d_node in defn_nodes:
+                answers.append(f"{d_node.title}: {d_node.summary or ''}")
+                if d_node.summary:
+                    facts.append(d_node.summary)
+                citations.append({
+                    "node_id": d_node.id, "title": d_node.title,
+                    "evidence_ref": d_node.evidence_ref,
+                    "freshness": d_node.confidence.get("freshness", 0.0)
+                })
+            
+            answer = "Definitions: " + " | ".join(answers)
             out = self._record(tenant_id, question, user_id, category, trace, answer,
                                AnswerMode.DIRECT_FROM_APPROVED_KNOWLEDGE, "ANSWERED", False,
-                               [defn_node.id],
-                               [{"node_id": defn_node.id, "title": defn_node.title,
-                                 "evidence_ref": defn_node.evidence_ref,
-                                 "freshness": defn_node.confidence.get("freshness", 0.0)}],
-                               facts=[defn_node.summary] if defn_node.summary else [],
-                               caveats=["from an approved definition at review time"])
+                               [n.id for n in defn_nodes],
+                               citations,
+                               facts=facts,
+                               caveats=["from approved definitions at review time"])
             self.obs.event(tenant_id=tenant_id, trace_id=trace, stage="stakeholder.answer",
                            actor="stakeholder", resource=out["answer_id"], status="OK",
                            meta={"category": category, "mode": AnswerMode.DIRECT_FROM_APPROVED_KNOWLEDGE.value})
             return out
 
-        if self._llm_live():
-            answer, toks = self._synthesize(question, category)
+        if self._llm_live(llm):
+            answer, toks, chart_config = self._synthesize(llm, question, category)
             out = self._record(tenant_id, question, user_id, category, trace, answer,
                                AnswerMode.NEW_LOW_RISK_ANALYSIS, "ANSWERED", False, [],
                                caveats=["no approved knowledge in the Brain; generated answer"],
                                tokens_in=toks[0], tokens_out=toks[1])
+            out["chart_config"] = chart_config
+            out["chart_data"] = []
         else:
             answer = ("I don't have an approved query or definition matching this question yet. "
                       "Rephrase, or ask the senior analyst.")
@@ -172,22 +226,48 @@ class StakeholderService:
         return out
 
     # -- helpers -------------------------------------------------------------
-    def _llm_live(self) -> bool:
-        return getattr(self.llm, "name", "null") != "null"
+    def _llm_live(self, llm: Optional[Any] = None) -> bool:
+        client = llm if llm is not None else getattr(self, "llm", None)
+        if client is None:
+            return False
+        return getattr(client, "name", "null") != "null"
 
-    def _synthesize(self, question: str, category: str) -> Tuple[str, Tuple[int, int]]:
+    def _synthesize(self, llm: Any, question: str, category: str, data: Optional[Dict[str, Any]] = None) -> Tuple[str, Tuple[int, int], Optional[Dict[str, Any]]]:
         try:
-            res = self.llm.generate(
-                prompt="Answer in 2-3 sentences: " + question,
-                system_prompt=("You are a cautious internal analytics assistant. State what "
-                               "you know and what data you would need. Do not invent figures."),
+            data_context = ""
+            if data and isinstance(data, dict) and data.get("rows"):
+                data_context = f"\nData context (top 3 rows): {data['rows'][:3]}\nColumns: {data.get('columns', [])}"
+            elif data and isinstance(data, list):
+                data_context = f"\nData context (top 3 rows): {data[:3]}"
+
+            sys_prompt = (
+                "You are a cautious internal analytics assistant. State what you know and what data you would need. Do not invent figures. "
+                "You must respond with a strict JSON object with the following schema: "
+                "{\"answer\": \"Your 2-3 sentence answer text here\", "
+                "\"chart_config\": {\"type\": \"LineChart|BarChart|AreaChart|ScatterChart\", \"xKey\": \"col_name\", \"series\": [{\"key\": \"col_name\"}]} } "
+                "If a chart is not applicable, omit chart_config."
+            )
+            res = llm.generate(
+                prompt="Answer the question: " + question + data_context,
+                system_prompt=sys_prompt,
                 temperature=0.2)
-            text = (res.text or "").strip()
-            if not text:
-                return "No answer generated.", (res.tokens_in, res.tokens_out)
-            return text, (res.tokens_in, res.tokens_out)
+            
+            text = (res.text or "").strip() if res and hasattr(res, "text") else ""
+            
+            # Simple heuristic to extract JSON if LLM returned markdown blocks
+            if "```json" in text:
+                text = text.split("```json")[1].split("```")[0].strip()
+            elif "```" in text:
+                text = text.split("```")[1].strip()
+                
+            import json
+            try:
+                parsed = json.parse(text) if hasattr(json, "parse") else json.loads(text)
+                return parsed.get("answer", "No answer provided in JSON."), (getattr(res, "tokens_in", 0), getattr(res, "tokens_out", 0)), parsed.get("chart_config")
+            except Exception:
+                return text, (getattr(res, "tokens_in", 0), getattr(res, "tokens_out", 0)), None
         except Exception as e:  # noqa: BLE001 - LLM is optional
-            return "Could not generate an answer: " + str(e), (0, 0)
+            return "Could not generate an answer: " + str(e), (0, 0), None
 
     def _record(self, tenant_id: str, question: str, user_id: str, category: str,
                 trace: str, answer: str, mode: AnswerMode, status: str,
@@ -195,7 +275,8 @@ class StakeholderService:
                 citations: Optional[List[Dict[str, Any]]] = None,
                 facts: Optional[List[str]] = None,
                 caveats: Optional[List[str]] = None,
-                tokens_in: int = 0, tokens_out: int = 0) -> Dict[str, Any]:
+                tokens_in: int = 0, tokens_out: int = 0,
+                queries_run: Optional[List[str]] = None) -> Dict[str, Any]:
         answer_id = new_id("ans")
         cost = round((tokens_in / 1000.0) * self.cost_per_1k_input
                      + (tokens_out / 1000.0) * self.cost_per_1k_output, 6)
@@ -205,16 +286,16 @@ class StakeholderService:
         self.store.execute(
             "INSERT INTO stakeholder_answers (id,tenant_id,question,user_id,category,answer,"
             "answer_mode,status,trace_id,created_at,source_node_ids,citations,facts,caveats,"
-            "freshness,tokens_in,tokens_out,cost,escalated) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "freshness,tokens_in,tokens_out,cost,escalated,queries_run) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (answer_id, tenant_id, question, user_id, category, answer, mode.value, status,
              trace, now_iso(), dump_json(source_ids), dump_json(citations or []),
              dump_json(facts or []), dump_json(caveats or []), freshness,
-             tokens_in, tokens_out, cost, int(escalated)))
+             tokens_in, tokens_out, cost, int(escalated), dump_json(queries_run or [])))
         return {"answer_id": answer_id, "tenant_id": tenant_id, "question": question,
                 "category": category, "answer": answer, "answer_mode": mode.value,
                 "status": status, "escalated": escalated, "citations": citations or [],
                 "caveats": caveats or [], "facts": facts or [], "freshness": freshness,
-                "cost": cost, "trace_id": trace}
+                "cost": cost, "trace_id": trace, "queries_run": queries_run or []}
 
     # -- feedback + quality -------------------------------------------------
     def record_feedback(self, tenant_id: str, answer_id: str, user_id: str,

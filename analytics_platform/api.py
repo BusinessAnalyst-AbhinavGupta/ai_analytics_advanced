@@ -266,7 +266,7 @@ def make_context(settings: Optional[Settings] = None,
                                    observability=obs)
     stakeholder = StakeholderService(store, tenants=tenants, executor=executor,
                                      observability=obs,
-                                     llm=make_client_from(settings),
+                                     settings=settings,
                                      cost_per_1k_input=settings.cost_per_1k_input,
                                      cost_per_1k_output=settings.cost_per_1k_output)
     research = ResearchService(store, observability=obs)
@@ -322,7 +322,7 @@ def ensure_services(ctx: AppContext) -> AppContext:
     if ctx.stakeholder is None:
         ctx.stakeholder = StakeholderService(
             ctx.store, tenants=ctx.tenants, executor=ctx.executor,
-            observability=ctx.observability, llm=make_client_from(ctx.settings),
+            observability=ctx.observability, settings=ctx.settings,
             cost_per_1k_input=ctx.settings.cost_per_1k_input,
             cost_per_1k_output=ctx.settings.cost_per_1k_output)
     if ctx.research is None:

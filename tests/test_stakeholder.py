@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import MagicMock, patch
 
 from analytics_platform.api import FeedbackIn, StakeholderIn, create_app
 from analytics_platform.domain import AnswerMode, DataSourceKind, NodeKind
@@ -71,6 +72,35 @@ class TestStakeholder(unittest.TestCase):
         self.assertEqual(fb["rating"], "up")
         q = call(self.app, "GET", "/stakeholder/{tenant_id}/quality", self.tid)
         self.assertEqual(q["feedback_count"], 1)
+
+    def test_disabled_stakeholder_returns_graceful_message(self):
+        self.ctx.tenants.set_analyst_config(self.tid, {"stakeholder": {"enabled": False}})
+        res = self.ctx.stakeholder.answer(self.tid, "explain our warehouse picking policy")
+        self.assertEqual(res["answer_mode"], AnswerMode.CANNOT_ANSWER.value)
+        self.assertIn("disabled", res["answer"].lower())
+
+    @patch("analytics_platform.stakeholder.make_role_client")
+    def test_dynamic_llm_resolution(self, mock_make_role_client):
+        mock_llm = MagicMock()
+        mock_llm.name = "mock_gateway"
+        mock_llm.generate.return_value.text = '{"answer": "Synthesized stakeholder answer text."}'
+        mock_llm.generate.return_value.tokens_in = 100
+        mock_llm.generate.return_value.tokens_out = 50
+        mock_make_role_client.return_value = mock_llm
+
+        self.ctx.tenants.set_analyst_config(self.tid, {
+            "stakeholder": {"enabled": True, "provider": "openrouter", "model": "anthropic/claude-3-haiku"}
+        })
+
+        res = self.ctx.stakeholder.answer(self.tid, "explain our warehouse picking policy")
+        self.assertEqual(res["answer_mode"], AnswerMode.NEW_LOW_RISK_ANALYSIS.value)
+        self.assertEqual(res["answer"], "Synthesized stakeholder answer text.")
+
+        mock_make_role_client.assert_called_once()
+        args, _ = mock_make_role_client.call_args
+        self.assertIs(args[0], self.ctx.stakeholder.settings)
+        self.assertEqual(args[1].provider, "openrouter")
+        self.assertEqual(args[1].model, "anthropic/claude-3-haiku")
 
 
 if __name__ == "__main__":
