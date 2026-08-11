@@ -166,16 +166,18 @@ class StakeholderService:
                 caveats = [str(last_err)]
                 
             chart_config = None
+            t_in, t_out = 0, 0
             if not any_failed and self._llm_live(llm) and len(all_details) > 0:
-                data_arg = all_details[0].get("data") or all_details[0].get("preview")
-                _, _, chart_config = self._synthesize(llm, question, category, data_arg)
+                data_arg = all_details[0].get("preview", [])
+                _, (t_in, t_out), chart_config = self._synthesize(llm, question, category, data_arg)
 
             out = self._record(tenant_id, question, user_id, category, trace, answer, mode,
                                "ANSWERED", False, [n.id for n in query_nodes],
-                               citations, facts=facts, caveats=caveats, queries_run=queries_run)
+                               citations, facts=facts, caveats=caveats,
+                               tokens_in=t_in, tokens_out=t_out, queries_run=queries_run)
             out["_detail"] = all_details
             out["chart_config"] = chart_config
-            out["chart_data"] = all_details[0].get("data", {}).get("rows", []) if all_details and isinstance(all_details[0].get("data"), dict) else (all_details[0].get("preview", []) if all_details else [])
+            out["chart_data"] = all_details[0].get("preview", []) if all_details else []
             self.obs.event(tenant_id=tenant_id, trace_id=trace, stage="stakeholder.answer",
                            actor="stakeholder", resource=out["answer_id"], status="OK",
                            meta={"category": category, "mode": mode.value})

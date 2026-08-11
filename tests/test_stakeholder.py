@@ -102,6 +102,26 @@ class TestStakeholder(unittest.TestCase):
         self.assertEqual(args[1].provider, "openrouter")
         self.assertEqual(args[1].model, "anthropic/claude-3-haiku")
 
+    @patch("analytics_platform.stakeholder.make_role_client")
+    def test_approved_query_chart_synthesis_token_accounting(self, mock_make_role_client):
+        mock_llm = MagicMock()
+        mock_llm.name = "mock_gateway"
+        mock_llm.generate.return_value.text = '{"answer": "Reused answer", "chart_config": {"type": "BarChart"}}'
+        mock_llm.generate.return_value.tokens_in = 200
+        mock_llm.generate.return_value.tokens_out = 80
+        mock_make_role_client.return_value = mock_llm
+
+        self.ctx.tenants.set_analyst_config(self.tid, {
+            "stakeholder": {"enabled": True, "provider": "openrouter", "model": "anthropic/claude-3-haiku"}
+        })
+
+        res = self.ctx.stakeholder.answer(self.tid, "how many retail orders per month")
+        self.assertEqual(res["answer_mode"], AnswerMode.REFRESHED_APPROVED_QUERY.value)
+        self.assertIsNotNone(res["chart_config"])
+        self.assertEqual(res["chart_config"]["type"], "BarChart")
+        self.assertTrue(len(res["chart_data"]) > 0)
+        self.assertGreater(res["cost"], 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()
