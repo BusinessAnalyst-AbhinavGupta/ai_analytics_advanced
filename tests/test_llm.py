@@ -10,9 +10,10 @@ from analytics_platform.llm.client import (GatewayClient, NullClient,
 
 
 class _Settings:
-    llm_provider = "openrouter"
-    llm_model = "deepseek/deepseek-v4-flash-0731"
-    ollama_base_url = "http://localhost:11434"
+    def __init__(self, llm_provider: str = "openrouter", llm_model: str = "deepseek/deepseek-v4-flash-0731", ollama_base_url: str = "http://localhost:11434"):
+        self.llm_provider = llm_provider
+        self.llm_model = llm_model
+        self.ollama_base_url = ollama_base_url
 
     def effective_api_key(self):
         return ""
@@ -33,6 +34,60 @@ class TestMakeClient(unittest.TestCase):
         s = _Settings()
         s.llm_provider = "null"
         self.assertIsInstance(make_client_from(s), NullClient)
+
+    def test_make_role_client(self):
+        s = _Settings(llm_provider="openrouter", llm_model="global-model")
+        from analytics_platform.domain import AnalystAI
+        role_ai = AnalystAI(role="junior", enabled=True, provider="ollama", model="llama3")
+        from analytics_platform.llm.client import GatewayClient, make_role_client
+        client = make_role_client(s, role_ai)
+        self.assertIsInstance(client, GatewayClient)
+        self.assertEqual(client.provider, "ollama")
+        self.assertEqual(client.model, "llama3")
+
+    def test_make_role_client_disabled(self):
+        s = _Settings(llm_provider="openrouter", llm_model="global-model")
+        from analytics_platform.domain import AnalystAI
+        role_ai = AnalystAI(role="junior", enabled=False, provider="ollama", model="llama3")
+        from analytics_platform.llm.client import NullClient, make_role_client
+        client = make_role_client(s, role_ai)
+        self.assertIsInstance(client, NullClient)
+
+    def test_make_role_client_fallback_to_settings(self):
+        s = _Settings(llm_provider="openrouter", llm_model="global-model")
+        from analytics_platform.domain import AnalystAI
+        role_ai = AnalystAI(role="junior", enabled=True, provider="", model="")
+        from analytics_platform.llm.client import GatewayClient, make_role_client
+        client = make_role_client(s, role_ai)
+        self.assertIsInstance(client, GatewayClient)
+        self.assertEqual(client.provider, "openrouter")
+        self.assertEqual(client.model, "global-model")
+
+    def test_make_role_client_none_role(self):
+        s = _Settings(llm_provider="openrouter", llm_model="global-model")
+        from analytics_platform.llm.client import GatewayClient, make_role_client
+        client = make_role_client(s, None)
+        self.assertIsInstance(client, GatewayClient)
+        self.assertEqual(client.provider, "openrouter")
+        self.assertEqual(client.model, "global-model")
+
+    def test_make_role_client_null_provider(self):
+        s = _Settings(llm_provider="openrouter", llm_model="global-model")
+        from analytics_platform.domain import AnalystAI
+        role_ai = AnalystAI(role="junior", enabled=True, provider="null", model="llama3")
+        from analytics_platform.llm.client import NullClient, make_role_client
+        client = make_role_client(s, role_ai)
+        self.assertIsInstance(client, NullClient)
+
+    def test_make_role_client_hydrates_api_key_from_settings(self):
+        s = _Settings(llm_provider="openrouter", llm_model="global-model")
+        s.effective_api_key = lambda: "secret-key-123"
+        from analytics_platform.domain import AnalystAI
+        role_ai = AnalystAI(role="junior", enabled=True, provider="openrouter", model="deepseek")
+        from analytics_platform.llm.client import GatewayClient, make_role_client
+        client = make_role_client(s, role_ai)
+        self.assertIsInstance(client, GatewayClient)
+        self.assertEqual(client.api_key, "secret-key-123")
 
 
 class TestGatewayClient(unittest.TestCase):

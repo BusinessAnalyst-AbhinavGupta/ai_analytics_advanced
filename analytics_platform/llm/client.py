@@ -102,6 +102,22 @@ def make_client_from(settings) -> LLMClient:
                        ollama_base_url=settings.ollama_base_url)
 
 
+def make_role_client(settings: Any, role_ai: Optional[Any] = None) -> LLMClient:
+    """Build an LLMClient for a specific analyst role.
+
+    Respects tenant role overrides for provider/model while safely hydrating
+    API keys from Settings. Falls back to NullClient if disabled or unconfigured.
+    """
+    if role_ai is not None and not getattr(role_ai, "enabled", True):
+        return NullClient()
+    provider = (getattr(role_ai, "provider", "") or getattr(settings, "llm_provider", "")) if role_ai else getattr(settings, "llm_provider", "")
+    model = (getattr(role_ai, "model", "") or getattr(settings, "llm_model", "")) if role_ai else getattr(settings, "llm_model", "")
+    api_key = settings.effective_api_key() if hasattr(settings, "effective_api_key") else getattr(settings, "api_key", "")
+    ollama_base_url = getattr(settings, "ollama_base_url", "")
+    return make_client(provider=provider, model=model, api_key=api_key,
+                       ollama_base_url=ollama_base_url)
+
+
 def list_models(provider: str = "openrouter", api_key: str = "",
                 base_url: str = "https://openrouter.ai/api/v1",
                 ollama_base_url: str = "http://localhost:11434",
