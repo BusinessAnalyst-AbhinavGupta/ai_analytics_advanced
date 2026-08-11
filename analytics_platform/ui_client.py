@@ -202,6 +202,9 @@ class APIClient:
         return self._req("POST", f"/tenants/{tenant}/senior/junior-depth",
                           json={"action": action, "level": level, "by": by})
 
+    def list_analyses(self, tenant: str, limit: int = 50) -> List[Dict[str, Any]]:
+        return self._req("GET", f"/tenants/{tenant}/analyses", params={"limit": limit})
+
     def analysis_md(self, tenant: str, run_id: str) -> Dict[str, Any]:
         return self._req("GET", f"/analyses/{tenant}/{run_id}/md")
 

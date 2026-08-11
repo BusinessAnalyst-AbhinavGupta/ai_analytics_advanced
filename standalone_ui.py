@@ -58,6 +58,12 @@ def _cached_junior_hypotheses(tenant: str) -> dict:
 def _cached_junior_catalog(tenant: str) -> dict:
     return _client().junior_catalog(tenant)
 
+@st.cache_data(ttl=_CACHE_TTL_S, show_spinner=False)
+def _cached_models(provider: str) -> list:
+    # use empty key so server uses its default/env key
+    return _client().llm_models(provider=provider, key="") or []
+
+
 
 def _guarded(fn):
     """Run an API call; return None and show the error on failure."""
@@ -369,15 +375,6 @@ def _config_tab(tenant):
     st.caption(f"Junior question depth: **{cfg.get('depth_label', 'standard')}** "
                f"({depth}/2) — human-controlled on this tab; higher = deeper business "
                f"questions **+ hypotheses**, lower = basic questions.")
-    d = st.columns([1, 1, 3])
-    if d[0].button("⬆ Promote junior", key=f"cfg_up_{tenant}"):
-        _guarded(lambda: _client().senior_junior_depth(tenant, action="up", by="human"))
-        st.rerun()
-    if d[1].button("⬇ Downgrade junior", key=f"cfg_dn_{tenant}"):
-        _guarded(lambda: _client().senior_junior_depth(tenant, action="down", by="human"))
-        st.rerun()
-    d[2].caption("Promoting makes the junior ask deeper questions and business "
-                 "hypotheses; demoting pulls it back to basic questions.")
 
     st.markdown("### Per-role AI toggles + model (save to apply)")
     roles = ["junior", "senior", "stakeholder"]
@@ -391,8 +388,24 @@ def _config_tab(tenant):
         provider = cols[1].selectbox("provider", _PROVIDERS,
                                      index=_provider_index(rc.get("provider")),
                                      key=f"cfg_pr_{role}_{tenant}")
-        model = cols[2].text_input("model", value=rc.get("model", ""),
-                                   key=f"cfg_m_{role}_{tenant}")
+        
+        available_models = []
+        if provider in ("openrouter", "ollama"):
+            try:
+                models_res = _cached_models(provider)
+                available_models = [m.get("id") for m in models_res] if models_res else []
+            except Exception:
+                available_models = []
+
+        if available_models:
+            current = rc.get("model", "")
+            if current and current not in available_models:
+                available_models.insert(0, current)
+            idx = available_models.index(current) if current in available_models else 0
+            model = cols[2].selectbox("model", available_models, index=idx, key=f"cfg_m_{role}_{tenant}")
+        else:
+            model = cols[2].text_input("model", value=rc.get("model", ""),
+                                       key=f"cfg_m_{role}_{tenant}")
         new[role] = {"enabled": enabled, "provider": provider, "model": model.strip()}
 
     hcols = st.columns([2, 2])
@@ -669,6 +682,28 @@ if tenant:
                 st.caption((res.get("question") or "")[:160])
             else:
                 st.warning(f"Did not run: {res.get('reason')}")
+        
+        st.subheader("Junior Activity Log")
+        st.caption("Recent analysis runs picked up by the junior analyst (auto-updates every 15 mins optionally)")
+        if st.button("Refresh Log", key=f"jr_log_ref_{tenant}"):
+            pass # reruns implicitly
+        runs = _guarded(lambda: _client().list_analyses(tenant, limit=10)) or []
+        if runs:
+            # show run id, generated at, question, status, rows
+            log_data = []
+            for r in runs:
+                log_data.append({
+                    "run_id": r.get("id"),
+                    "time": (r.get("generated_at") or "")[:16],
+                    "status": r.get("status"),
+                    "review": r.get("review_status"),
+                    "rows": r.get("row_count"),
+                    "question": (r.get("question_text") or "")[:100]
+                })
+            st.dataframe(pd.DataFrame(log_data), hide_index=True, use_container_width=True)
+        else:
+            st.info("No junior activity yet.")
+
         st.subheader("Catalog (schema / EDA)")
         st.json(_guarded(lambda: _cached_junior_catalog(tenant)) or {})
 
@@ -691,13 +726,6 @@ if tenant:
         st.caption(f"Low-level auto-accepted as FINDINGs (under cap, not in inbox): "
                    f"**{sstatus.get('auto_accepted', 0)}** · senior review carries only "
                    f"high-level + escalated runs")
-        jb = st.columns([1, 1])
-        if jb[0].button("⬆ Promote junior", key="tri_depth_up"):
-            _guarded(lambda: _client().senior_junior_depth(tenant, action="up", by="human"))
-            st.rerun()
-        if jb[1].button("⬇ Downgrade junior", key="tri_depth_dn"):
-            _guarded(lambda: _client().senior_junior_depth(tenant, action="down", by="human"))
-            st.rerun()
 
         with st.expander("Senior review inbox (analyst runs → .md for human review)"):
             last_review_key = f"last_review_{tenant}"

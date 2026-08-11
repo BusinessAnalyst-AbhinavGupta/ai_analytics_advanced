@@ -73,6 +73,10 @@
 4. **Junior Stage 4–5** — external/competitive research autonomy + governed proactive investigations.
 5. **Vector retrieval** for unstructured notes (plan §8).
 6. **Junior depth → mastery badges** — automatic depth promotion once a senior-approval threshold is met (human still holds the override).
+7. **Bulk SQL Onboarding** — bulk-ingest existing SQL queries (with context like dashboard name/purpose) via JSON; the junior auto-runs EDA to enrich context and extract `QUERY`, `DEFINITION`, and `FINDING` nodes.
+8. **Junior Activity Log** — UI visibility into background worker progress.
+9. **Triage Auto-Approval** — approving an analysis run automatically approves its associated definitions and query nodes.
+10. **UI / Config Polish** — OpenRouter dynamic model selection and deduplicated Junior depth controls.
 
 ---
 

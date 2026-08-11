@@ -186,6 +186,20 @@ class SeniorService:
         if action == "approve":
             # promote to a governed FINDING (no-op if run not completable)
             node = self.pipeline.promote_finding(tenant_id, run_id, by=by, notes=notes)
+            
+            # auto-approve definitions, query, and related components
+            if run.sql:
+                from .brain.ingest import ingest_sql
+                # Ingest the SQL to extract QUERY and DEFINITION nodes
+                nodes = ingest_sql(self.pipeline.brain(tenant_id), run.sql, source_ref=run.id, 
+                                   title=f"Query from approved analysis {run_id[:8]}", created_by=by)
+                # Auto-approve them since the analysis is approved
+                for n in nodes:
+                    b = self.pipeline.brain(tenant_id)
+                    if n.status == ReviewStatus.CANDIDATE:
+                        b.transition(n.id, ReviewStatus.UNDER_REVIEW, by=by, notes="Auto-transition")
+                    b.approve(n.id, by=by, notes="Auto-approved from analysis review")
+
             self._set_review_status(run_id, tenant_id, ReviewStatus.APPROVED.value)
             result = {"ok": True, "action": "approved", "node_id": node.id if node else None}
         elif action == "reject":
