@@ -25,7 +25,7 @@ class Settings:
     ollama_base_url: str = "http://localhost:11434"
     source_dialect: str = "athena"      # dialect the SQL is authored in (executors transpile if needed)
     policy: PolicySettings = field(default_factory=PolicySettings)
-    data_dir: str = ""                 # synthetic / sampled warehouse loader dir
+    data_dir: str = os.environ.get("ANALYTICS_DATA_DIR", "") # synthetic / sampled warehouse loader dir
     metabase_live: bool = False        # gate for live Metabase executors/tests (ANALYTICS_MB_LIVE=1)
     metabase_base_url: str = ""        # Metabase URL (informational; same-origin fetch uses the tab)
     metabase_database_id: Any = ""     # Metabase DB id (str or int) to query
@@ -55,9 +55,14 @@ class Settings:
     junior_human_signoff_days: int = 7 # initial window: every analysis -> human review
 
     def resolve_db_path(self) -> str:
-        if self.db_path:
-            return self.db_path
-        return os.path.join(os.path.dirname(__file__), "..", "data", "platform.db")
+        if self.data_dir:
+            return os.path.join(self.data_dir, "platform.db")
+        return self.db_path or "data/platform.db"
+
+    def resolve_vector_path(self) -> str:
+        if self.data_dir:
+            return os.path.join(self.data_dir, ".chroma_db")
+        return ".chroma_db"
 
     def effective_api_key(self) -> str:
         """LLM key resolution: explicit override, then ANALYTICS_LLM_API_KEY, then
@@ -74,6 +79,7 @@ class Settings:
         if not _provider and os.environ.get("OPENROUTER_API_KEY"):
             _provider = "openrouter"
         return cls(
+            data_dir=os.environ.get("ANALYTICS_DATA_DIR", ""),
             db_path=os.environ.get("ANALYTICS_DB_PATH", ""),
             llm_provider=_provider or "null",
             llm_model=os.environ.get("ANALYTICS_LLM_MODEL", "deepseek/deepseek-v4-flash-0731"),
