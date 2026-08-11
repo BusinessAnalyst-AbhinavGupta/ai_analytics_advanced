@@ -253,8 +253,15 @@ def make_context(settings: Optional[Settings] = None,
     tenants = TenantService(store)
     obs = Observability(store)
     executor = SamplerExecutor(warehouse or {})
+    try:
+        from .brain.vector_store import BrainVectorStore
+        vector_store = BrainVectorStore(settings.resolve_vector_path())
+    except Exception:
+        vector_store = None
+
     pipeline = Pipeline(store, settings=settings, tenant_service=tenants,
-                        executor=executor, observability=obs)
+                        executor=executor, observability=obs,
+                        brain_factory=lambda s, t: CompanyBrain(s, t, vector_store=vector_store))
     onboarding = OnboardingService(store, tenants=tenants, pipeline=pipeline,
                                    observability=obs)
     stakeholder = StakeholderService(store, tenants=tenants, executor=executor,

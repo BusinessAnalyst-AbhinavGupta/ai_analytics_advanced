@@ -13,7 +13,7 @@ from fastapi import HTTPException
 
 from analytics_platform.api import (TriageBulkIn, TriageDedupeIn, TriageIdsIn,
                                     CompanyProfileIn, DataSourceIn,
-                                    AppContext, create_app)
+                                    AppContext, create_app, make_context)
 from analytics_platform.domain import DataSourceKind, NodeKind, ReviewStatus
 from analytics_platform.fixtures import WEEKLY_ORDER_SQL, build_retail_warehouse
 from analytics_platform.onboarding import OnboardingService
@@ -296,6 +296,30 @@ class TestApiObservability(unittest.TestCase):
         self.assertIn("in_window", j)   # computed from system clock
         self.assertIn("min_interval_minutes", j)
         self.assertEqual(j["min_interval_minutes"], 60)
+
+
+class TestMakeContext(unittest.TestCase):
+    def test_make_context_uses_resolve_vector_path_custom_data_dir(self):
+        from unittest.mock import patch
+        from analytics_platform.config import Settings
+
+        settings = Settings(data_dir="/tmp/test_tenant")
+
+        with patch("analytics_platform.api.Store"), \
+             patch("analytics_platform.brain.vector_store.BrainVectorStore") as mock_vector_store:
+            ctx = make_context(settings=settings)
+            mock_vector_store.assert_called_once_with("/tmp/test_tenant/.chroma_db")
+
+    def test_make_context_uses_resolve_vector_path_default_settings(self):
+        from unittest.mock import patch
+        from analytics_platform.config import Settings
+
+        settings = Settings(data_dir="")
+
+        with patch("analytics_platform.api.Store"), \
+             patch("analytics_platform.brain.vector_store.BrainVectorStore") as mock_vector_store:
+            ctx = make_context(settings=settings)
+            mock_vector_store.assert_called_once_with(".chroma_db")
 
 
 if __name__ == "__main__":
