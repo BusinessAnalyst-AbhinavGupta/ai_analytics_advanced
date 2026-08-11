@@ -425,7 +425,14 @@ class JuniorWorker:
         analysis = self._baseline_analysis(error, ok)
         if ok and getattr(result, "data", None) is not None and not result.data.empty:
             analysis = self._analyze(tid, question, sql, result.data)
-            llm = getattr(self.junior, "llm", None)
+            llm = None
+            try:
+                cfg = self.junior.tenants.get_analyst_config(tid)
+                if cfg.junior.enabled:
+                    from .llm.client import make_role_client
+                    llm = make_role_client(getattr(self.junior, "settings", None), cfg.junior)
+            except Exception:  # noqa: BLE001 - best-effort
+                llm = None
             if llm is not None and getattr(llm, "name", "null") != "null":
                 llm_insight = synthesize_analysis_llm(
                     analysis.get("profile", {}), analysis.get("rule_triggers", []),

@@ -212,7 +212,6 @@ def cmd_junior(args: argparse.Namespace) -> int:
     ctx = make_context()
     from .execution.sampler import SamplerExecutor
     from .junior import JuniorEngine
-    from .llm.client import make_client_from
     try:
         ctx.tenants.require_tenant(args.tenant_id)
     except KeyError as e:

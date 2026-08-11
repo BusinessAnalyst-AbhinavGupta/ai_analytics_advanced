@@ -25,7 +25,7 @@ from .database import Store
 from .domain import (AnswerMode, DataSourceKind, KnowledgeNode, NodeKind, ReviewStatus, RunStatus)
 from .execution.sampler import SamplerExecutor
 from .junior import JuniorEngine
-from .llm.client import list_provider_models, make_client_from
+from .llm.client import list_provider_models
 from .observability import Observability
 from .onboarding import OnboardingService
 from .pipeline import Pipeline
@@ -280,7 +280,7 @@ def make_context(settings: Optional[Settings] = None,
                           retention_days=settings.log_retention_days,
                           maintenance_interval_days=settings.maintenance_interval_days,
                           junior_worker=junior_worker)
-    senior = SeniorService(store, pipeline, tenants, observability=obs)
+    senior = SeniorService(store, pipeline, tenants, observability=obs, settings=settings)
     return AppContext(settings=settings, store=store, tenants=tenants,
                       observability=obs, pipeline=pipeline, executor=executor,
                       onboarding=onboarding, stakeholder=stakeholder,
@@ -352,7 +352,8 @@ def ensure_services(ctx: AppContext) -> AppContext:
             junior_worker=ctx.junior_worker)
     if ctx.senior is None:
         ctx.senior = SeniorService(ctx.store, ctx.pipeline, ctx.tenants,
-                                   observability=ctx.observability)
+                                   observability=ctx.observability,
+                                   settings=ctx.settings)
     return ctx
 
 

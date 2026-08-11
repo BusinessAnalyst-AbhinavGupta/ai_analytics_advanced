@@ -90,17 +90,6 @@ def make_client(provider: str = "", model: str = "", api_key: str = "",
                          ollama_base_url=ollama_base_url)
 
 
-def make_client_from(settings) -> LLMClient:
-    """Build an LLMClient from platform Settings (duck-typed).
-
-    `provider == "null"` (the default) yields NullClient, so the LLM path stays
-    inert unless the operator explicitly enables a provider + key — data never
-    leaves the process by accident.
-    """
-    return make_client(provider=settings.llm_provider, model=settings.llm_model,
-                       api_key=settings.effective_api_key(),
-                       ollama_base_url=settings.ollama_base_url)
-
 
 def make_role_client(settings: Any, role_ai: Optional[Any] = None) -> LLMClient:
     """Build an LLMClient for a specific analyst role.

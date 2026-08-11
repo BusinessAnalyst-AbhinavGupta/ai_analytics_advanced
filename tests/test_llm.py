@@ -5,8 +5,7 @@ import unittest
 from unittest import mock
 
 import core.llm_gateway as _gateway_mod
-from analytics_platform.llm.client import (GatewayClient, NullClient,
-                                           make_client, make_client_from)
+from analytics_platform.llm.client import GatewayClient, NullClient, make_client
 
 
 class _Settings:
@@ -26,14 +25,6 @@ class TestMakeClient(unittest.TestCase):
 
     def test_provider_returns_gateway_client(self):
         self.assertIsInstance(make_client("openrouter"), GatewayClient)
-
-    def test_from_settings_live(self):
-        self.assertIsInstance(make_client_from(_Settings()), GatewayClient)
-
-    def test_from_settings_null(self):
-        s = _Settings()
-        s.llm_provider = "null"
-        self.assertIsInstance(make_client_from(s), NullClient)
 
     def test_make_role_client(self):
         s = _Settings(llm_provider="openrouter", llm_model="global-model")
