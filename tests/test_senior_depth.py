@@ -179,6 +179,23 @@ class TestSeniorControl(unittest.TestCase):
         self.assertEqual(args[1].provider, "openrouter")
         self.assertEqual(args[1].model, "anthropic/claude-3-sonnet")
 
+    @patch("analytics_platform.senior.make_role_client")
+    def test_run_senior_review_handles_none_res_text(self, mock_make_role_client):
+        mock_llm = MagicMock()
+        mock_llm.generate.return_value.text = None
+        mock_make_role_client.return_value = mock_llm
+
+        self.ctx.tenants.set_analyst_config(self.tid, {
+            "human_signoff_days": 0,
+            "junior_depth": 2,
+            "senior": {"enabled": True}
+        })
+        run_doc = {"id": self.run.id, "question_text": "Q", "sql": "SELECT 1", "answer": "A"}
+
+        res = self.senior.run_senior_review(self.tid, run_doc)
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["action"], "approved")
+
 
 if __name__ == "__main__":
     unittest.main()

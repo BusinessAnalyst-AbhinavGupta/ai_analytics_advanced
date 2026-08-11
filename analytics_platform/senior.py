@@ -250,7 +250,7 @@ class SeniorService:
                 system_prompt="You are a senior data analyst reviewing a junior analyst's work.",
                 temperature=0.2,
             )
-            notes = res.text.strip() if res else ""
+            notes = (res.text or "").strip() if res else ""
         except Exception as e:  # noqa: BLE001
             notes = f"AI review evaluation note: {e}"
 
