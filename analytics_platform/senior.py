@@ -16,18 +16,22 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from .config import Settings
 from .domain import ReviewStatus, RunStatus, clamp_junior_depth
+from .llm.client import make_role_client
 from .observability import Observability
 
 
 class SeniorService:
     def __init__(self, store, pipeline, tenants, observability=None,
-                 reviews_dir: str = "data/reviews"):
+                 reviews_dir: str = "data/reviews",
+                 settings: Optional[Settings] = None):
         self.store = store
         self.pipeline = pipeline
         self.tenants = tenants
         self.obs = observability or Observability(store)
         self.reviews_dir = reviews_dir
+        self.settings = settings or Settings()
 
     # -- who is playing senior -----------------------------------------------
     def status(self, tenant_id: str) -> Dict[str, Any]:
@@ -215,3 +219,42 @@ class SeniorService:
                        resource=run_id, status="OK",
                        meta={"question": run.question_text[:120], "by": by})
         return {**result, "run_id": run_id, "by": by}
+
+    def run_senior_review(self, tenant_id: str, run_doc: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Perform AI senior review on a run_doc if senior AI is enabled and human signoff is not required.
+
+        Dynamically resolves the LLM client via `make_role_client(self.settings, cfg.senior)`.
+        """
+        cfg = self.tenants.get_analyst_config(tenant_id)
+        if not cfg.senior.enabled:
+            return None  # Fall back to human review (existing logic)
+
+        run_id = run_doc.get("id") or run_doc.get("run_id") or ""
+        if self.requires_human_signoff(tenant_id, run_id):
+            return {"ok": False, "action": None, "error": (
+                "analysis is in initial human-signoff window (or junior is at "
+                "basic depth); an AI senior cannot auto-approve — a human must review"
+            )}
+
+        llm = make_role_client(self.settings, cfg.senior)
+        prompt = (
+            f"Review the following analysis run for tenant {tenant_id}.\n"
+            f"Question: {run_doc.get('question_text', '')}\n"
+            f"SQL: {run_doc.get('sql', '')}\n"
+            f"Answer: {run_doc.get('answer', '')}\n"
+            "Provide your senior review feedback."
+        )
+        try:
+            res = llm.generate(
+                prompt=prompt,
+                system_prompt="You are a senior data analyst reviewing a junior analyst's work.",
+                temperature=0.2,
+            )
+            notes = res.text.strip() if res else ""
+        except Exception as e:  # noqa: BLE001
+            notes = f"AI review evaluation note: {e}"
+
+        return self.review(tenant_id, run_id, action="approve", by="ai", notes=notes)
+
+
+SeniorReviewer = SeniorService

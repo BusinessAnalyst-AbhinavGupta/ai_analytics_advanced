@@ -8,12 +8,16 @@ import os
 import tempfile
 import unittest
 
+from unittest.mock import MagicMock, patch
+
+from analytics_platform.config import Settings
 from analytics_platform.domain import (DataSourceKind, RunStatus,
                                       clamp_junior_depth)
 from analytics_platform.markdown import render_analysis_md, write_analysis_md
-from analytics_platform.senior import SeniorService
+from analytics_platform.senior import SeniorReviewer, SeniorService
 from analytics_platform.fixtures import build_retail_warehouse
 from tests.helpers import make_ctx
+
 
 
 class TestJuniorDepth(unittest.TestCase):
@@ -129,6 +133,51 @@ class TestSeniorControl(unittest.TestCase):
         self.assertIn("## SQL", out["md"])
         self.assertIn(self.run.question_text, out["md"])
         self.assertTrue(os.path.exists(out["path"]))
+
+    def test_senior_reviewer_alias_and_settings(self):
+        s = Settings(llm_provider="ollama", llm_model="llama3")
+        reviewer = SeniorReviewer(self.ctx.store, self.ctx.pipeline,
+                                  self.ctx.tenants, observability=self.ctx.obs,
+                                  settings=s)
+        self.assertIs(reviewer.settings, s)
+        self.assertIsInstance(reviewer, SeniorService)
+
+    def test_run_senior_review_disabled_returns_none(self):
+        self.ctx.tenants.set_analyst_config(self.tid, {"senior": {"enabled": False}})
+        run_doc = {"id": self.run.id, "question_text": "Q", "sql": "SELECT 1", "answer": "A"}
+        res = self.senior.run_senior_review(self.tid, run_doc)
+        self.assertIsNone(res)
+
+    def test_run_senior_review_signoff_mandate(self):
+        self.ctx.tenants.set_analyst_config(self.tid, {"human_signoff_days": 7, "senior": {"enabled": True}})
+        run_doc = {"id": self.run.id, "question_text": "Q", "sql": "SELECT 1", "answer": "A"}
+        res = self.senior.run_senior_review(self.tid, run_doc)
+        self.assertFalse(res["ok"])
+        self.assertIn("human", res["error"].lower())
+
+    @patch("analytics_platform.senior.make_role_client")
+    def test_run_senior_review_dynamic_llm_resolution(self, mock_make_role_client):
+        mock_llm = MagicMock()
+        mock_llm.generate.return_value.text = "Senior review notes: Looks solid."
+        mock_make_role_client.return_value = mock_llm
+
+        self.ctx.tenants.set_analyst_config(self.tid, {
+            "human_signoff_days": 0,
+            "junior_depth": 2,
+            "senior": {"enabled": True, "provider": "openrouter", "model": "anthropic/claude-3-sonnet"}
+        })
+        run_doc = {"id": self.run.id, "question_text": "Q", "sql": "SELECT 1", "answer": "A"}
+
+        res = self.senior.run_senior_review(self.tid, run_doc)
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["action"], "approved")
+        self.assertEqual(res["by"], "ai")
+
+        mock_make_role_client.assert_called_once()
+        args, _ = mock_make_role_client.call_args
+        self.assertIs(args[0], self.senior.settings)
+        self.assertEqual(args[1].provider, "openrouter")
+        self.assertEqual(args[1].model, "anthropic/claude-3-sonnet")
 
 
 if __name__ == "__main__":
