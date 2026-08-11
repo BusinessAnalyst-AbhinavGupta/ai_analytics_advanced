@@ -330,23 +330,7 @@ class JuniorEngine:
         level_by_depth = {0: "low", 1: "low", 2: "high"}
         cat_by_depth = {0: "overview", 1: "success_trend", 2: "rca"}
         my_level = level_by_depth.get(depth, "low")
-        
-        # Check for unresolved anomalies first
-        brain = self.brain(tenant_id)
-        # In anomaly.py we did: pipeline.ingest([{...}], tenant_id, by="anomaly_trigger")
-        for n in brain.all(limit=1000):
-            if getattr(n, "created_by", "") == "anomaly_trigger" and getattr(n.status, "value", "") == "candidate":
-                suggestions.append({
-                    "target": getattr(n, "title", "Anomaly"), 
-                    "category": "rca",
-                    "priority": 100, 
-                    "question": getattr(n, "summary", "Diagnose anomaly."),
-                    "columns": [], 
-                    "source": "anomaly",
-                    "depth": 2, 
-                    "level": "high",
-                    "sql": n.payload.get("sql", "")
-                })
+
 
         for t in targets:
             col = next((c for c in (t.metric_refs or []) if c in catalog_columns), None)
