@@ -25,7 +25,7 @@ class Settings:
     ollama_base_url: str = "http://localhost:11434"
     source_dialect: str = "athena"      # dialect the SQL is authored in (executors transpile if needed)
     policy: PolicySettings = field(default_factory=PolicySettings)
-    data_dir: str = os.environ.get("ANALYTICS_DATA_DIR", "") # synthetic / sampled warehouse loader dir
+    data_dir: str = field(default_factory=lambda: os.environ.get("ANALYTICS_DATA_DIR", "")) # synthetic / sampled warehouse loader dir
     metabase_live: bool = False        # gate for live Metabase executors/tests (ANALYTICS_MB_LIVE=1)
     metabase_base_url: str = ""        # Metabase URL (informational; same-origin fetch uses the tab)
     metabase_database_id: Any = ""     # Metabase DB id (str or int) to query
