@@ -180,5 +180,26 @@ class TenantIdSafetyTest(unittest.TestCase):
         self.assertIsNotNone(self.provider.for_tenant("tnt_d23cd823d4c6"))
 
 
+class SettingsPathTest(unittest.TestCase):
+    def test_control_path_defaults_under_data(self):
+        from analytics_platform.config import Settings
+        self.assertEqual(Settings().resolve_control_db_path(), "data/control.db")
+
+    def test_tenants_root_defaults_to_tenants(self):
+        from analytics_platform.config import Settings
+        self.assertEqual(Settings().resolve_tenants_root(), "tenants")
+
+    def test_data_dir_moves_both(self):
+        from analytics_platform.config import Settings
+        s = Settings(data_dir="/srv/acme")
+        self.assertEqual(s.resolve_control_db_path(), "/srv/acme/control.db")
+        self.assertEqual(s.resolve_tenants_root(), "/srv/acme/tenants")
+
+    def test_the_two_paths_are_distinct(self):
+        from analytics_platform.config import Settings
+        s = Settings(data_dir="/srv/acme")
+        self.assertNotIn(s.resolve_control_db_path(), s.resolve_tenants_root())
+
+
 if __name__ == "__main__":
     unittest.main()
