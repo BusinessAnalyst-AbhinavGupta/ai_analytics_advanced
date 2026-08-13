@@ -267,5 +267,147 @@ class ControlStoreFailuresAreLoggedTest(unittest.TestCase):
             worker._record_ran(0.0)
 
 
+class CrossTenantFanOutTest(unittest.TestCase):
+    """`recent()`/`metrics()` with no tenant_id fan out over every tenant
+    directory under the tenants root — the /observability/metrics view."""
+
+    def setUp(self):
+        from analytics_platform.observability import Observability
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = os.path.join(self._tmp.name, "tenants")
+        self.stores = TenantStoreProvider(
+            control_db_path=os.path.join(self._tmp.name, "control.db"),
+            tenants_root=self.root)
+        self.obs = Observability(self.stores)
+        for tid in ("acme", "globex", "initech"):
+            self.stores.for_tenant(tid)
+
+    def tearDown(self):
+        self.stores.close_all()
+        self._tmp.cleanup()
+
+    def _event(self, tenant_id, stage, duration_ms=None, status="OK"):
+        """Insert telemetry directly so duration_ms can be a real SQL NULL."""
+        self.stores.for_tenant(tenant_id).execute(
+            "INSERT INTO telemetry (ts,tenant_id,trace_id,stage,actor,resource,"
+            "status,duration_ms,bytes_in,tokens_in,tokens_out,meta) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("2026-08-13T00:00:00Z", tenant_id, "tr_x", stage, "system", "",
+             status, duration_ms, 0, 0, 0, "{}"))
+
+    # -- one bad tenant must not break the aggregate ------------------------
+    def test_metrics_survives_a_directory_that_is_not_a_valid_tenant_id(self):
+        self._event("acme", "s", 10.0)
+        self._event("globex", "s", 20.0)
+        self._event("initech", "s", 30.0)
+        # A directory name that fails validate_tenant_id, holding a tenant.db so
+        # known_tenants() picks it up.
+        bad = os.path.join(self.root, "..stray")
+        os.makedirs(bad, exist_ok=True)
+        shutil.copy(self.stores.tenant_db_path("acme"),
+                    os.path.join(bad, "tenant.db"))
+
+        with self.assertLogs("analytics_platform.observability", level="WARNING"):
+            m = self.obs.metrics()
+        self.assertEqual(m["total_spans"], 3)
+        self.assertEqual(m["scope"], "platform")
+
+    def test_recent_survives_a_directory_that_is_not_a_valid_tenant_id(self):
+        self._event("acme", "s", 10.0)
+        self._event("globex", "s", 20.0)
+        self._event("initech", "s", 30.0)
+        bad = os.path.join(self.root, "..stray")
+        os.makedirs(bad, exist_ok=True)
+        shutil.copy(self.stores.tenant_db_path("acme"),
+                    os.path.join(bad, "tenant.db"))
+
+        with self.assertLogs("analytics_platform.observability", level="WARNING"):
+            rows = self.obs.recent()
+        self.assertEqual(len(rows), 3)
+
+    def test_metrics_survives_a_tenant_whose_file_fails_the_owner_check(self):
+        """A mis-restored file: one company's database sitting where another's
+        belongs. It must not take down the platform-wide view."""
+        self._event("acme", "s", 10.0)
+        self._event("globex", "s", 20.0)
+        self._event("initech", "s", 30.0)
+        rogue_dir = os.path.join(self.root, "rogue")
+        os.makedirs(rogue_dir, exist_ok=True)
+        self.stores.close_all()
+        shutil.copy(os.path.join(self.root, "acme", "tenant.db"),
+                    os.path.join(rogue_dir, "tenant.db"))
+
+        with self.assertLogs("analytics_platform.observability", level="ERROR") as cap:
+            m = self.obs.metrics()
+        self.assertIn("SECURITY", "\n".join(cap.output))
+        self.assertEqual(m["total_spans"], 3)
+
+    def test_metrics_survives_a_tenant_directory_with_a_corrupt_database(self):
+        self._event("acme", "s", 10.0)
+        self._event("globex", "s", 20.0)
+        self._event("initech", "s", 30.0)
+        broken = os.path.join(self.root, "broken")
+        os.makedirs(broken, exist_ok=True)
+        with open(os.path.join(broken, "tenant.db"), "wb") as fh:
+            fh.write(b"this is not a sqlite database at all")
+
+        with self.assertLogs("analytics_platform.observability", level="WARNING"):
+            m = self.obs.metrics()
+        self.assertEqual(m["total_spans"], 3)
+
+    def test_a_named_tenant_still_raises_rather_than_reporting_zero(self):
+        """The skip is for the fan-out only. Asked for one tenant specifically,
+        a failure is a wrong answer, not a partial one."""
+        rogue_dir = os.path.join(self.root, "rogue")
+        os.makedirs(rogue_dir, exist_ok=True)
+        self.stores.close_all()
+        shutil.copy(os.path.join(self.root, "acme", "tenant.db"),
+                    os.path.join(rogue_dir, "tenant.db"))
+        with self.assertRaises(TenantIsolationError):
+            self.obs.metrics(tenant_id="rogue")
+
+    # -- NULL duration_ms must not inflate the average ----------------------
+    def test_null_durations_do_not_inflate_the_average(self):
+        """AVG(duration_ms) ignores NULL rows; COUNT(*) counts them. Multiplying
+        one by the other reconstructed a sum that was too large."""
+        self._event("acme", "s", 100.0)
+        self._event("acme", "s", 200.0)
+        self._event("acme", "s", None)
+        self._event("acme", "s", None)
+        m = self.obs.metrics(tenant_id="acme")
+        self.assertEqual(m["total_spans"], 4)          # NULL rows are still spans
+        self.assertEqual(m["avg_span_ms"], 150.0)      # (100+200)/2, not /4 or *4/2
+        self.assertEqual(m["by_stage"][0]["count"], 4)
+        self.assertEqual(m["by_stage"][0]["avg_ms"], 150.0)
+
+    def test_null_durations_across_tenants_do_not_inflate_the_average(self):
+        self._event("acme", "s", 100.0)
+        self._event("acme", "s", None)
+        self._event("globex", "s", 200.0)
+        self._event("globex", "s", None)
+        self._event("initech", "s", None)
+        m = self.obs.metrics()
+        self.assertEqual(m["total_spans"], 5)
+        self.assertEqual(m["avg_span_ms"], 150.0)      # (100+200)/2
+
+    def test_all_null_durations_report_zero_rather_than_dividing_by_zero(self):
+        self._event("acme", "s", None)
+        self._event("acme", "s", None)
+        m = self.obs.metrics(tenant_id="acme")
+        self.assertEqual(m["total_spans"], 2)
+        self.assertEqual(m["avg_span_ms"], 0.0)
+        self.assertEqual(m["by_stage"][0]["avg_ms"], 0.0)
+
+    def test_per_stage_averages_stay_independent(self):
+        self._event("acme", "fast", 10.0)
+        self._event("acme", "fast", None)
+        self._event("acme", "slow", 500.0)
+        m = self.obs.metrics(tenant_id="acme")
+        by_stage = {s["stage"]: s for s in m["by_stage"]}
+        self.assertEqual(by_stage["fast"]["avg_ms"], 10.0)
+        self.assertEqual(by_stage["fast"]["count"], 2)
+        self.assertEqual(by_stage["slow"]["avg_ms"], 500.0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -103,17 +103,50 @@ class Observability:
     # -- queries ---------------------------------------------------------------
     def _telemetry_stores(self, tenant_id: str) -> List[Any]:
         """The tenant store to query, or every known tenant's store when no
-        single tenant is named (telemetry has no cross-tenant table anymore)."""
+        single tenant is named (telemetry has no cross-tenant table anymore).
+
+        In the platform-wide fan-out, one unusable tenant must not take the
+        aggregate view down for everyone else. `known_tenants()` lists whatever
+        directories sit under the tenants root, so a stray non-tenant directory
+        fails `validate_tenant_id`, and a mis-restored file fails the `db_owner`
+        check — either would previously propagate out of the list comprehension
+        and 500 the whole of /observability/metrics. Those tenants are now logged
+        and skipped.
+
+        When a specific tenant IS named the caller asked for exactly that store,
+        so the error propagates: silently returning an empty result for the one
+        tenant that was requested would be a wrong answer, not a partial one.
+        """
         if tenant_id:
             return [self.stores.for_tenant(tenant_id)]
-        return [self.stores.for_tenant(t) for t in self.stores.known_tenants()]
+        out: List[Any] = []
+        for t in self.stores.known_tenants():
+            try:
+                out.append(self.stores.for_tenant(t))
+            except TenantIsolationError as exc:
+                logger.error(
+                    "SECURITY: tenant isolation failure opening %r during a "
+                    "platform-wide telemetry fan-out: %s. Skipping it; the "
+                    "aggregate below excludes this tenant.", t, exc, exc_info=True)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "skipping tenant %r in the platform-wide telemetry fan-out: "
+                    "%s. The aggregate below excludes it.", t, exc, exc_info=True)
+        return out
 
     def recent(self, limit: int = 100, tenant_id: str = "") -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
         for store in self._telemetry_stores(tenant_id):
-            rows = store.query_all(
-                "SELECT * FROM telemetry WHERE (?='' OR tenant_id=?) ORDER BY id DESC LIMIT ?",
-                (tenant_id, tenant_id, limit))
+            try:
+                rows = store.query_all(
+                    "SELECT * FROM telemetry WHERE (?='' OR tenant_id=?) ORDER BY id DESC LIMIT ?",
+                    (tenant_id, tenant_id, limit))
+            except Exception as exc:  # noqa: BLE001
+                if tenant_id:
+                    raise
+                logger.warning("skipping %s in the platform-wide recent-events "
+                               "fan-out: %s", store.db_path, exc, exc_info=True)
+                continue
             out.extend(dict(r) for r in rows)
         out.sort(key=lambda r: (r.get("ts") or "", r.get("id") or 0), reverse=True)
         out = out[:limit]
@@ -126,33 +159,56 @@ class Observability:
         args = (tenant_id, tenant_id)
         count = 0
         failed = 0
+        # SUM(duration_ms) with COUNT(duration_ms), never AVG(duration_ms) *
+        # COUNT(*): SQL's AVG ignores NULL duration_ms rows while COUNT(*)
+        # counts them, so reconstructing the sum from the average inflated the
+        # reported figure by exactly the NULL ratio. COUNT(<column>) already
+        # excludes NULLs, so it is the right denominator.
         duration_total = 0.0
+        duration_count = 0
         by_stage: Dict[str, Dict[str, Any]] = {}
         by_status: Dict[str, int] = {}
         for store in self._telemetry_stores(tenant_id):
-            total = store.query_one(f"SELECT COUNT(*) c, "
-                                    f"SUM(CASE WHEN status='FAILED' THEN 1 ELSE 0 END) f, "
-                                    f"AVG(duration_ms) a FROM telemetry {where}", args)
+            try:
+                total = store.query_one(
+                    f"SELECT COUNT(*) c, "
+                    f"SUM(CASE WHEN status='FAILED' THEN 1 ELSE 0 END) f, "
+                    f"SUM(duration_ms) d, COUNT(duration_ms) dc "
+                    f"FROM telemetry {where}", args)
+                stage_rows = store.query_all(
+                    f"SELECT stage, COUNT(*) c, SUM(duration_ms) d, "
+                    f"COUNT(duration_ms) dc FROM telemetry {where} "
+                    f"GROUP BY stage ORDER BY stage", args)
+                status_rows = store.query_all(
+                    f"SELECT status, COUNT(*) c FROM telemetry {where} GROUP BY status",
+                    args)
+            except Exception as exc:  # noqa: BLE001
+                if tenant_id:
+                    raise
+                logger.warning("skipping %s in the platform-wide metrics "
+                               "fan-out: %s", store.db_path, exc, exc_info=True)
+                continue
             if total and total["c"]:
                 count += total["c"]
                 failed += total["f"] or 0
-                duration_total += (total["a"] or 0.0) * total["c"]
-            for r in store.query_all(
-                    f"SELECT stage, COUNT(*) c, AVG(duration_ms) a FROM telemetry {where} "
-                    f"GROUP BY stage ORDER BY stage", args):
-                agg = by_stage.setdefault(r["stage"], {"count": 0, "duration_total": 0.0})
+                duration_total += total["d"] or 0.0
+                duration_count += total["dc"] or 0
+            for r in stage_rows:
+                agg = by_stage.setdefault(r["stage"], {"count": 0, "duration_total": 0.0,
+                                                       "duration_count": 0})
                 agg["count"] += r["c"]
-                agg["duration_total"] += (r["a"] or 0.0) * r["c"]
-            for r in store.query_all(
-                    f"SELECT status, COUNT(*) c FROM telemetry {where} GROUP BY status", args):
+                agg["duration_total"] += r["d"] or 0.0
+                agg["duration_count"] += r["dc"] or 0
+            for r in status_rows:
                 by_status[r["status"]] = by_status.get(r["status"], 0) + r["c"]
         return {
             "scope": tenant_id or "platform",
             "total_spans": count,
             "failed_spans": failed,
-            "avg_span_ms": round(duration_total / count, 2) if count else 0.0,
+            "avg_span_ms": round(duration_total / duration_count, 2) if duration_count else 0.0,
             "by_stage": [{"stage": stage, "count": agg["count"],
-                         "avg_ms": round(agg["duration_total"] / agg["count"], 2) if agg["count"] else 0.0}
+                         "avg_ms": round(agg["duration_total"] / agg["duration_count"], 2)
+                                   if agg["duration_count"] else 0.0}
                         for stage, agg in sorted(by_stage.items())],
             "by_status": [{"status": status, "count": c} for status, c in by_status.items()],
         }
