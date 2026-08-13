@@ -53,9 +53,12 @@ class SchemaSplitTest(unittest.TestCase):
     def test_the_two_schemas_do_not_overlap(self):
         self.assertEqual(CONTROL_TABLES & TENANT_TABLES, set())
 
-    def test_tenant_schema_is_the_default(self):
+    def test_bare_store_still_gets_the_combined_schema(self):
+        """Every unmigrated caller in the codebase relies on this until Task 5."""
         store = Store(os.path.join(self._tmp.name, "d.db"))
-        self.assertIn("knowledge_nodes", self._tables(store))
+        tables = self._tables(store)
+        self.assertIn("knowledge_nodes", tables)  # tenant-plane table
+        self.assertIn("tenants", tables)          # control-plane table
         store.close()
 
 

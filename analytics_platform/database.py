@@ -207,7 +207,7 @@ class Store:
 
     def __init__(self, db_path: str, schema: str = None):
         self.db_path = db_path
-        self.schema = schema if schema is not None else TENANT_SCHEMA
+        self.schema = schema if schema is not None else SCHEMA
         self.conn = get_conn(db_path)
         init_db(self.conn, self.schema)
 
