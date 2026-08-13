@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from typing import Any, Dict, Iterator, List, Optional
 
 from .database import dump_json, load_json
-from .stores import TenantStoreProvider
+from .stores import TenantIsolationError, TenantStoreProvider
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +75,19 @@ class Observability:
             self.stores.for_tenant(tenant_id).execute(
                 sql, (rec["ts"], tenant_id, trace_id, stage, actor, resource,
                      status, duration_ms, bytes_in, tokens_in, tokens_out, dump_json(rec["meta"])))
+        except TenantIsolationError as e:
+            # An isolation failure is not an ordinary telemetry-write hiccup: it
+            # means this tenant's database file records a DIFFERENT company as
+            # its owner. This method's contract is that observability must never
+            # break the pipeline, so it cannot re-raise — but it must not be
+            # indistinguishable from a routine WARNING either. ERROR, named as
+            # security-relevant, so it separates cleanly in the logs.
+            logger.error(
+                "SECURITY: tenant isolation failure while persisting a telemetry "
+                "event (stage=%r, tenant_id=%r): %s. This tenant's database is "
+                "owned by another company; the event was NOT persisted and the "
+                "store must be investigated before it is used again.",
+                stage, tenant_id, e, exc_info=True)
         except Exception as e:
             logger.warning(f"Failed to persist telemetry event (stage={stage!r}, tenant_id={tenant_id!r}): {e}")
             # observability must never break the pipeline

@@ -14,13 +14,16 @@ every action emits an observability event; no credentials logged.
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional
 
 from .config import Settings
 from .domain import ReviewStatus, RunStatus, clamp_junior_depth
 from .llm.client import make_role_client
 from .observability import Observability
-from .stores import TenantStoreProvider
+from .stores import TenantIsolationError, TenantStoreProvider
+
+logger = logging.getLogger(__name__)
 
 
 class SeniorService:
@@ -46,7 +49,21 @@ class SeniorService:
                 "AND COALESCE(supportive_of, '')=''",
                 (tenant_id, ReviewStatus.APPROVED.value))
             auto_accepted = int(row["c"]) if row else 0
+        except TenantIsolationError:
+            # This tenant's database records a different company as its owner.
+            # Folding that into `auto_accepted = 0` would report a plausible
+            # number built on a cross-tenant read attempt. `status()` is a read
+            # that its callers surface as an error, so it can afford to be loud —
+            # and per this branch's plan, isolation failures always are.
+            logger.error(
+                "SECURITY: tenant isolation failure reading the auto-accepted "
+                "count for tenant %r; refusing to report a count", tenant_id,
+                exc_info=True)
+            raise
         except Exception:  # noqa: BLE001 - best-effort
+            logger.warning(
+                "could not read the auto-accepted analysis count for tenant %r; "
+                "reporting 0", tenant_id, exc_info=True)
             auto_accepted = 0
         return {
             "tenant_id": tenant_id,
