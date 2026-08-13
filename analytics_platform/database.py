@@ -162,9 +162,11 @@ def get_conn(db_path: str) -> sqlite3.Connection:
     return conn
 
 
-def init_db(conn: sqlite3.Connection, schema: str = None) -> None:
+def init_db(conn: sqlite3.Connection, schema: str) -> None:
+    """Apply one plane's schema. `schema` is required: defaulting it to the
+    combined legacy schema is how a database ends up holding both planes."""
     with _LOCK:
-        conn.executescript(schema if schema is not None else SCHEMA_LEGACY_ALL)
+        conn.executescript(schema)
         conn.commit()
         _migrate(conn)
 
@@ -218,11 +220,18 @@ class Store:
 
     A Store is one SQLite file. Tenant stores hold one company's data and nothing
     else; the control store holds the cross-tenant registry.
+
+    `schema` is REQUIRED. It used to default to `SCHEMA_LEGACY_ALL`, so
+    `Store("anything.db")` silently produced a file holding both planes at once —
+    the exact co-mingling this design exists to prevent. Every production caller
+    now goes through `TenantStoreProvider`, which always passes `CONTROL_SCHEMA`
+    or `TENANT_SCHEMA` explicitly, so nothing needs the permissive default and
+    keeping it only leaves the footgun loaded.
     """
 
-    def __init__(self, db_path: str, schema: str = None):
+    def __init__(self, db_path: str, schema: str):
         self.db_path = db_path
-        self.schema = schema if schema is not None else SCHEMA_LEGACY_ALL
+        self.schema = schema
         self.conn = get_conn(db_path)
         init_db(self.conn, self.schema)
 

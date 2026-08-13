@@ -71,9 +71,23 @@ class SchemaSplitTest(unittest.TestCase):
         self.assertTrue(tenant_names, "expected to find table names in TENANT_SCHEMA")
         self.assertEqual(control_names & tenant_names, set())
 
-    def test_bare_store_still_gets_the_combined_schema(self):
-        """Every unmigrated caller in the codebase relies on this until Task 5."""
-        store = Store(os.path.join(self._tmp.name, "d.db"))
+    def test_a_bare_store_is_refused(self):
+        """This test used to assert the opposite — that `Store(path)` with no
+        schema still produced the combined control+tenant file, because every
+        unmigrated caller relied on it "until Task 5". Task 5 landed: every
+        production caller now goes through TenantStoreProvider, which always
+        passes a plane explicitly. A schema-less Store would be a file holding
+        both planes, so the argument is required and the footgun is gone."""
+        with self.assertRaises(TypeError):
+            Store(os.path.join(self._tmp.name, "d.db"))
+        self.assertFalse(os.path.exists(os.path.join(self._tmp.name, "d.db")))
+
+    def test_the_combined_legacy_schema_is_still_reachable_for_adoption(self):
+        """`adopt-db` reads pre-split files, so SCHEMA_LEGACY_ALL stays — it just
+        has to be asked for by name."""
+        from analytics_platform.database import SCHEMA_LEGACY_ALL
+        store = Store(os.path.join(self._tmp.name, "legacy.db"),
+                      schema=SCHEMA_LEGACY_ALL)
         tables = self._tables(store)
         self.assertIn("knowledge_nodes", tables)  # tenant-plane table
         self.assertIn("tenants", tables)          # control-plane table
