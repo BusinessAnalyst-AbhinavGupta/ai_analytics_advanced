@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS stakeholder_answers (
     category TEXT, answer TEXT, answer_mode TEXT, status TEXT,
     trace_id TEXT, created_at TEXT, source_node_ids TEXT, citations TEXT,
     facts TEXT, caveats TEXT, freshness REAL, tokens_in INTEGER,
-    tokens_out INTEGER, cost REAL, escalated INTEGER
+    tokens_out INTEGER, cost REAL, escalated INTEGER, queries_run TEXT
 );
 CREATE TABLE IF NOT EXISTS stakeholder_feedback (
     id TEXT PRIMARY KEY, tenant_id TEXT, answer_id TEXT, user_id TEXT,
@@ -104,6 +104,10 @@ CREATE TABLE IF NOT EXISTS analyst_config_history (
     id TEXT PRIMARY KEY, tenant_id TEXT, version INTEGER,
     snapshot TEXT, changed_by TEXT, created_at TEXT
 );
+CREATE TABLE IF NOT EXISTS kpis (
+    id TEXT PRIMARY KEY, tenant_id TEXT, name TEXT, description TEXT, 
+    sql_query TEXT, frequency TEXT, is_active INTEGER, created_at TEXT
+);
 CREATE INDEX IF NOT EXISTS idx_api_logs_ts ON api_logs(ts);
 CREATE INDEX IF NOT EXISTS idx_api_logs_tenant ON api_logs(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_kn_tenant ON knowledge_nodes(tenant_id);
@@ -116,6 +120,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_tenant ON audit_log(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_cph_tenant ON company_profile_history(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_acfg_tenant ON analyst_configs(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_ach_tenant ON analyst_config_history(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_kpis_tenant ON kpis(tenant_id);
 """
 
 
@@ -147,6 +152,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
         for col in ("insights", "assumptions"):
             if col not in cols:
                 conn.execute(f"ALTER TABLE analysis_runs ADD COLUMN {col} TEXT")
+                
+        # CP-15: Stakeholder queries_run migration
+        sa_cols = {row[1] for row in conn.execute("PRAGMA table_info(stakeholder_answers)").fetchall()}
+        if "queries_run" not in sa_cols:
+            conn.execute("ALTER TABLE stakeholder_answers ADD COLUMN queries_run TEXT")
         # CP-15: two-tier junior (low/high) + supporting-workpaper linkage
         for col in ("level", "category", "supportive_of"):
             if col not in cols:

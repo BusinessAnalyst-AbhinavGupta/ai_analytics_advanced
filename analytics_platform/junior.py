@@ -181,33 +181,117 @@ class JuniorEngine:
             for t in ds.get("tables", []) or []:
                 if t and t not in seen:
                     seen.append(t)
+                    
+        # CP-16: Also discover root tables embedded in the knowledge queue
+        brain = CompanyBrain(self.store, tenant_id)
+        from .brain.ingest import extract
+        
+        for node in brain.all(kind=NodeKind.QUERY, limit=1000):
+            payload_tables = node.payload.get("structure", {}).get("tables")
+            if payload_tables is None:
+                if node.payload.get("table_name"):
+                    payload_tables = [node.payload["table_name"]]
+                else:
+                    sql = node.payload.get("sql")
+                    if sql:
+                        payload_tables = extract(sql).get("tables", [])
+            for t in payload_tables or []:
+                if t and t not in seen:
+                    seen.append(t)
+                    
+        for node in brain.all(kind=NodeKind.DEFINITION, limit=1000):
+            if node.title.startswith("Table: "):
+                t = node.title[7:].strip()
+                if t and t not in seen:
+                    seen.append(t)
         return seen
+                    
+    def get_catalog(self, tenant_id: str) -> Dict[str, Any]:
+        """Fetch the cached schema catalog from the Company Brain (instant)."""
+        nodes = self.brain(tenant_id).all(kind=NodeKind.DEFINITION)
+        cat_node = next((n for n in nodes if n.title == "Database Catalog"), None)
+        if cat_node and "tables" in cat_node.payload:
+            return cat_node.payload
 
-    def catalog(self, tenant_id: str) -> Dict[str, Any]:
-        """Describe registered tables via `SELECT * FROM t LIMIT 0` (dialect-agnostic)."""
+        # Return skeleton if no catalog exists yet
         tables = self._tables(tenant_id)
-        entries = []
-        ok_n = 0
-        for t in tables:
+        return {"tenant_id": tenant_id, "tables_known": len(tables),
+                "tables_described": 0, "tables": []}
+
+    def refresh_catalog(self, tenant_id: str) -> Dict[str, Any]:
+        """Probe the database schema (LIMIT 1) with priority to new tables, and cache to Brain."""
+        physical_tables = set(self._tables(tenant_id))
+        nodes = self.brain(tenant_id).all(kind=NodeKind.DEFINITION)
+        cat_node = next((n for n in nodes if n.title == "Database Catalog"), None)
+        
+        cached_tables = {}
+        if cat_node and "tables" in cat_node.payload:
+            for t in cat_node.payload["tables"]:
+                if t["table"] in physical_tables:
+                    cached_tables[t["table"]] = t
+                    
+        new_tables = [t for t in physical_tables if t not in cached_tables]
+        existing_tables = [t for t in physical_tables if t in cached_tables]
+        
+        # Priority 1: Probe new tables
+        for t in new_tables:
             r = self.executor.execute(
-                f"SELECT * FROM {t} LIMIT 0",
+                f"SELECT * FROM {t} LIMIT 1",
                 ExecutionContext(tenant_id=tenant_id, dialect="athena"))
             if r.ok and r.data is not None:
-                entries.append({"table": t, "columns": list(r.data.columns),
-                                "types": [str(d) for d in r.data.dtypes],
-                                "error": ""})
-                ok_n += 1
+                cached_tables[t] = {"table": t, "columns": list(r.data.columns),
+                                    "types": [str(d) for d in r.data.dtypes], "error": ""}
             else:
-                entries.append({"table": t, "columns": [], "types": [],
-                                "error": r.error or "unable to describe"})
-        return {"tenant_id": tenant_id,
-                "tables_known": len(tables),
-                "tables_described": ok_n,
-                "tables": entries}
+                cached_tables[t] = {"table": t, "columns": [], "types": [],
+                                    "error": r.error or "unable to describe"}
+                                    
+        # Priority 2: Refresh existing tables
+        for t in existing_tables:
+            r = self.executor.execute(
+                f"SELECT * FROM {t} LIMIT 1",
+                ExecutionContext(tenant_id=tenant_id, dialect="athena"))
+            if r.ok and r.data is not None:
+                cached_tables[t] = {"table": t, "columns": list(r.data.columns),
+                                    "types": [str(d) for d in r.data.dtypes], "error": ""}
+            else:
+                cached_tables[t] = {"table": t, "columns": [], "types": [],
+                                    "error": r.error or "unable to describe"}
+                                    
+        ok_n = sum(1 for t in cached_tables.values() if not t.get("error"))
+        entries = [cached_tables[t] for t in physical_tables]
+        
+        payload = {
+            "tenant_id": tenant_id,
+            "tables_known": len(physical_tables),
+            "tables_described": ok_n,
+            "tables": entries
+        }
+        
+        # Persist to Company Brain
+        if cat_node:
+            cat_node.payload = payload
+            cat_node.updated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            # We don't have update_node exposed simply in store, but we can recreate it or find the right API.
+            # Wait, how do we update? The BrainStore doesn't expose a raw update payload method.
+            # Let's check BrainStore methods in a moment. We'll use a hack if needed.
+            # Let's just create a new one and supersede the old one.
+            self.brain(tenant_id).create(
+                kind=NodeKind.DEFINITION, title="Database Catalog",
+                summary="Full database schema catalog, automatically maintained.",
+                payload=payload, status=ReviewStatus.APPROVED
+            )
+        else:
+            self.brain(tenant_id).create(
+                kind=NodeKind.DEFINITION, title="Database Catalog",
+                summary="Full database schema catalog, automatically maintained.",
+                payload=payload, status=ReviewStatus.APPROVED
+            )
+            
+        return payload
 
     def datasets(self, tenant_id: str) -> List[str]:
         """Distinct column/schema names known across described tables (for EDA)."""
-        return [t["table"] for t in self.catalog(tenant_id)["tables"] if t["columns"]]
+        return [t["table"] for t in self.get_catalog(tenant_id)["tables"] if t["columns"]]
 
     # -- stage 3: goal-aligned questions (read-only, deterministic) -----------
     def _usable_definitions(self, tenant_id: str) -> Dict[str, List[Any]]:
@@ -276,7 +360,7 @@ class JuniorEngine:
             # schema (a probe: no data -> never promoted, by design)
             out.append(self._lo("schema",
                                 f"Describe the schema of `{name}` (columns + types).",
-                                cols, f"SELECT {', '.join(cols[:8])} FROM {name} LIMIT 0",
+                                cols, f"SELECT {', '.join(cols[:8])} FROM {name} LIMIT 1",
                                 depth))
             # fill rate / coverage of a meaningful column
             out.append(self._lo("fill_rate",

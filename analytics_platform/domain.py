@@ -61,6 +61,8 @@ class AnswerMode(str, Enum):
     NEW_LOW_RISK_ANALYSIS = "NEW_LOW_RISK_ANALYSIS"
     REQUIRES_SENIOR_REVIEW = "REQUIRES_SENIOR_REVIEW"
     CANNOT_ANSWER = "CANNOT_ANSWER"
+    SKILL_EXECUTED_ANALYSIS = "SKILL_EXECUTED_ANALYSIS"
+    NEEDS_CLARIFICATION = "NEEDS_CLARIFICATION"
 
 
 class RunStatus(str, Enum):
@@ -83,6 +85,8 @@ class CompanyTarget:
     metric_refs: List[str] = field(default_factory=list)
     constraints: List[str] = field(default_factory=list)
     last_reviewed: str = ""
+    sql_query: str = ""
+    threshold: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

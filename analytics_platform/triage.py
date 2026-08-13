@@ -31,10 +31,10 @@ class TriageService:
 
     # -- reads ---------------------------------------------------------------
     def queue(self, tenant_id: str, *, kind: Optional[NodeKind] = None,
-              search: str = "", limit: int = 200) -> List[KnowledgeNode]:
-        """Pending nodes (any invoice status) filtered by kind/text."""
+              search: str = "", status: Optional[Any] = None, limit: int = 200) -> List[KnowledgeNode]:
+        """Nodes filtered by kind, text, and optionally status."""
         q: List[KnowledgeNode] = []
-        for n in self.brain(tenant_id).all(kind=kind, limit=limit):
+        for n in self.brain(tenant_id).all(kind=kind, status=status, limit=limit):
             if search:
                 s = search.lower()
                 if s not in n.title.lower() and s not in n.summary.lower():

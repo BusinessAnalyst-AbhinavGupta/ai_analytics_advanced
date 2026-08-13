@@ -74,6 +74,66 @@ class OnboardingService:
                        actor=by, resource=str(len(created)), meta={"count": len(created)})
         return created
 
+    def bulk_ingest_json(self, tenant_id: str, json_content: str, llm: Any, by: str = "ingest") -> Dict[str, Any]:
+        """Parses a JSON array of legacy queries, extracts AST, uses LLM for EDA, and saves nodes."""
+        import json
+        from .domain import KnowledgeNode
+        
+        self.tenants.require_tenant(tenant_id)
+        brain = self.brain(tenant_id)
+        
+        try:
+            items = json.loads(json_content)
+            if not isinstance(items, list):
+                return {"error": "Expected a JSON array of queries."}
+        except Exception as e:
+            return {"error": f"Invalid JSON: {e}"}
+            
+        created_nodes = []
+        for it in items:
+            sql = it.get("sql", "")
+            if not sql:
+                continue
+                
+            dashboard = it.get("dashboard", "")
+            purpose = it.get("purpose", "")
+            
+            prompt = f"Analyze this SQL query from dashboard '{dashboard}' with purpose '{purpose}':\n\n{sql}\n\n"
+            prompt += "Please return a JSON object with:\n"
+            prompt += "- 'title': A short, clear title for the query.\n"
+            prompt += "- 'description': A summary of what this query calculates.\n"
+            prompt += "- 'definitions': A list of business definitions (e.g. 'Active User', 'Churn') found in the WHERE/GROUP BY clauses. Each should have a 'name' and 'description'.\n"
+            
+            try:
+                res = llm.generate_json(prompt)
+            except Exception:
+                res = {}
+                
+            title = res.get("title", f"Query from {dashboard}" if dashboard else "Imported Query")
+            desc = res.get("description", purpose)
+            
+            # Create QUERY node using AST parser
+            nodes = ingest_sql(brain, sql, source_ref=dashboard, title=title, created_by=by)
+            for node in nodes:
+                node.description = desc
+                node.payload["purpose"] = purpose
+                brain.save(node)
+                created_nodes.append(node)
+                
+            # Create DEFINITION nodes from LLM
+            defs = res.get("definitions", [])
+            for d in defs:
+                d_name = d.get("name", "Unknown")
+                d_desc = d.get("description", "")
+                def_node = KnowledgeNode.definition(d_name, d_desc, created_by=by)
+                def_node.source_ref = dashboard
+                brain.save(def_node)
+                created_nodes.append(def_node)
+                
+        self.obs.event(tenant_id=tenant_id, stage="onboarding.bulk_ingested",
+                       actor=by, resource=str(len(created_nodes)), meta={"count": len(created_nodes)})
+        return {"created_nodes_count": len(created_nodes)}
+
     # -- candidates + review --------------------------------------------------
     def candidates(self, tenant_id: str, status: ReviewStatus = ReviewStatus.CANDIDATE,
                    limit: int = 200) -> List[KnowledgeNode]:

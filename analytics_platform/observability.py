@@ -20,9 +20,10 @@ def new_trace() -> str:
 
 
 class Observability:
-    def __init__(self, store: Store):
+    def __init__(self, store: Store, on_event: Optional[Any] = None):
         self._store = store
         self._inmem: List[Dict[str, Any]] = []
+        self.on_event = on_event
 
     # -- span context manager -------------------------------------------------
     @contextmanager
@@ -66,6 +67,13 @@ class Observability:
                                       status, duration_ms, bytes_in, tokens_in, tokens_out, dump_json(rec["meta"])))
         except Exception:
             pass  # observability must never break the pipeline
+            
+        if self.on_event:
+            try:
+                self.on_event(rec)
+            except Exception:
+                pass
+                
         return trace_id
 
     # -- queries ---------------------------------------------------------------

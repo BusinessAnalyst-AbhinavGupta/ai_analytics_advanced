@@ -22,6 +22,7 @@ from .execution.base import ExecutionContext
 from .llm.client import make_role_client
 from .observability import Observability, new_trace
 from .tenancy import TenantService
+from .skills import SkillRegistry, SkillEngine
 
 CATEGORY_MARKERS: Dict[str, List[str]] = {
     "metric_lookup": ["how many", "count", "number of", "what is the value", "measure", "metric"],
@@ -52,6 +53,9 @@ class StakeholderService:
         self.settings = settings or Settings()
         self.cost_per_1k_input = cost_per_1k_input
         self.cost_per_1k_output = cost_per_1k_output
+        self.skill_registry = SkillRegistry()
+        self.skill_registry.load_skills()
+        self.skill_engine = SkillEngine()
 
     def brain(self, tenant_id: str) -> CompanyBrain:
         return CompanyBrain(self.store, tenant_id)
@@ -209,6 +213,51 @@ class StakeholderService:
             return out
 
         if self._llm_live(llm):
+            # Check for skill match
+            skill_match = self.skill_engine.match(question, self.skill_registry.meta, llm)
+            if skill_match:
+                skill = self.skill_registry.get_skill(skill_match.skill_name)
+                if skill:
+                    params, needs_clarif, clarif_q = self.skill_engine.extract_params(question, skill, llm)
+                    if needs_clarif:
+                        out = self._record(tenant_id, question, user_id, category, trace, clarif_q,
+                                           AnswerMode.NEEDS_CLARIFICATION, "NEEDS_CLARIFICATION", False, [],
+                                           caveats=["missing required parameters for skill: " + skill.meta.name])
+                        self.obs.event(tenant_id=tenant_id, trace_id=trace, stage="stakeholder.answer",
+                                       actor="stakeholder", resource=out["answer_id"], status="OK",
+                                       meta={"category": category, "mode": out["answer_mode"]})
+                        return out
+                    
+                    ec = ExecutionContext(tenant_id=tenant_id, question=question, dialect="athena")
+                    exec_res = self.skill_engine.execute(skill, params, self.executor, ec)
+                    
+                    if not exec_res.ok:
+                        out = self._record(tenant_id, question, user_id, category, trace, "Skill execution failed: " + exec_res.error,
+                                           AnswerMode.CANNOT_ANSWER, "CANNOT_ANSWER", False, [],
+                                           queries_run=exec_res.queries_run,
+                                           caveats=["skill execution error"])
+                        self.obs.event(tenant_id=tenant_id, trace_id=trace, stage="stakeholder.answer",
+                                       actor="stakeholder", resource=out["answer_id"], status="ERROR",
+                                       meta={"category": category, "mode": out["answer_mode"]})
+                        return out
+
+                    # Synthesize final answer using data from execution
+                    data_context = {"rows": [p["preview"] for p in exec_res.data_previews]}
+                    answer, toks, chart_config = self._synthesize(llm, question, category, data_context)
+                    
+                    out = self._record(tenant_id, question, user_id, category, trace, answer,
+                                       AnswerMode.SKILL_EXECUTED_ANALYSIS, "ANSWERED", False, [],
+                                       queries_run=exec_res.queries_run,
+                                       caveats=["used specialized skill: " + skill.meta.name],
+                                       tokens_in=toks[0], tokens_out=toks[1])
+                    out["chart_config"] = chart_config
+                    out["chart_data"] = exec_res.data_previews[-1]["preview"] if exec_res.data_previews else []
+                    self.obs.event(tenant_id=tenant_id, trace_id=trace, stage="stakeholder.answer",
+                                   actor="stakeholder", resource=out["answer_id"], status="OK",
+                                   meta={"category": category, "mode": out["answer_mode"]})
+                    return out
+
+            # Fallback to direct LLM synthesis if no skill matched
             answer, toks, chart_config = self._synthesize(llm, question, category)
             out = self._record(tenant_id, question, user_id, category, trace, answer,
                                AnswerMode.NEW_LOW_RISK_ANALYSIS, "ANSWERED", False, [],

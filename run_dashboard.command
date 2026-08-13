@@ -74,7 +74,7 @@ else
     HEALTH_URL="${ANALYTICS_API_URL}/tenants"
     echo -n "⏳ Waiting for backend to answer at ${HEALTH_URL}"
     API_READY=0
-    for _ in $(seq 1 30); do
+    for _ in $(seq 1 90); do
         if curl -sfS -m 2 "$HEALTH_URL" >/dev/null 2>&1; then
             API_READY=1
             echo " ✅"
@@ -85,7 +85,7 @@ else
     done
     if [ "$API_READY" -ne 1 ]; then
         echo ""
-        echo "⚠️  Backend did not respond on ${ANALYTICS_API_URL} after ~30s."
+        echo "⚠️  Backend did not respond on ${ANALYTICS_API_URL} after ~90s."
         echo "   Open /tmp/ai_analytics_api.log for the API error."
         read -r -p "Press [Enter] to exit ..."
         exit 1

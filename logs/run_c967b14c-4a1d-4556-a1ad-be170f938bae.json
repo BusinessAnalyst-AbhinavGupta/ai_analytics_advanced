@@ -1,5 +1,0 @@
-{"timestamp": "2026-08-04T18:23:38.437971+00:00", "stage": "pipeline_resume", "status": "started", "details": {"checkpoint_path": "checkpoints/canonical_088a4318-6436-4e76-85c8-73d0fa71ece2.json", "uri": "bolt://127.0.0.1:7687", "database": "90031eca-686e-4ad3-9bb3-2b854c601f1c"}}
-{"timestamp": "2026-08-04T18:23:38.438264+00:00", "stage": "load_checkpoint", "status": "started", "details": null}
-{"timestamp": "2026-08-04T18:23:38.446877+00:00", "stage": "load_checkpoint", "status": "success", "details": {"canonical_id": "088a4318-6436-4e76-85c8-73d0fa71ece2"}}
-{"timestamp": "2026-08-04T18:23:38.450315+00:00", "stage": "database_ingestion", "status": "started", "details": null}
-{"timestamp": "2026-08-04T18:23:38.456514+00:00", "stage": "pipeline_resume", "status": "failed", "details": {"error": "{neo4j_code: Neo.ClientError.Database.DatabaseNotFound} {message: Database does not exist. Database name: '90031eca-686e-4ad3-9bb3-2b854c601f1c'.} {gql_status: 22000} {gql_status_description: error: data exception}"}}

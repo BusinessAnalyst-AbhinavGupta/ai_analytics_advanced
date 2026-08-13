@@ -9,12 +9,35 @@ so the /metrics endpoint shows the pipeline as if each hop were a monitored API.
 from __future__ import annotations
 
 import os
+import sys
+import logging
 from dataclasses import dataclass
+
+api_logger = logging.getLogger("api_access")
+api_logger.setLevel(logging.INFO)
+api_logger.propagate = False
+
+log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - API - %(message)s')
+
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setFormatter(log_formatter)
+api_logger.addHandler(console_handler)
+
+try:
+    tmp_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tmp")
+    os.makedirs(tmp_dir, exist_ok=True)
+    file_handler = logging.FileHandler(os.path.join(tmp_dir, "api.log"))
+    file_handler.setFormatter(log_formatter)
+    api_logger.addHandler(file_handler)
+except Exception as e:
+    print(f"Failed to setup file logger in tmp: {e}")
+
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, Header, Query, Request
+from fastapi import FastAPI, HTTPException, Header, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import asyncio
 
 from .analysis import evaluate_rules, profile_df
 from .auth import AuthGate, Role, issue
@@ -392,6 +415,40 @@ def _api_junior_executor(settings: Settings, offline: Any) -> Any:
         from .execution.browser_session import make_live_executor
         return make_live_executor(settings=settings)
     return offline
+class EventBroadcaster:
+    def __init__(self):
+        self.connections: Dict[str, List[WebSocket]] = {}
+        self.loop: Optional[asyncio.AbstractEventLoop] = None
+
+    def add_connection(self, tenant_id: str, websocket: WebSocket):
+        if tenant_id not in self.connections:
+            self.connections[tenant_id] = []
+        self.connections[tenant_id].append(websocket)
+
+    def remove_connection(self, tenant_id: str, websocket: WebSocket):
+        if tenant_id in self.connections and websocket in self.connections[tenant_id]:
+            self.connections[tenant_id].remove(websocket)
+            if not self.connections[tenant_id]:
+                del self.connections[tenant_id]
+
+    def dispatch(self, event: Dict[str, Any]):
+        tenant_id = event.get("tenant_id")
+        if not tenant_id or tenant_id not in self.connections:
+            return
+        if self.loop is None:
+            return
+            
+        for ws in list(self.connections[tenant_id]):
+            def schedule_send(ws=ws, ev=event):
+                async def _send():
+                    try:
+                        await ws.send_json(ev)
+                    except Exception:
+                        pass
+                asyncio.create_task(_send())
+            self.loop.call_soon_threadsafe(schedule_send)
+
+broadcaster = EventBroadcaster()
 
 
 # --------------------------------------------------------------------------- #
@@ -405,6 +462,45 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
     app.state.ctx = ctx
     ctx = ensure_services(ctx)
     C = ctx  # closure shorthand
+
+    @app.on_event("startup")
+    async def startup_event():
+        broadcaster.loop = asyncio.get_running_loop()
+        if C.observability:
+            C.observability.on_event = broadcaster.dispatch
+
+    @app.websocket("/ws/tenants/{tenant_id}/activity")
+    async def websocket_activity(websocket: WebSocket, tenant_id: str):
+        print(f"DEBUG: websocket_activity reached for tenant {tenant_id}")
+        # The frontend hardcodes '1', we rewrite it to the first tenant
+        if tenant_id == "1":
+            all_tnts = C.tenants.list_tenants()
+            if all_tnts:
+                tenant_id = all_tnts[0]["id"]
+        
+        await websocket.accept()
+        broadcaster.add_connection(tenant_id, websocket)
+        try:
+            while True:
+                await websocket.receive_text()
+        except WebSocketDisconnect:
+            broadcaster.remove_connection(tenant_id, websocket)
+
+    @app.middleware("http")
+    async def legacy_tenant_rewriter(request: Request, call_next):
+        path = request.scope.get("path", "")
+        # The frontend hardcodes tenant ID '1'. Rewrite it to the first available isolated tenant.
+        if "/1/" in path or path.endswith("/1"):
+            all_tnts = C.tenants.list_tenants()
+            if all_tnts:
+                tnt = all_tnts[0]["id"]
+                # Only rewrite specific base paths to avoid accidentally replacing numbers elsewhere
+                bases = ["tenants", "junior", "senior", "triage", "stakeholder", "research", "billing"]
+                for b in bases:
+                    if path.startswith(f"/{b}/1/") or path == f"/{b}/1":
+                        request.scope["path"] = path.replace(f"/{b}/1", f"/{b}/{tnt}", 1)
+                        break
+        return await call_next(request)
 
     @app.middleware("http")
     async def _access_log_middleware(request: Request, call_next):
@@ -422,15 +518,18 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
             response = await call_next(request)
         except ClientDisconnect:
             response = None
-        except Exception:
+        except Exception as err:
             import traceback as _tb
             traceback_text = _tb.format_exc()[:300]
+            ms = (_t.perf_counter() - t0) * 1000.0
+            api_logger.error(f"[{request.method}] {request.url.path} - FAILED (500) - {ms:.2f}ms - Tenant: {tenant_id}\nErr: {traceback_text}")
             C.observability.log_access(method=request.method, path=request.url.path,
-                                       status=500, duration_ms=(_t.perf_counter() - t0) * 1000.0,
+                                       status=500, duration_ms=ms,
                                        tenant_id=tenant_id, meta={"err": traceback_text})
             raise
         ms = (_t.perf_counter() - t0) * 1000.0
         status = getattr(response, "status_code", 0) if response is not None else 0
+        api_logger.info(f"[{request.method}] {request.url.path} - Status: {status} - Duration: {ms:.2f}ms - Tenant: {tenant_id}")
         C.observability.log_access(method=request.method, path=request.url.path,
                                    status=status, duration_ms=ms, tenant_id=tenant_id)
         if response is None:
@@ -753,10 +852,12 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
 
     @app.get("/triage/{tenant_id}/queue")
     def triage_queue(tenant_id: str, kind: Optional[str] = None, search: str = "",
+                     status: Optional[str] = None,
                      limit: int = 100) -> List[Dict[str, Any]]:
         svc = _triage(tenant_id)
+        st = ReviewStatus(status) if status else None
         return [n.to_dict() for n in
-                svc.queue(tenant_id, kind=_coerce_kind(kind), search=search, limit=limit)]
+                svc.queue(tenant_id, kind=_coerce_kind(kind), search=search, status=st, limit=limit)]
 
     @app.get("/triage/{tenant_id}/conflicts")
     def triage_conflicts(tenant_id: str, limit: int = 100) -> List[Dict[str, Any]]:
@@ -783,6 +884,10 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
 
     # -- junior (maturity + schema EDA + goal-aligned questions) -----------
     def _junior(tenant_id: str) -> JuniorEngine:
+        if tenant_id == "1":
+            all_tnts = C.tenants.list_tenants()
+            if all_tnts:
+                tenant_id = all_tnts[0].id
         tenant_or_404(tenant_id)
         return JuniorEngine(ctx.store, executor=_api_junior_executor(ctx.settings, ctx.executor),
                             tenants=ctx.tenants, observability=ctx.observability,
@@ -794,7 +899,11 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
 
     @app.get("/junior/{tenant_id}/catalog")
     def junior_catalog(tenant_id: str) -> Dict[str, Any]:
-        return _junior(tenant_id).catalog(tenant_id)
+        return _junior(tenant_id).get_catalog(tenant_id)
+        
+    @app.post("/junior/{tenant_id}/catalog/refresh")
+    def junior_catalog_refresh(tenant_id: str) -> Dict[str, Any]:
+        return _junior(tenant_id).refresh_catalog(tenant_id)
 
     @app.get("/junior/{tenant_id}/datasets")
     def junior_datasets(tenant_id: str) -> List[str]:

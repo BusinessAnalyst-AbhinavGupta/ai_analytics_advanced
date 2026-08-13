@@ -44,10 +44,14 @@ def extract(sql: str) -> Dict[str, Any]:
     if ast is None:
         return info
 
+    ctes = set()
+    for cte in ast.find_all(sqlglot.exp.CTE):
+        ctes.add(cte.alias)
+
     for node in ast.walk():
         if isinstance(node, sqlglot.exp.Table):
             t = node.name
-            if t and t not in info["tables"]:
+            if t and t not in ctes and t not in info["tables"]:
                 info["tables"].append(t)
         elif isinstance(node, sqlglot.exp.Column):
             c = node.name

@@ -34,6 +34,8 @@ class Scheduler:
     def __init__(self, store: Store, observability: Optional[Observability] = None,
                  retention_days: int = 30, maintenance_interval_days: int = 7,
                  junior_worker: Optional[Any] = None,
+                 anomaly: Optional[Any] = None,
+                 pipeline: Optional[Any] = None,
                  interval_seconds: float = _DEFAULT_INTERVAL_S,
                  clock: Callable[[], float] = time.time):
         self.store = store
@@ -41,6 +43,8 @@ class Scheduler:
         self.retention_days = int(retention_days)
         self.maintenance_interval_days = int(maintenance_interval_days)
         self.junior = junior_worker
+        self.anomaly = anomaly
+        self.pipeline = pipeline
         self.interval_seconds = interval_seconds
         self._clock = clock
         self._lock = threading.Lock()
@@ -110,6 +114,20 @@ class Scheduler:
             self._last_junior_ts = self._clock()
         return result
 
+    def anomaly_once(self, tenant_id: str) -> Dict[str, Any]:
+        """Delegate KPI evaluation to AnomalyService."""
+        if not self.anomaly or not self.pipeline or not self.junior:
+            return {"ran": False, "reason": "missing_dependencies"}
+        
+        now = self._clock()
+        last = self._get_state("kpi_last_eval_ts") or 0.0
+        if now - last < 3600:  # evaluate hourly
+            return {"ran": False, "reason": "not_due"}
+            
+        triggered = self.anomaly.evaluate_kpis(tenant_id, self.junior.junior.executor, self.pipeline)
+        self._set_state("kpi_last_eval_ts", now)
+        return {"ran": True, "triggered": triggered}
+
     # -- loop ----------------------------------------------------------------- #
     def tick(self) -> List[Dict[str, Any]]:
         """One wake: run due jobs (purge always, junior if a worker is registered
@@ -118,6 +136,7 @@ class Scheduler:
         out.append(self.purge_logs_once())
         if self.junior is not None and getattr(self.junior, "tenant_id", None):
             out.append(self.junior_once(self.junior.tenant_id))
+            out.append(self.anomaly_once(self.junior.tenant_id))
         return out
 
     def start(self) -> None:

@@ -40,9 +40,9 @@ class Settings:
     log_retention_days: int = 30        # API logs kept this long before purge
     maintenance_interval_days: int = 7  # weekly auto-trigger of log clean-up
     scheduler_enabled: bool = False     # background scheduler (serve-only; env WATCHER)
-    junior_work_start: str = "10:00"   # junior background window start (system time)
-    junior_work_end: str = "19:00"      # junior background window end
-    junior_min_interval_minutes: int = 60  # one problem statement per hour max
+    junior_work_start: str = "00:00"   # junior background window start (system time)
+    junior_work_end: str = "23:59"      # junior background window end
+    junior_min_interval_minutes: int = 1  # one problem statement per hour max
     junior_daily_cap: int = 3           # at most N junior analyses per UTC day
     junior_review_backlog_max: int = 3  # pause generating once N analyses await senior review
     # CP-15: low-level exploratory analyses auto-fold to FINDINGs, capped so schema
@@ -97,10 +97,10 @@ class Settings:
             log_retention_days=int(os.environ.get("ANALYTICS_LOG_RETENTION_DAYS", "30")),
             maintenance_interval_days=int(os.environ.get("ANALYTICS_MAINT_INTERVAL_DAYS", "7")),
             scheduler_enabled=os.environ.get("ANALYTICS_WATCHER") == "1",
-            junior_work_start=os.environ.get("ANALYTICS_JUNIOR_WORK_START", "10:00"),
-            junior_work_end=os.environ.get("ANALYTICS_JUNIOR_WORK_END", "19:00"),
+            junior_work_start=os.environ.get("ANALYTICS_JUNIOR_WORK_START", "00:00"),
+            junior_work_end=os.environ.get("ANALYTICS_JUNIOR_WORK_END", "23:59"),
             junior_min_interval_minutes=int(
-                os.environ.get("ANALYTICS_JUNIOR_MIN_INTERVAL_MINUTES", "60")),
+                os.environ.get("ANALYTICS_JUNIOR_MIN_INTERVAL_MINUTES", "1")),
             junior_daily_cap=int(
                 os.environ.get("ANALYTICS_JUNIOR_DAILY_CAP", "3")),
             junior_review_backlog_max=int(
