@@ -814,6 +814,7 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
             # different tenant here would write that tenant's data into the
             # singleton's store -- build a correctly-scoped worker instead,
             # the same way /tenants/{tenant_id}/junior/run does.
+            tenant_or_404(tid)
             from .junior_worker import JuniorWorker
             eng = JuniorEngine(ctx.stores, executor=_api_junior_executor(ctx.settings, ctx.executor),
                                tenants=ctx.tenants, observability=ctx.observability,
