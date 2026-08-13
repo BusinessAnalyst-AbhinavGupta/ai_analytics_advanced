@@ -8,10 +8,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 from typing import Any, Dict, List
 
 from .api import bootstrap_demo, make_context
+
+logger = logging.getLogger(__name__)
 
 
 def _print(label: str, obj: Any) -> None:
@@ -253,7 +256,8 @@ def adopt_db(source_path: str, tenant_id: str, stores) -> int:
         for table in TENANT_TABLES:
             try:
                 rows = legacy.query_all(f"SELECT DISTINCT tenant_id FROM {table}")
-            except Exception:
+            except Exception as exc:
+                logger.warning("adopt_db: could not scan %s for tenant_id: %s", table, exc, exc_info=True)
                 continue
             found.update(r["tenant_id"] for r in rows if r["tenant_id"])
         extra = found - {tenant_id}
@@ -269,7 +273,8 @@ def adopt_db(source_path: str, tenant_id: str, stores) -> int:
             try:
                 rows = legacy.query_all(f"SELECT * FROM {table} WHERE tenant_id = ?",
                                         (tenant_id,))
-            except Exception:
+            except Exception as exc:
+                logger.warning("adopt_db: could not copy rows from %s: %s", table, exc, exc_info=True)
                 continue
             for row in rows:
                 data = dict(row)
