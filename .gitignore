@@ -9,3 +9,11 @@ data/*.db
 data/*.db-shm
 data/*.db-wal
 data/reviews/
+
+# Tenant-specific details
+tenants/
+.env
+
+# Deprecated code/plans
+deprecated/
+.chroma_db/
