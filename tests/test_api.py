@@ -150,6 +150,9 @@ class TestApiJunior(unittest.TestCase):
     def test_stage_catalog_questions(self):
         st = call(self.app, "GET", "/junior/{tenant_id}/stage", self.tid)
         self.assertGreaterEqual(st["reproduction"]["reproduced"], 1)
+        # GET /catalog is a cheap, cache-only read (never probes); a table is only
+        # "described" after an explicit refresh.
+        call(self.app, "POST", "/junior/{tenant_id}/catalog/refresh", self.tid)
         cat = call(self.app, "GET", "/junior/{tenant_id}/catalog", self.tid)
         self.assertEqual(cat["tables_known"], 1)
         self.assertEqual(cat["tables_described"], 1)

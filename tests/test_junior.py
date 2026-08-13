@@ -77,7 +77,7 @@ class TestJunior(unittest.TestCase):
     def test_catalog_describes_registered_table(self):
         self.ctx.tenants.add_datasource(self.tid, "Events", DataSourceKind.DIRECT_DB,
                                         dialect="athena", tables=["events"])
-        c = self.engine.catalog(self.tid)
+        c = self.engine.refresh_catalog(self.tid)
         self.assertEqual(c["tables_known"], 1)
         self.assertEqual(c["tables_described"], 1)
         cols = c["tables"][0]["columns"]
@@ -87,7 +87,7 @@ class TestJunior(unittest.TestCase):
     def test_catalog_unknown_table_reports_error(self):
         self.ctx.tenants.add_datasource(self.tid, "Missing", DataSourceKind.DIRECT_DB,
                                         tables=["nope_missing"])
-        c = self.engine.catalog(self.tid)
+        c = self.engine.refresh_catalog(self.tid)
         self.assertEqual(c["tables_known"], 1)
         self.assertEqual(c["tables_described"], 0)
         self.assertTrue(c["tables"][0]["error"])
@@ -166,8 +166,8 @@ class TestJunior(unittest.TestCase):
         self.assertGreaterEqual(st["reproduction"]["reproduced"], 1)
         self.assertEqual(st["reproduction"]["failed"], [])
 
-        # catalog() describes the mapped table through the browser executor
-        cat = eng.catalog(self.tid)
+        # refresh_catalog() describes the mapped table through the browser executor
+        cat = eng.refresh_catalog(self.tid)
         self.assertEqual(cat["tables_known"], 1)
         self.assertEqual(cat["tables_described"], 1)
         self.assertIn("month", cat["tables"][0]["columns"])
