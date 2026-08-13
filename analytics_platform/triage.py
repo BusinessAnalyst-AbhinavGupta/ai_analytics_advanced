@@ -22,12 +22,13 @@ ACTIONABLE = (ReviewStatus.CANDIDATE, ReviewStatus.UNDER_REVIEW,
 
 
 class TriageService:
-    def __init__(self, store: Store, observability: Optional[Observability] = None):
+    def __init__(self, store: Store, observability: Optional[Observability] = None, vector_store: Optional[Any] = None):
         self.store = store
         self.obs = observability or Observability(store)
+        self.vector_store = vector_store
 
     def brain(self, tenant_id: str) -> CompanyBrain:
-        return CompanyBrain(self.store, tenant_id)
+        return CompanyBrain(self.store, tenant_id, vector_store=self.vector_store)
 
     # -- reads ---------------------------------------------------------------
     def queue(self, tenant_id: str, *, kind: Optional[NodeKind] = None,

@@ -56,6 +56,26 @@ class CompanyBrain:
         except Exception:
             pass
 
+    def reindex_vectors(self) -> int:
+        """Rebuild the vector index from all approved/usable nodes in SQLite."""
+        if not self.vector_store:
+            return 0
+        nodes = self.usable_queries(limit=10000)
+        # Also include approved definitions
+        statuses = [ReviewStatus.APPROVED.value, ReviewStatus.APPROVED_WITH_CAVEATS.value]
+        placeholders = ",".join("?" for _ in statuses)
+        rows = self.store.query_all(
+            f"SELECT * FROM knowledge_nodes WHERE tenant_id=? AND kind=? "
+            f"AND status IN ({placeholders})",
+            (self.tenant_id, NodeKind.DEFINITION.value, *statuses))
+        nodes.extend([self._row_to_node(r) for r in rows])
+        
+        count = 0
+        for n in nodes:
+            self._sync_vector(n)
+            count += 1
+        return count
+
     # -- write ---------------------------------------------------------------
     def add_node(self, node: KnowledgeNode) -> KnowledgeNode:
         assert node.tenant_id == self.tenant_id

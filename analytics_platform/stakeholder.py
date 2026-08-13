@@ -44,9 +44,11 @@ class StakeholderService:
                  observability: Optional[Observability] = None,
                  cost_per_1k_input: float = 0.30,
                  cost_per_1k_output: float = 1.20,
-                 settings: Optional[Settings] = None):
+                 settings: Optional[Settings] = None,
+                 vector_store: Optional[Any] = None):
         from .execution.sampler import SamplerExecutor
         self.store = store
+        self.vector_store = vector_store
         self.tenants = tenants or TenantService(store)
         self.executor = executor or SamplerExecutor()
         self.obs = observability or Observability(store)
@@ -58,7 +60,7 @@ class StakeholderService:
         self.skill_engine = SkillEngine()
 
     def brain(self, tenant_id: str) -> CompanyBrain:
-        return CompanyBrain(self.store, tenant_id)
+        return CompanyBrain(self.store, tenant_id, vector_store=self.vector_store)
 
     def classify(self, question: str) -> str:
         q = question.lower()
@@ -73,6 +75,19 @@ class StakeholderService:
         if any(m in q for m in HIGH_RISK_MARKERS):
             return True
         return category in ("metric_lookup", "trend", "comparison") and "revenue" in q
+
+    def _extract_search_intent(self, llm: Any, question: str) -> str:
+        """Use a fast LLM call to extract the core generic topic, dropping specific filters."""
+        if not self._llm_live(llm):
+            return question
+        prompt = (
+            "Extract the core analytical topic from this question for a semantic vector search. "
+            "Remove specific filters (like dates, countries, service lines, channels). "
+            "Only return a generic 2-4 word concept.\n\n"
+            f"Question: {question}\nCore Topic:"
+        )
+        res = llm.generate(prompt, temperature=0.0)
+        return res.text.strip() if res.ok and res.text else question
 
     # -- retrieve ----------------------------------------------------------
     def _retrieve(self, tenant_id: str, question: str) -> Tuple[List[Any], List[Any]]:
@@ -117,8 +132,9 @@ class StakeholderService:
             return out
 
         llm = make_role_client(self.settings, cfg.stakeholder)
-        query_nodes, defn_nodes = self._retrieve(tenant_id, question)
-
+        
+        search_intent = self._extract_search_intent(llm, question)
+        query_nodes, defn_nodes = self._retrieve(tenant_id, search_intent)
         if self.is_high_risk(question, category):
             source_ids = [n.id for n in (query_nodes + defn_nodes)]
             if source_ids:
@@ -132,6 +148,46 @@ class StakeholderService:
                            meta={"category": category})
             return out
 
+        has_nodes = bool(query_nodes or defn_nodes)
+        if has_nodes and self._llm_live(llm):
+            sql, toks = self._synthesize_sql(llm, question, query_nodes, defn_nodes)
+            if sql:
+                ec = ExecutionContext(tenant_id=tenant_id, question=question, dialect="athena")
+                exec_res = self.executor.execute(sql, ec)
+                if exec_res.ok:
+                    data_context = {"rows": exec_res.preview}
+                    answer, syn_toks, chart_config = self._synthesize(llm, question, category, data_context)
+                    t_in = toks[0] + syn_toks[0]
+                    t_out = toks[1] + syn_toks[1]
+                    
+                    # Ensure citations exist to render pills on the frontend
+                    citations = []
+                    for n in (query_nodes + defn_nodes):
+                        citations.append({
+                            "node_id": n.id,
+                            "title": n.title,
+                            "evidence_ref": n.evidence_ref,
+                            "freshness": n.confidence.get("freshness", 0.0)
+                        })
+
+                    out = self._record(tenant_id, question, user_id, category, trace, answer,
+                                       AnswerMode.ADAPTED_APPROVED_QUERY, "ANSWERED", False,
+                                       [n.id for n in (query_nodes + defn_nodes)],
+                                       citations=citations,
+                                       facts=["synthesized custom query based on approved knowledge"],
+                                       caveats=["dynamically generated SQL"],
+                                       tokens_in=t_in, tokens_out=t_out, queries_run=[sql])
+                    out["chart_config"] = chart_config
+                    out["chart_data"] = exec_res.preview
+                    self.obs.event(tenant_id=tenant_id, trace_id=trace, stage="stakeholder.answer",
+                                   actor="stakeholder", resource=out["answer_id"], status="OK",
+                                   meta={"category": category, "mode": AnswerMode.ADAPTED_APPROVED_QUERY.value})
+                    return out
+                else:
+                    # SQL generation or execution failed, fallback to direct output from nodes if possible
+                    pass
+        
+        # Original fallback logic if SQL synthesis wasn't enabled or failed
         if query_nodes:
             all_details = []
             queries_run = []
@@ -186,6 +242,7 @@ class StakeholderService:
                            actor="stakeholder", resource=out["answer_id"], status="OK",
                            meta={"category": category, "mode": mode.value})
             return out
+        
         if defn_nodes:
             answers = []
             facts = []
@@ -211,6 +268,7 @@ class StakeholderService:
                            actor="stakeholder", resource=out["answer_id"], status="OK",
                            meta={"category": category, "mode": AnswerMode.DIRECT_FROM_APPROVED_KNOWLEDGE.value})
             return out
+
 
         if self._llm_live(llm):
             # Check for skill match
@@ -282,6 +340,36 @@ class StakeholderService:
         if client is None:
             return False
         return getattr(client, "name", "null") != "null"
+
+
+    def _synthesize_sql(self, llm: Any, question: str, query_nodes: List[Any], defn_nodes: List[Any]) -> Tuple[str, Tuple[int, int]]:
+        prompt = f"Question: {question}\n\nContext:\n"
+        for d in defn_nodes:
+            prompt += f"Definition - {d.title}: {d.summary}\n"
+        for q in query_nodes:
+            prompt += f"Example Query - {q.title}:\n{q.payload.get('sql', '')}\n"
+        dialect = getattr(self, "settings", None) and self.settings.source_dialect or "athena"
+        sys_prompt = (
+            f"You are an expert SQL analyst. Write a highly accurate SQL query in {dialect.upper()} dialect to answer the user's question, "
+            "using the provided Definitions and Example Queries as context. "
+            "Return ONLY the SQL query in a ```sql block. If the context is completely insufficient, output NOTHING."
+        )
+        
+        try:
+            res = llm.generate(prompt=prompt, system_prompt=sys_prompt, temperature=0.0)
+            text = (res.text or "").strip() if res and hasattr(res, "text") else ""
+            
+            sql = ""
+            if "```sql" in text:
+                sql = text.split("```sql")[1].split("```")[0].strip()
+            elif "```" in text:
+                sql = text.split("```")[1].strip()
+            else:
+                sql = text.strip()
+                
+            return sql, (getattr(res, "tokens_in", 0), getattr(res, "tokens_out", 0))
+        except Exception as e:
+            return "", (0, 0)
 
     def _synthesize(self, llm: Any, question: str, category: str, data: Optional[Dict[str, Any]] = None) -> Tuple[str, Tuple[int, int], Optional[Dict[str, Any]]]:
         try:

@@ -44,11 +44,11 @@ class BrainVectorStore:
         """Return ordered list of node_ids that semantically match the query."""
         where = {}
         if metadata_filters:
-            # Simple equality filters. For more complex, Chroma requires "$and" logic
-            # but standard dict equality works for ANDing multiple basic fields.
-            for k, v in metadata_filters.items():
-                if v is not None:
-                    where[k] = v
+            valid_filters = [{k: v} for k, v in metadata_filters.items() if v is not None]
+            if len(valid_filters) == 1:
+                where = valid_filters[0]
+            elif len(valid_filters) > 1:
+                where = {"$and": valid_filters}
 
         kwargs = {
             "query_texts": [query],

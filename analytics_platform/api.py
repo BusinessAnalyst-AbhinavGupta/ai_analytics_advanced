@@ -267,6 +267,7 @@ class AppContext:
     junior_worker: Optional[Any] = None
     junior: Optional[Any] = None
     senior: Optional[Any] = None
+    vector_store: Optional[Any] = None
 
 
 def make_context(settings: Optional[Settings] = None,
@@ -279,7 +280,10 @@ def make_context(settings: Optional[Settings] = None,
     try:
         from .brain.vector_store import BrainVectorStore
         vector_store = BrainVectorStore(settings.resolve_vector_path())
-    except Exception:
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"Failed to load vector store: {e}")
         vector_store = None
 
     pipeline = Pipeline(store, settings=settings, tenant_service=tenants,
@@ -287,11 +291,13 @@ def make_context(settings: Optional[Settings] = None,
                         brain_factory=lambda s, t: CompanyBrain(s, t, vector_store=vector_store))
     onboarding = OnboardingService(store, tenants=tenants, pipeline=pipeline,
                                    observability=obs)
-    stakeholder = StakeholderService(store, tenants=tenants, executor=executor,
+    stakeholder = StakeholderService(store, tenants=tenants, 
+                                     executor=_api_junior_executor(settings, executor),
                                      observability=obs,
                                      settings=settings,
                                      cost_per_1k_input=settings.cost_per_1k_input,
-                                     cost_per_1k_output=settings.cost_per_1k_output)
+                                     cost_per_1k_output=settings.cost_per_1k_output,
+                                     vector_store=vector_store)
     research = ResearchService(store, observability=obs)
     auth = AuthGate(settings)
     billing = BillingService(store, settings=settings, observability=obs)
@@ -309,7 +315,8 @@ def make_context(settings: Optional[Settings] = None,
                       onboarding=onboarding, stakeholder=stakeholder,
                       research=research, auth=auth, billing=billing,
                       retention=retention, scheduler=scheduler,
-                      junior_worker=junior_worker, junior=junior, senior=senior)
+                      junior_worker=junior_worker, junior=junior, senior=senior,
+                      vector_store=vector_store)
 
 
 def _make_junior_worker(settings: Settings, store: Store, junior: Any,
@@ -347,7 +354,8 @@ def ensure_services(ctx: AppContext) -> AppContext:
             ctx.store, tenants=ctx.tenants, executor=ctx.executor,
             observability=ctx.observability, settings=ctx.settings,
             cost_per_1k_input=ctx.settings.cost_per_1k_input,
-            cost_per_1k_output=ctx.settings.cost_per_1k_output)
+            cost_per_1k_output=ctx.settings.cost_per_1k_output,
+            vector_store=ctx.vector_store)
     if ctx.research is None:
         ctx.research = ResearchService(ctx.store, observability=ctx.observability)
     if ctx.auth is None:
@@ -844,7 +852,7 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
     # -- triage (senior-review inbox over the Brain) ----------------------
     def _triage(tenant_id: str) -> TriageService:
         tenant_or_404(tenant_id)
-        return TriageService(ctx.store, ctx.observability)
+        return TriageService(ctx.store, ctx.observability, vector_store=ctx.vector_store)
 
     @app.get("/triage/{tenant_id}/summary")
     def triage_summary(tenant_id: str) -> Dict[str, Any]:
