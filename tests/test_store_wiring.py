@@ -194,5 +194,78 @@ class IsolationFailuresAreLoudTest(unittest.TestCase):
         self.assertIn("SECURITY", "\n".join(captured.output))
 
 
+class _BrokenControl:
+    """A provider whose control store is unreachable; tenant stores are fine."""
+
+    def __init__(self, real):
+        self._real = real
+
+    @property
+    def control(self):
+        raise RuntimeError("control store unavailable")
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+class ControlStoreFailuresAreLoggedTest(unittest.TestCase):
+    """The plan's rule: "every `except` this plan touches logs at WARNING or
+    higher". Five handlers rewritten by this branch fell back silently, and each
+    fallback quietly disables a cap."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.stores = TenantStoreProvider(
+            control_db_path=os.path.join(self._tmp.name, "control.db"),
+            tenants_root=os.path.join(self._tmp.name, "tenants"))
+        self.stores.control.execute(
+            "INSERT OR REPLACE INTO tenants (id,name) VALUES (?,?)",
+            ("acme", "Acme"))
+        self.broken = _BrokenControl(self.stores)
+
+    def tearDown(self):
+        self.stores.close_all()
+        self._tmp.cleanup()
+
+    def _junior(self):
+        from analytics_platform.junior import JuniorEngine
+        engine = JuniorEngine(self.stores)
+        engine.stores = self.broken
+        return engine
+
+    def _worker(self):
+        from analytics_platform.junior_worker import JuniorWorker
+        worker = JuniorWorker(self.stores, junior=None, tenant_id="acme")
+        worker.stores = self.broken
+        return worker
+
+    def test_llm_budget_ok_logs_when_it_fails_open(self):
+        """Returning True on any error silently disables the daily spend cap."""
+        engine = self._junior()
+        with self.assertLogs("analytics_platform.junior", level="WARNING") as cap:
+            self.assertTrue(engine._llm_budget_ok("acme"))
+        self.assertIn("cap", "\n".join(cap.output))
+
+    def test_llm_spend_logs_when_it_cannot_record(self):
+        engine = self._junior()
+        with self.assertLogs("analytics_platform.junior", level="WARNING"):
+            engine._llm_spend("acme")
+
+    def test_runs_today_logs_when_it_falls_back_to_zero(self):
+        worker = self._worker()
+        with self.assertLogs("analytics_platform.junior_worker", level="WARNING"):
+            self.assertEqual(worker._runs_today(0.0), 0)
+
+    def test_last_ran_ts_logs_when_it_falls_back_to_never(self):
+        worker = self._worker()
+        with self.assertLogs("analytics_platform.junior_worker", level="WARNING"):
+            self.assertIsNone(worker._last_ran_ts())
+
+    def test_record_ran_logs_when_it_cannot_persist(self):
+        worker = self._worker()
+        with self.assertLogs("analytics_platform.junior_worker", level="WARNING"):
+            worker._record_ran(0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

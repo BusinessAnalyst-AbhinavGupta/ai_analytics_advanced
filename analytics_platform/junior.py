@@ -16,6 +16,7 @@ real data source.
 """
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from typing import Any, Dict, List, Optional
@@ -29,6 +30,8 @@ from .llm.client import make_role_client
 from .observability import Observability
 from .stores import TenantStoreProvider
 from .tenancy import TenantService
+
+logger = logging.getLogger(__name__)
 
 # Deterministic hypothesis templates (scaled by junior depth; always additive).
 _HYP_EXPLAIN = "'{0}' moved this period — what business driver explains it?"
@@ -93,6 +96,13 @@ class JuniorEngine:
             used = int(float(row["value"])) if row and row["value"] else 0
             return used < self.llm_daily_cap
         except Exception:  # noqa: BLE001 - best-effort
+            # Fails OPEN: a control-store read failure here silently disables the
+            # daily LLM spending cap for this tenant, so it must never pass
+            # unnoticed — the next thing that happens is real money being spent.
+            logger.warning(
+                "could not read the LLM daily budget for tenant %r from the "
+                "control store; allowing the call and leaving the %d/day cap "
+                "unenforced for it", tenant_id, self.llm_daily_cap, exc_info=True)
             return True
 
     def _llm_spend(self, tenant_id: str) -> None:
@@ -108,7 +118,12 @@ class JuniorEngine:
                 (key, str(used + 1),
                  time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())))
         except Exception:  # noqa: BLE001 - best-effort
-            pass
+            # An unrecorded spend is an under-counted budget: the cap reads low
+            # for the rest of the day and lets extra LLM calls through.
+            logger.warning(
+                "could not record an LLM spend for tenant %r in the control "
+                "store; today's %d/day cap is now under-counted",
+                tenant_id, self.llm_daily_cap, exc_info=True)
 
     def brain(self, tenant_id: str) -> CompanyBrain:
         return CompanyBrain(self.stores.for_tenant(tenant_id), tenant_id)

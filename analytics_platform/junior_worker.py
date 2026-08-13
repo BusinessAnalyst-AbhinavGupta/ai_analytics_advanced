@@ -125,7 +125,13 @@ class JuniorWorker:
             if row and row["value"]:
                 return int(float(row["value"]))
         except Exception:  # noqa: BLE001 - best-effort
-            pass
+            # Falls back to 0, which reads as "nothing has run today" and so
+            # re-opens the daily cap for this tenant.
+            logger.warning(
+                "could not read today's junior run count for tenant %r from the "
+                "control store; treating it as 0, which leaves the %d/day cap "
+                "unenforced for this tick", self.tenant_id, self.daily_cap,
+                exc_info=True)
         return 0
 
     def _last_ran_ts(self) -> Optional[float]:
@@ -134,8 +140,14 @@ class JuniorWorker:
                 "SELECT value FROM scheduler_state WHERE key=?", (self._state_key(),))
             if row and row["value"]:
                 return float(row["value"])
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001 - best-effort
+            # Falls back to None, which _mins_since reads as "never ran", so the
+            # minimum-interval throttle stops applying.
+            logger.warning(
+                "could not read the last junior run timestamp for tenant %r from "
+                "the control store; treating it as never-run, which leaves the "
+                "%d-minute interval throttle unenforced for this tick",
+                self.tenant_id, self.min_interval_minutes, exc_info=True)
         return None
 
     def _record_ran(self, now: float) -> None:
@@ -155,9 +167,15 @@ class JuniorWorker:
                 "updated_at=excluded.updated_at",
                 (dkey, str(self._runs_today(now) + 1),
                  time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())))
-        except Exception:
-            pass
-        # -- pipeline -------------------------------------------------------- #
+        except Exception:  # noqa: BLE001 - best-effort
+            # The run happened but was not booked against the caps: both the
+            # 1/hour interval and the N/day count now under-report it.
+            logger.warning(
+                "could not record a junior run for tenant %r in the control "
+                "store; this run is not booked against the interval or daily "
+                "caps", self.tenant_id, exc_info=True)
+
+    # -- pipeline -------------------------------------------------------- #
     def pick_problem_statement(self) -> Dict[str, Any]:
         """Pick the next problem statement across the two-tier taxonomy (CP-15).
 
