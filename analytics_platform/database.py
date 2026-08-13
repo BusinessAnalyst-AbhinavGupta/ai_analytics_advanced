@@ -7,12 +7,14 @@ later phase this can be swapped for PostgreSQL without changing call sites.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 import threading
 from typing import Any, Dict, List, Optional
 
 _LOCK = threading.RLock()
+_LOG = logging.getLogger(__name__)
 
 CONTROL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS tenants (
@@ -182,7 +184,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
                 conn.execute("ALTER TABLE stakeholder_answers ADD COLUMN queries_run TEXT")
         conn.commit()
     except Exception:  # noqa: BLE001 - migration must never block startup
-        pass
+        _LOG.warning("Database migration failed; continuing startup", exc_info=True)
 
 
 def dump_json(obj: Any) -> str:
