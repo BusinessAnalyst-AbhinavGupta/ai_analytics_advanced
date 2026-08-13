@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 import unittest
 
@@ -106,13 +107,16 @@ class ProviderTest(unittest.TestCase):
         self.assertEqual(b.query_all("SELECT id FROM knowledge_nodes"), [])
 
     def test_a_tenant_database_cannot_be_opened_by_another_tenant(self):
+        """The real-world mistake this guards: a bad restore, or a mis-set
+        ANALYTICS_DATA_DIR, that puts one company's file where another's belongs."""
         self.provider.for_tenant("acme")
         self.provider.close_all()
-        # Point globex at acme's file, as a mis-set path would.
+        globex_path = self.provider.tenant_db_path("globex")
+        os.makedirs(os.path.dirname(globex_path), exist_ok=True)
+        shutil.copy(self.provider.tenant_db_path("acme"), globex_path)
         rogue = TenantStoreProvider(
             control_db_path=os.path.join(self.root, "control.db"),
             tenants_root=os.path.join(self.root, "tenants"))
-        rogue._path_override = self.provider.tenant_db_path("acme")
         with self.assertRaises(TenantIsolationError):
             rogue.for_tenant("globex")
         rogue.close_all()

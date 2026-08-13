@@ -27,8 +27,10 @@ logger = logging.getLogger(__name__)
 TENANT_DB_FILENAME = "tenant.db"
 
 # A tenant id names a directory, so it is restricted to characters that cannot
-# traverse or escape. Real ids look like `tnt_d23cd823d4c6` or `DTDL`.
-_SAFE_TENANT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+# traverse or escape. Real ids look like `tnt_d23cd823d4c6` or `DTDL`. `\Z` (not
+# `$`) anchors the end so a trailing newline can't sneak an id past this check —
+# `$` matches before a final "\n" in Python, `\Z` does not.
+_SAFE_TENANT_ID = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 
 
 class TenantIsolationError(Exception):
@@ -48,9 +50,6 @@ class TenantStoreProvider:
         self.tenants_root = os.path.abspath(tenants_root)
         self._control: Optional[Store] = None
         self._tenants: Dict[str, Store] = {}
-        # Test seam: forces the next for_tenant() to open this exact file, which
-        # is how the isolation guard is exercised.
-        self._path_override: Optional[str] = None
 
     # -- control plane -------------------------------------------------------
     @property
@@ -71,33 +70,41 @@ class TenantStoreProvider:
 
     def for_tenant(self, tenant_id: str) -> Store:
         """This company's database. Opens and binds it on first use."""
-        validate_tenant_id(tenant_id)
         cached = self._tenants.get(tenant_id)
         if cached is not None:
             return cached
 
-        path = self._path_override or self.tenant_db_path(tenant_id)
-        self._path_override = None
+        path = self.tenant_db_path(tenant_id)
         os.makedirs(os.path.dirname(path), exist_ok=True)
 
         store = Store(path, schema=TENANT_SCHEMA)
-        self._bind_owner(store, tenant_id, path)
+        try:
+            self._bind_owner(store, tenant_id, path)
+        except Exception:
+            # Any failure here — the isolation mismatch below, or anything else
+            # (a corrupt file, a race) — must not leave an open, uncached handle.
+            store.close()
+            raise
         self._tenants[tenant_id] = store
         logger.debug("tenant store for %s opened at %s", tenant_id, path)
         return store
 
     @staticmethod
     def _bind_owner(store: Store, tenant_id: str, path: str) -> None:
-        """Record the owner, or refuse if this file belongs to someone else."""
+        """Record the owner, or refuse if this file belongs to someone else.
+
+        `INSERT OR IGNORE` then re-read makes the bind race-safe: if two threads
+        open the same fresh file concurrently, exactly one INSERT wins (the
+        `db_owner` PRIMARY KEY enforces that), and both threads then read back
+        whichever tenant_id actually landed — so a losing thread sees a real
+        mismatch and gets TenantIsolationError, never a raw IntegrityError.
+        """
+        store.execute(
+            "INSERT OR IGNORE INTO db_owner (singleton, tenant_id, bound_at) "
+            "VALUES (1,?,?)", (tenant_id, now_iso()))
         row = store.query_one("SELECT tenant_id FROM db_owner WHERE singleton = 1")
-        if row is None:
-            store.execute(
-                "INSERT INTO db_owner (singleton, tenant_id, bound_at) VALUES (1,?,?)",
-                (tenant_id, now_iso()))
-            return
         owner = row["tenant_id"]
         if owner != tenant_id:
-            store.close()
             raise TenantIsolationError(
                 f"{path} belongs to tenant {owner!r}, refusing to open it as "
                 f"{tenant_id!r}. Each tenant is a separate company and must have "
