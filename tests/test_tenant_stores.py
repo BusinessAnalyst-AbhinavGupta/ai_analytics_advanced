@@ -279,6 +279,16 @@ class AdoptDbTest(unittest.TestCase):
         rows = self.stores.for_tenant("acme").query_all("SELECT id FROM knowledge_nodes")
         self.assertEqual(len(rows), 1)
 
+    def test_a_missing_source_is_refused(self):
+        """A typo'd --source must not silently create an empty database and
+        report success on the wrong input."""
+        from analytics_platform.cli import adopt_db
+        missing = os.path.join(self._tmp.name, "typo", "platform.db")
+        with self.assertRaises(ValueError) as cm:
+            adopt_db(missing, "acme", self.stores)
+        self.assertIn("does not exist", str(cm.exception))
+        self.assertFalse(os.path.exists(missing))
+
     def test_the_source_file_is_not_modified(self):
         """A migration tool must never write to the file it migrates from."""
         from analytics_platform.cli import adopt_db

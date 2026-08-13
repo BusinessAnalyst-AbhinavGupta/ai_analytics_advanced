@@ -302,6 +302,14 @@ def adopt_db(source_path: str, tenant_id: str, stores) -> int:
 
     The source is opened read-only; only the target stores are written to.
     """
+    # Before this check a typo'd --source was the worst possible outcome for a
+    # once-in-production command: silent success on the wrong input. The old code
+    # went straight to Store(), which CREATES the file if it is missing, then
+    # found no tenants, copied nothing, and printed "adopted 0 knowledge node(s)"
+    # with exit code 0.
+    if not os.path.exists(source_path):
+        raise ValueError(f"source database does not exist: {source_path}")
+
     pre_existing = {p: os.path.exists(p) for p in _sidecars(source_path)}
     legacy = _open_source_readonly(source_path)
     try:
