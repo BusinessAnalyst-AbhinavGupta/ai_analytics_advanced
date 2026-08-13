@@ -279,6 +279,49 @@ class AdoptDbTest(unittest.TestCase):
         rows = self.stores.for_tenant("acme").query_all("SELECT id FROM knowledge_nodes")
         self.assertEqual(len(rows), 1)
 
+    def _insert_orphan_node(self, node_id: str, tenant_value):
+        from analytics_platform.database import SCHEMA_LEGACY_ALL, Store
+        legacy = Store(self.legacy, schema=SCHEMA_LEGACY_ALL)
+        legacy.execute(
+            "INSERT INTO knowledge_nodes (id,tenant_id,kind,status,version,title,"
+            "summary,payload,confidence,evidence_ref,source_ref,created_at,"
+            "updated_at,created_by,reviewed_by,review_notes,supersedes) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (node_id, tenant_value, "METRIC", "APPROVED", 1, "Orphan", "", "{}",
+             "{}", "", "", "2026-01-01", "2026-01-01", "s", "", "", ""))
+        legacy.close()
+
+    def test_a_source_with_null_tenant_id_rows_is_refused(self):
+        """Orphan rows are dropped by the WHERE tenant_id = ? copy. The operator
+        has to learn that before the migration, not after."""
+        from analytics_platform.cli import adopt_db
+        self._insert_orphan_node("kn_null", None)
+        with self.assertRaises(ValueError) as cm:
+            adopt_db(self.legacy, "acme", self.stores)
+        msg = str(cm.exception)
+        self.assertIn("NULL or empty tenant_id", msg)
+        self.assertIn("knowledge_nodes=1", msg)
+
+    def test_a_source_with_empty_tenant_id_rows_is_refused(self):
+        from analytics_platform.cli import adopt_db
+        self._insert_orphan_node("kn_blank", "")
+        with self.assertRaises(ValueError) as cm:
+            adopt_db(self.legacy, "acme", self.stores)
+        self.assertIn("knowledge_nodes=1", str(cm.exception))
+
+    def test_orphan_rows_can_be_waived_explicitly(self):
+        from analytics_platform.cli import adopt_db
+        self._insert_orphan_node("kn_null", None)
+        self.assertEqual(
+            adopt_db(self.legacy, "acme", self.stores, allow_orphan_rows=True), 1)
+        rows = self.stores.for_tenant("acme").query_all(
+            "SELECT id FROM knowledge_nodes")
+        self.assertEqual([r["id"] for r in rows], ["kn_1"])
+
+    def test_the_orphan_check_does_not_fire_on_a_clean_source(self):
+        from analytics_platform.cli import adopt_db
+        self.assertEqual(adopt_db(self.legacy, "acme", self.stores), 1)
+
     def test_a_missing_source_is_refused(self):
         """A typo'd --source must not silently create an empty database and
         report success on the wrong input."""

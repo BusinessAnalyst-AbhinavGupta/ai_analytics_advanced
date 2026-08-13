@@ -294,11 +294,17 @@ def _tidy_source_sidecars(source_path: str, pre_existing: Dict[str, bool]) -> No
                            "on the source: %s", path, exc)
 
 
-def adopt_db(source_path: str, tenant_id: str, stores) -> int:
+def adopt_db(source_path: str, tenant_id: str, stores,
+             allow_orphan_rows: bool = False) -> int:
     """Move a legacy single-file database into the per-tenant layout.
 
     Refuses a source holding more than one tenant: splitting co-mingled companies
-    is a data-ownership decision, not something a CLI should guess at.
+    is a data-ownership decision, not something a CLI should guess at. Refuses,
+    for the same reason, a source holding rows with a NULL or empty `tenant_id`:
+    the copy is driven by `WHERE tenant_id = ?`, so those rows would be dropped
+    on the floor without a word. Pass `allow_orphan_rows=True` (`--allow-orphan-rows`)
+    to proceed anyway, having decided the orphans are expendable — the count and
+    the tables are reported either way.
 
     The source is opened read-only; only the target stores are written to.
     """
@@ -314,20 +320,46 @@ def adopt_db(source_path: str, tenant_id: str, stores) -> int:
     legacy = _open_source_readonly(source_path)
     try:
         found = set()
+        orphans: Dict[str, int] = {}
         for table in TENANT_TABLES:
             try:
+                # GROUP BY gives the distinct ids and their row counts in one
+                # pass, and SQLite groups NULL as its own bucket — so the same
+                # scan that powers the multi-tenant refusal also sees the rows
+                # the WHERE tenant_id = ? copy below would silently leave behind.
                 rows = legacy.execute(
-                    f"SELECT DISTINCT tenant_id FROM {table}").fetchall()
+                    f"SELECT tenant_id, COUNT(*) AS n FROM {table} "
+                    f"GROUP BY tenant_id").fetchall()
             except Exception as exc:
                 logger.warning("adopt_db: could not scan %s for tenant_id: %s", table, exc, exc_info=True)
                 continue
-            found.update(r["tenant_id"] for r in rows if r["tenant_id"])
+            for row in rows:
+                if row["tenant_id"]:
+                    found.add(row["tenant_id"])
+                else:
+                    orphans[table] = orphans.get(table, 0) + row["n"]
         extra = found - {tenant_id}
         if extra:
             raise ValueError(
                 f"{source_path} holds data for {sorted(found)}, not just "
                 f"{tenant_id!r}. Each tenant is a separate company; split this "
                 f"file by hand before adopting it.")
+
+        if orphans:
+            total = sum(orphans.values())
+            breakdown = ", ".join(f"{t}={n}" for t, n in sorted(orphans.items()))
+            detail = (f"{source_path} holds {total} row(s) with a NULL or empty "
+                      f"tenant_id ({breakdown}). The copy is driven by "
+                      f"WHERE tenant_id = ?, so these rows would not be carried "
+                      f"over.")
+            if not allow_orphan_rows:
+                raise ValueError(
+                    detail + " Assign them an owner in the source, or re-run "
+                    "with --allow-orphan-rows to adopt without them.")
+            logger.warning("adopt_db: %s Proceeding without them "
+                           "(--allow-orphan-rows).", detail)
+            print(f"WARNING: {detail} Proceeding without them "
+                  f"(--allow-orphan-rows).")
 
         target = stores.for_tenant(tenant_id)
         moved = 0
@@ -377,7 +409,8 @@ def _cmd_adopt_db(args: argparse.Namespace) -> int:
         control_db_path=settings.resolve_control_db_path(),
         tenants_root=settings.resolve_tenants_root())
     try:
-        moved = adopt_db(args.source, args.tenant, stores)
+        moved = adopt_db(args.source, args.tenant, stores,
+                         allow_orphan_rows=getattr(args, "allow_orphan_rows", False))
         print(f"adopted {moved} knowledge node(s) into "
               f"{stores.tenant_db_path(args.tenant)}")
     finally:
@@ -436,6 +469,9 @@ def build_parser() -> argparse.ArgumentParser:
                              help="move a legacy single-tenant database into tenants/")
     p_adopt.add_argument("--source", required=True)
     p_adopt.add_argument("--tenant", required=True)
+    p_adopt.add_argument("--allow-orphan-rows", action="store_true",
+                         help="adopt even though the source holds rows with a "
+                              "NULL/empty tenant_id; those rows are NOT copied")
     p_adopt.set_defaults(func=_cmd_adopt_db)
     return p
 
