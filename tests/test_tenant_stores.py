@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import tempfile
+import threading
 import unittest
 
 from analytics_platform.database import CONTROL_SCHEMA, TENANT_SCHEMA, Store
@@ -194,6 +195,81 @@ class TenantIdSafetyTest(unittest.TestCase):
 
     def test_a_normal_id_is_accepted(self):
         self.assertIsNotNone(self.provider.for_tenant("tnt_d23cd823d4c6"))
+
+
+class ConcurrentForTenantTest(unittest.TestCase):
+    """`for_tenant` is reached from FastAPI's sync threadpool, the scheduler
+    thread and the junior worker thread. An unguarded check-then-insert lets two
+    threads both open a Store for one tenant; the loser is overwritten in the
+    cache dict, and its connection is then unreachable from close_all()."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.provider = TenantStoreProvider(
+            control_db_path=os.path.join(self._tmp.name, "control.db"),
+            tenants_root=os.path.join(self._tmp.name, "tenants"))
+
+    def tearDown(self):
+        self.provider.close_all()
+        self._tmp.cleanup()
+
+    def test_concurrent_callers_all_get_the_same_store(self):
+        start = threading.Barrier(8)
+        results = []
+        errors = []
+
+        def worker():
+            try:
+                start.wait(timeout=10)
+                results.append(self.provider.for_tenant("acme"))
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=15)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(len(results), 8)
+        self.assertEqual(len({id(s) for s in results}), 1,
+                         "concurrent for_tenant calls opened more than one Store")
+
+    def test_concurrent_callers_leave_exactly_one_cached_store(self):
+        start = threading.Barrier(8)
+
+        def worker():
+            start.wait(timeout=10)
+            self.provider.for_tenant("acme")
+
+        threads = [threading.Thread(target=worker) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=15)
+
+        # Every opened connection must still be reachable from the cache, or
+        # close_all() cannot close it.
+        self.assertEqual(list(self.provider._tenants), ["acme"])
+
+    def test_distinct_tenants_opened_concurrently_stay_distinct(self):
+        ids = [f"tnt_{i:012x}" for i in range(8)]
+        start = threading.Barrier(len(ids))
+        opened = {}
+
+        def worker(tid):
+            start.wait(timeout=10)
+            opened[tid] = self.provider.for_tenant(tid).db_path
+
+        threads = [threading.Thread(target=worker, args=(t,)) for t in ids]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=15)
+
+        self.assertEqual(len(set(opened.values())), len(ids))
+        self.assertEqual(sorted(self.provider._tenants), sorted(ids))
 
 
 class SettingsPathTest(unittest.TestCase):

@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import threading
 from typing import Dict, List, Optional
 
 from .database import CONTROL_SCHEMA, TENANT_SCHEMA, Store
@@ -50,14 +51,22 @@ class TenantStoreProvider:
         self.tenants_root = os.path.abspath(tenants_root)
         self._control: Optional[Store] = None
         self._tenants: Dict[str, Store] = {}
+        # Guards the check-then-insert on `_tenants` and `_control`. Reentrant,
+        # matching `database._LOCK`'s convention — `for_tenant` calls `Store`
+        # methods while holding it, and those take their own `_LOCK`, so a
+        # plain Lock would be a footgun for anyone extending this class.
+        self._lock = threading.RLock()
 
     # -- control plane -------------------------------------------------------
     @property
     def control(self) -> Store:
-        if self._control is None:
-            self._control = Store(self.control_db_path, schema=CONTROL_SCHEMA)
-            logger.info("control store opened at %s", self.control_db_path)
-        return self._control
+        if self._control is not None:
+            return self._control
+        with self._lock:
+            if self._control is None:
+                self._control = Store(self.control_db_path, schema=CONTROL_SCHEMA)
+                logger.info("control store opened at %s", self.control_db_path)
+            return self._control
 
     # -- tenant plane --------------------------------------------------------
     def tenant_db_path(self, tenant_id: str) -> str:
@@ -69,25 +78,40 @@ class TenantStoreProvider:
         return path
 
     def for_tenant(self, tenant_id: str) -> Store:
-        """This company's database. Opens and binds it on first use."""
+        """This company's database. Opens and binds it on first use.
+
+        Double-checked locking: the cache-hit path (every call after the first
+        for a given tenant) stays lock-free, and only the open-and-bind path
+        serialises. Without the lock, two threads — FastAPI's sync-endpoint
+        threadpool, the scheduler thread, the junior worker thread — could both
+        miss the cache for the same tenant, both construct a `Store`, and one
+        would be overwritten in the dict, orphaning an open SQLite connection
+        that `close_all()` can no longer reach.
+        """
         cached = self._tenants.get(tenant_id)
         if cached is not None:
             return cached
 
-        path = self.tenant_db_path(tenant_id)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with self._lock:
+            cached = self._tenants.get(tenant_id)
+            if cached is not None:
+                return cached
 
-        store = Store(path, schema=TENANT_SCHEMA)
-        try:
-            self._bind_owner(store, tenant_id, path)
-        except Exception:
-            # Any failure here — the isolation mismatch below, or anything else
-            # (a corrupt file, a race) — must not leave an open, uncached handle.
-            store.close()
-            raise
-        self._tenants[tenant_id] = store
-        logger.debug("tenant store for %s opened at %s", tenant_id, path)
-        return store
+            path = self.tenant_db_path(tenant_id)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+
+            store = Store(path, schema=TENANT_SCHEMA)
+            try:
+                self._bind_owner(store, tenant_id, path)
+            except Exception:
+                # Any failure here — the isolation mismatch below, or anything
+                # else (a corrupt file, a race) — must not leave an open,
+                # uncached handle.
+                store.close()
+                raise
+            self._tenants[tenant_id] = store
+            logger.debug("tenant store for %s opened at %s", tenant_id, path)
+            return store
 
     @staticmethod
     def _bind_owner(store: Store, tenant_id: str, path: str) -> None:
@@ -125,23 +149,27 @@ class TenantStoreProvider:
         """Close and forget this tenant's cached Store, e.g. right before its
         database file is removed (full tenant deletion). A later `for_tenant`
         call reopens fresh, from whatever is left on disk."""
-        store = self._tenants.pop(tenant_id, None)
-        if store is not None:
-            try:
-                store.close()
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("closing store for %s failed: %s", tenant_id, exc)
+        with self._lock:
+            store = self._tenants.pop(tenant_id, None)
+            if store is not None:
+                try:
+                    store.close()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("closing store for %s failed: %s", tenant_id, exc)
 
     def close_all(self) -> None:
-        for tenant_id, store in list(self._tenants.items()):
-            try:
-                store.close()
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("closing store for %s failed: %s", tenant_id, exc)
-        self._tenants.clear()
-        if self._control is not None:
-            try:
-                self._control.close()
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("closing control store failed: %s", exc)
-            self._control = None
+        # Under the same lock as `for_tenant`, so a store opened concurrently
+        # cannot be dropped from the cache without first being closed.
+        with self._lock:
+            for tenant_id, store in list(self._tenants.items()):
+                try:
+                    store.close()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("closing store for %s failed: %s", tenant_id, exc)
+            self._tenants.clear()
+            if self._control is not None:
+                try:
+                    self._control.close()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("closing control store failed: %s", exc)
+                self._control = None
