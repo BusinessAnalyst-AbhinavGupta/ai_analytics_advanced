@@ -327,7 +327,10 @@ class TestMakeContext(unittest.TestCase):
 
         settings = Settings(data_dir="/tmp/test_tenant")
 
-        with patch("analytics_platform.api.Store"), \
+        # Patch the Store the *provider* constructs (analytics_platform.stores),
+        # not api.Store — otherwise make_context really opens control.db on disk
+        # and scatters it outside the test's control.
+        with patch("analytics_platform.stores.Store"), \
              patch("analytics_platform.brain.vector_store.BrainVectorStore") as mock_vector_store:
             ctx = make_context(settings=settings)
             mock_vector_store.assert_called_once_with("/tmp/test_tenant/.chroma_db")
@@ -338,7 +341,9 @@ class TestMakeContext(unittest.TestCase):
 
         settings = Settings(data_dir="")
 
-        with patch("analytics_platform.api.Store"), \
+        # As above: patching analytics_platform.stores.Store keeps the default
+        # (data_dir="") case from writing data/control.db into the repo tree.
+        with patch("analytics_platform.stores.Store"), \
              patch("analytics_platform.brain.vector_store.BrainVectorStore") as mock_vector_store:
             ctx = make_context(settings=settings)
             mock_vector_store.assert_called_once_with(".chroma_db")
