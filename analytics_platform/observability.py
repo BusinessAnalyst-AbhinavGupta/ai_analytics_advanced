@@ -7,6 +7,7 @@ credentials, cookies, or sensitive rows.
 """
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from contextlib import contextmanager
@@ -14,6 +15,8 @@ from typing import Any, Dict, Iterator, List, Optional
 
 from .database import dump_json, load_json
 from .stores import TenantStoreProvider
+
+logger = logging.getLogger(__name__)
 
 
 def new_trace() -> str:
@@ -72,8 +75,9 @@ class Observability:
             self.stores.for_tenant(tenant_id).execute(
                 sql, (rec["ts"], tenant_id, trace_id, stage, actor, resource,
                      status, duration_ms, bytes_in, tokens_in, tokens_out, dump_json(rec["meta"])))
-        except Exception:
-            pass  # observability must never break the pipeline
+        except Exception as e:
+            logger.warning(f"Failed to persist telemetry event (stage={stage!r}, tenant_id={tenant_id!r}): {e}")
+            # observability must never break the pipeline
 
         if self.on_event:
             try:
