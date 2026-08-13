@@ -262,9 +262,36 @@ export default function Triage() {
                                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
                                     <div>
                                       <h4 style={{ color: 'var(--accent-primary)', marginBottom: '0.5rem', fontSize: '0.9rem', textTransform: 'uppercase' }}>Payload</h4>
-                                      <pre style={{ background: '#1e1e1e', padding: '1rem', borderRadius: '4px', overflowX: 'auto', fontSize: '0.85rem', color: '#9cdcfe', margin: 0, whiteSpace: 'pre-wrap' }}>
-                                        <code>{JSON.stringify(row.original.payload, null, 2)?.replace(/\\n/g, '\n')}</code>
-                                      </pre>
+                                      {row.original.kind === 'DEFINITION' && row.original.payload.column ? (
+                                        <div style={{ background: '#1e1e1e', padding: '1rem', borderRadius: '4px', fontSize: '0.85rem' }}>
+                                          <p style={{ margin: '0 0 0.5rem 0', color: '#ce9178' }}><strong>Column:</strong> {row.original.payload.column}</p>
+                                          <p style={{ margin: '0 0 0.5rem 0', color: '#ce9178' }}><strong>Values:</strong> {JSON.stringify(row.original.payload.values)}</p>
+                                          {row.original.payload.via && (
+                                            <p style={{ margin: '0 0 0.5rem 0', color: '#888' }}><em>Derived from Source ID: {row.original.payload.via}</em></p>
+                                          )}
+                                          {row.original.payload.source_sql && (
+                                            <div style={{ marginTop: '1rem' }}>
+                                              <strong style={{ color: '#888', textTransform: 'uppercase', fontSize: '0.75rem' }}>Provenance SQL</strong>
+                                              <pre style={{ overflowX: 'auto', color: '#9cdcfe', margin: '0.5rem 0 0 0', whiteSpace: 'pre-wrap' }}>
+                                                <code>{row.original.payload.source_sql}</code>
+                                              </pre>
+                                            </div>
+                                          )}
+                                        </div>
+                                      ) : row.original.kind === 'QUERY' && row.original.payload.sql ? (
+                                        <div style={{ background: '#1e1e1e', padding: '1rem', borderRadius: '4px', fontSize: '0.85rem' }}>
+                                          <pre style={{ overflowX: 'auto', color: '#9cdcfe', margin: 0, whiteSpace: 'pre-wrap' }}>
+                                            <code>{row.original.payload.sql}</code>
+                                          </pre>
+                                          {row.original.payload.explanation && (
+                                            <p style={{ margin: '1rem 0 0 0', color: '#ce9178' }}><strong>Explanation:</strong> {row.original.payload.explanation}</p>
+                                          )}
+                                        </div>
+                                      ) : (
+                                        <pre style={{ background: '#1e1e1e', padding: '1rem', borderRadius: '4px', overflowX: 'auto', fontSize: '0.85rem', color: '#9cdcfe', margin: 0, whiteSpace: 'pre-wrap' }}>
+                                          <code>{JSON.stringify(row.original.payload, null, 2)?.replace(/\\n/g, '\n')}</code>
+                                        </pre>
+                                      )}
                                     </div>
                                     <div>
                                       <h4 style={{ color: 'var(--accent-primary)', marginBottom: '0.5rem', fontSize: '0.9rem', textTransform: 'uppercase' }}>Details</h4>
