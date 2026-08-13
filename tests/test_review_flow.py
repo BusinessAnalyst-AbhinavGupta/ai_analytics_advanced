@@ -209,5 +209,37 @@ class TestTwoTierJunior(unittest.TestCase):
         self.assertEqual(worker._pending_review_count(self.tid), 1)
 
 
+class TestRunCycleRefusesWrongTenant(unittest.TestCase):
+    """A worker constructed for tenant A must never write tenant B's data into
+    A's store when called with a mismatched `tenant_id` (cross-tenant leak fix)."""
+
+    def setUp(self):
+        self.ctx = make_ctx(_WAREHOUSE)
+        self.tid_a = self.ctx.tenants.create_tenant("TenantA").id
+        self.tid_b = self.ctx.tenants.create_tenant("TenantB").id
+        for tid in (self.tid_a, self.tid_b):
+            self.ctx.tenants.set_company_profile(tid, {
+                "name": tid,
+                "targets": [{"name": "Grow orders", "category": "growth", "priority": 1}]})
+        self.reviews = tempfile.mkdtemp()
+        # worker is bound to tenant A only
+        self.worker = _worker(self.ctx, self.tid_a, reviews_dir=self.reviews)
+
+    def tearDown(self):
+        self.ctx.close()
+
+    def test_run_cycle_with_mismatched_tenant_id_refuses(self):
+        before = self.ctx.stores.for_tenant(self.tid_b).query_all(
+            "SELECT id FROM analysis_runs")
+        res = self.worker.run_cycle(tenant_id=self.tid_b, force=True)
+        self.assertFalse(res["ran"])
+        self.assertEqual(res["reason"], "wrong_tenant")
+        self.assertEqual(res["tenant_id"], self.tid_b)
+        after = self.ctx.stores.for_tenant(self.tid_b).query_all(
+            "SELECT id FROM analysis_runs")
+        self.assertEqual(len(before), len(after))
+        self.assertEqual(len(after), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -60,8 +60,8 @@ This plan moves that guarantee from the launcher into the code.
 - Produces:
   - `CONTROL_SCHEMA: str` — `tenants`, `scheduler_state`, `api_logs`, `auth_principals`, plus their indexes
   - `TENANT_SCHEMA: str` — the remaining fifteen tables plus a new `db_owner` table, plus their indexes
-  - `Store(db_path: str, schema: str = TENANT_SCHEMA)`
-  - `SCHEMA` remains as `CONTROL_SCHEMA + TENANT_SCHEMA` for backwards compatibility during the refactor; Task 6 removes the alias.
+  - `Store(db_path: str, schema: str = None)` — `schema=None` still means "the full combined schema," exactly today's behaviour. `Store` itself does not default to `TENANT_SCHEMA`: every existing bare `Store(path)` call site in the codebase (nine-plus services, `tests/helpers.py`) still expects the `tenants` table to exist, and none of them are migrated until Task 5. Only `TenantStoreProvider` (Task 2) ever passes `schema=CONTROL_SCHEMA` or `schema=TENANT_SCHEMA` explicitly. This keeps Task 1 a self-contained, fully-green deliverable rather than a change that only becomes correct once Task 5 lands.
+  - `SCHEMA` remains as `CONTROL_SCHEMA + TENANT_SCHEMA`, and is *not* just a transitional compatibility shim — it is the real default every unmigrated caller still runs on until Task 6.
 
   Tasks 2-6 consume `CONTROL_SCHEMA`, `TENANT_SCHEMA` and the new `Store` signature.
 
@@ -74,6 +74,7 @@ Create `tests/test_tenant_stores.py`:
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 import unittest
 
@@ -125,9 +126,12 @@ class SchemaSplitTest(unittest.TestCase):
     def test_the_two_schemas_do_not_overlap(self):
         self.assertEqual(CONTROL_TABLES & TENANT_TABLES, set())
 
-    def test_tenant_schema_is_the_default(self):
+    def test_bare_store_still_gets_the_combined_schema(self):
+        """Every unmigrated caller in the codebase relies on this until Task 5."""
         store = Store(os.path.join(self._tmp.name, "d.db"))
-        self.assertIn("knowledge_nodes", self._tables(store))
+        tables = self._tables(store)
+        self.assertIn("knowledge_nodes", tables)  # tenant-plane table
+        self.assertIn("tenants", tables)          # control-plane table
         store.close()
 
 
@@ -182,13 +186,15 @@ def init_db(conn: sqlite3.Connection, schema: str = None) -> None:
 class Store:
     """Thin wrapper: safe single write + serialization helpers.
 
-    A Store is one SQLite file. Tenant stores hold one company's data and nothing
-    else; the control store holds the cross-tenant registry.
+    A Store is one SQLite file. `schema=None` is the full combined schema — every
+    existing caller in the codebase still relies on this until Task 5 migrates it
+    onto TenantStoreProvider. Only the provider ever passes an explicit
+    CONTROL_SCHEMA or TENANT_SCHEMA.
     """
 
     def __init__(self, db_path: str, schema: str = None):
         self.db_path = db_path
-        self.schema = schema if schema is not None else TENANT_SCHEMA
+        self.schema = schema if schema is not None else SCHEMA
         self.conn = get_conn(db_path)
         init_db(self.conn, self.schema)
 ```
@@ -212,7 +218,7 @@ Expected: 6 passed.
 - [ ] **Step 6: Run the full suite**
 
 Run: `.venv/bin/python -m pytest tests/ -q`
-Expected: unchanged from baseline — `Store(path)` still creates the tenant schema, and nothing yet uses the control schema. Record the baseline first if you have not:
+Expected: unchanged from baseline — a bare `Store(path)` still gets the full combined schema (control + tenant tables together, exactly as before this task), so every existing caller keeps working untouched. Nothing in this task changes what any existing caller sees; it only adds two new constants and two new tables that nothing reads from yet. If the full suite shows new failures, the schema split leaked into `Store`'s default — re-check Step 4 against the corrected default above before touching anything else. Record the baseline first if you have not:
 
 ```bash
 git stash -u && .venv/bin/python -m pytest tests/ -q 2>&1 | tail -5; git stash pop
@@ -297,13 +303,15 @@ class ProviderTest(unittest.TestCase):
         self.assertEqual(b.query_all("SELECT id FROM knowledge_nodes"), [])
 
     def test_a_tenant_database_cannot_be_opened_by_another_tenant(self):
+        """The real-world mistake this guards: a bad restore, or a mis-set
+        ANALYTICS_DATA_DIR, that puts one company's file where another's belongs."""
         self.provider.for_tenant("acme")
         self.provider.close_all()
-        # Point globex at acme's file, as a mis-set path would.
+        shutil.copy(self.provider.tenant_db_path("acme"),
+                    self.provider.tenant_db_path("globex"))
         rogue = TenantStoreProvider(
             control_db_path=os.path.join(self.root, "control.db"),
             tenants_root=os.path.join(self.root, "tenants"))
-        rogue._path_override = self.provider.tenant_db_path("acme")
         with self.assertRaises(TenantIsolationError):
             rogue.for_tenant("globex")
         rogue.close_all()
@@ -406,8 +414,10 @@ logger = logging.getLogger(__name__)
 TENANT_DB_FILENAME = "tenant.db"
 
 # A tenant id names a directory, so it is restricted to characters that cannot
-# traverse or escape. Real ids look like `tnt_d23cd823d4c6` or `DTDL`.
-_SAFE_TENANT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+# traverse or escape. Real ids look like `tnt_d23cd823d4c6` or `DTDL`. `\Z` (not
+# `$`) anchors the end so a trailing newline can't sneak an id past this check —
+# `$` matches before a final "\n" in Python, `\Z` does not.
+_SAFE_TENANT_ID = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 
 
 class TenantIsolationError(Exception):
@@ -427,9 +437,6 @@ class TenantStoreProvider:
         self.tenants_root = os.path.abspath(tenants_root)
         self._control: Optional[Store] = None
         self._tenants: Dict[str, Store] = {}
-        # Test seam: forces the next for_tenant() to open this exact file, which
-        # is how the isolation guard is exercised.
-        self._path_override: Optional[str] = None
 
     # -- control plane -------------------------------------------------------
     @property
@@ -450,33 +457,41 @@ class TenantStoreProvider:
 
     def for_tenant(self, tenant_id: str) -> Store:
         """This company's database. Opens and binds it on first use."""
-        validate_tenant_id(tenant_id)
         cached = self._tenants.get(tenant_id)
         if cached is not None:
             return cached
 
-        path = self._path_override or self.tenant_db_path(tenant_id)
-        self._path_override = None
+        path = self.tenant_db_path(tenant_id)
         os.makedirs(os.path.dirname(path), exist_ok=True)
 
         store = Store(path, schema=TENANT_SCHEMA)
-        self._bind_owner(store, tenant_id, path)
+        try:
+            self._bind_owner(store, tenant_id, path)
+        except Exception:
+            # Any failure here — the isolation mismatch below, or anything else
+            # (a corrupt file, a race) — must not leave an open, uncached handle.
+            store.close()
+            raise
         self._tenants[tenant_id] = store
         logger.debug("tenant store for %s opened at %s", tenant_id, path)
         return store
 
     @staticmethod
     def _bind_owner(store: Store, tenant_id: str, path: str) -> None:
-        """Record the owner, or refuse if this file belongs to someone else."""
+        """Record the owner, or refuse if this file belongs to someone else.
+
+        `INSERT OR IGNORE` then re-read makes the bind race-safe: if two threads
+        open the same fresh file concurrently, exactly one INSERT wins (the
+        `db_owner` PRIMARY KEY enforces that), and both threads then read back
+        whichever tenant_id actually landed — so a losing thread sees a real
+        mismatch and gets TenantIsolationError, never a raw IntegrityError.
+        """
+        store.execute(
+            "INSERT OR IGNORE INTO db_owner (singleton, tenant_id, bound_at) "
+            "VALUES (1,?,?)", (tenant_id, now_iso()))
         row = store.query_one("SELECT tenant_id FROM db_owner WHERE singleton = 1")
-        if row is None:
-            store.execute(
-                "INSERT INTO db_owner (singleton, tenant_id, bound_at) VALUES (1,?,?)",
-                (tenant_id, now_iso()))
-            return
         owner = row["tenant_id"]
         if owner != tenant_id:
-            store.close()
             raise TenantIsolationError(
                 f"{path} belongs to tenant {owner!r}, refusing to open it as "
                 f"{tenant_id!r}. Each tenant is a separate company and must have "
@@ -618,7 +633,7 @@ git commit -m "feat(config): resolve control-plane and tenants-root paths separa
 
 **Interfaces:**
 - Consumes: `TenantStoreProvider` (Task 2).
-- Produces: `TenantService(stores: TenantStoreProvider)` — reads/writes `tenants` via `stores.control`, and per-tenant config via `stores.for_tenant(tenant_id)`. `TenantService.store` is removed; callers use `self.stores`.
+- Produces: `TenantService(stores: TenantStoreProvider)` — reads/writes `tenants` via `stores.control`, and per-tenant config via `stores.for_tenant(tenant_id)`. `TenantService.store` is removed; callers use `self.stores`. This task's own test (below) calls `create(tenant_id, name=...)` and `list()`, which do not exist on `TenantService` yet — add them as new methods alongside the existing `create_tenant(name, ...)` (auto-generated id) and `list_tenants()` (returns `List[Dict]`), sharing an `_insert_tenant`/`_row_to_tenant` helper so the two pairs are not independent implementations. `create` takes a caller-assigned id (useful for tests and any future caller that needs a deterministic id); `list` returns typed `Tenant` objects rather than dicts. Every existing caller of `create_tenant`/`list_tenants` (`onboarding.py`, `api.py`) is untouched — do not rename or remove them.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -694,14 +709,22 @@ Read `analytics_platform/tenancy.py` in full first. Then:
 - Change `__init__(self, store: Store)` to `__init__(self, stores: TenantStoreProvider)`, setting `self.stores = stores`.
 - Every method touching the `tenants` table uses `self.stores.control`.
 - Every method touching `analyst_configs`, `analyst_config_history`, `company_profiles`, `company_profile_history`, `data_sources` uses `self.stores.for_tenant(tenant_id)`.
-- In `create(...)`, call `self.stores.for_tenant(tenant_id)` after inserting the registry row, so the company's database exists from the moment the tenant does.
+- Add `create(tenant_id, name, ...)` and `list()` per the Interfaces note above; keep `create_tenant`/`list_tenants` untouched for existing callers.
 
 Apply the same split to `Observability` (`telemetry` is tenant-scoped, `api_logs` is control) and to `Scheduler` (`scheduler_state` is control).
+
+`Observability.event()` and any other method that can be called with `tenant_id=""` (a platform-level event with no owning company — e.g. the scheduler's own maintenance/log-purge bookkeeping) has nowhere to route a tenant-scoped `telemetry` write: `stores.for_tenant("")` raises `ValueError` before touching disk. Do not let that vanish into the method's existing broad exception handler silently — catch it specifically and `logger.warning(...)` that a platform-level event was dropped, naming the stage/actor, before falling through to whatever the existing swallow-everything behavior was. This is a known, accepted gap for this plan (no control-plane telemetry table exists yet) — the point of this step is only that the drop is loud, not that it stops happening.
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `.venv/bin/python -m pytest tests/test_store_wiring.py -v`
 Expected: 5 passed.
+
+- [ ] **Step 4b: Run the full suite and confirm the expected, bounded set of failures**
+
+Run: `.venv/bin/python -m pytest tests/ -q`
+
+This task deliberately does not migrate every consumer — that is Task 5's job, which is why it exists as a separate task. Expect the suite to regress from 224 passed/1 skipped to **223 passed, 6 failed, 1 skipped** (224 + 5 new tests from this task, minus 6 newly-failing ones), and expect every one of the 6 failures to trace to a file Task 5 is responsible for (`api.py`, `billing.py`, or `retention.py`) still constructing `TenantService`/`Observability`/`Scheduler` with a bare `Store`, or reading `tenants`/`telemetry` off its own flat store independently of those classes. If the failure count differs, or any failure traces to a file *not* in that list, stop — that is a real regression, not the expected midpoint state, and must be fixed before this task is done.
 
 - [ ] **Step 5: Commit**
 
@@ -714,10 +737,12 @@ git commit -m "feat(db): route the tenant registry to the control store"
 
 ### Task 5: Thread the provider through the tenant-scoped services
 
-**Why:** Nine services hold `self.store` and take `tenant_id` per method. Each needs to hold the provider and resolve the right database per call. This is the widest part of the plan, but it is mechanical: the pattern is identical in every file, and `CompanyBrain` itself needs no change because it already takes `(store, tenant_id)` — it simply receives the tenant's own store now.
+**Why:** Eleven services hold `self.store` and take `tenant_id` per method. Each needs to hold the provider and resolve the right database per call. This is the widest part of the plan, but it is mechanical: the pattern is identical in every file, and `CompanyBrain` itself needs no change because it already takes `(store, tenant_id)` — it simply receives the tenant's own store now.
+
+This task also closes the 6 failures Task 4 deliberately left open: `api.py` (`make_context`/`_make_junior_worker` still construct `TenantService`/`Observability`/`Scheduler` with a bare `Store`), `billing.py` (`BillingService` reads `tenants`/`telemetry` off its own flat `self.store`, independent of `Observability` — which now writes `telemetry` per tenant), and `retention.py` (`RetentionService.delete_tenant` deletes from `tenants` and tenant-scoped tables off its own flat `self.store`, never reaching the control database `TenantService` now reads from). `billing.py` and `retention.py` were missed when this task was first scoped — found only once Task 4 actually ran and traced its 6 failures to source; both belong here alongside the other nine.
 
 **Files:**
-- Modify: `analytics_platform/{pipeline,stakeholder,junior,junior_worker,senior,onboarding,research,triage,anomaly}.py`, `analytics_platform/api.py:270-320`, `tests/helpers.py`
+- Modify: `analytics_platform/{pipeline,stakeholder,junior,junior_worker,senior,onboarding,research,triage,anomaly,billing,retention}.py`, `analytics_platform/api.py:270-320`, `tests/helpers.py`
 - Test: `tests/test_store_wiring.py` (append)
 
 **Interfaces:**
@@ -806,6 +831,17 @@ replacing `self.store` with `store` in that method's body. Where a method builds
 ```
 
 `JuniorWorker` is constructed per tenant and holds `self.tenant_id`; give it `self.store = stores.for_tenant(tenant_id)` once in `__init__` rather than resolving per method.
+
+`billing.py` (`BillingService`) and `retention.py` (`RetentionService`) take the same `stores: TenantStoreProvider` constructor change, but their bodies need more than a mechanical `self.store` → `store` swap, because they each currently do one query that spans both planes:
+
+- `BillingService.platform_report` (or equivalent — read the method that lists `SELECT id, name FROM tenants` alongside per-tenant usage) needs `self.stores.control` for the tenant list and `self.stores.for_tenant(tenant_id)` per tenant for `telemetry`/`stakeholder_answers`/`analysis_runs` — it becomes a loop over `self.stores.control`'s tenant list, aggregating a per-tenant query against each one's own store, not a single query against one flat file.
+- `RetentionService.delete_tenant` currently deletes rows from `tenants` plus every tenant-scoped table one at a time against a single flat store. With one file per tenant this simplifies: delete the registry row via `self.stores.control.execute("DELETE FROM tenants WHERE id=?", (tenant_id,))`, then delete the tenant's entire database file (close the cached `Store` first — add `TenantStoreProvider.evict(tenant_id)` to `analytics_platform/stores.py` for this: closes and forgets one cached tenant `Store`, the single-tenant sibling of the close-loop already inside `close_all()` — then `os.remove` on `self.stores.tenant_db_path(tenant_id)` and its `-wal`/`-shm` sidecars) instead of issuing a `DELETE FROM {table}` per table. Confirm `tests/test_governance_retention.py::TestRetention::test_delete_tenant_wipes_all_and_audits` still passes — it is the test that first caught this in Task 4's report; read what it actually asserts before changing the method's return shape.
+
+  **The deletion's own audit record cannot live in the file being deleted.** `audit_log` (`TENANT_SCHEMA`, Task 1) is where `delete_tenant` used to write its "tenant deleted" record — but that table is inside the very file this method now removes, so the record would vanish with the tenant, contradicting this module's own "full tenant deletion leaves an append-only audit record" contract. Add a **separate, distinctly-named** table to `CONTROL_SCHEMA` for this — `tenant_lifecycle_log` (same shape as `audit_log`: `id INTEGER PRIMARY KEY AUTOINCREMENT, ts, tenant_id, actor, role, action, resource, outcome, detail`, plus an index on `tenant_id`). Do not reuse the name `audit_log` for it — a control-plane and a tenant-plane table with the identical name is exactly the kind of ambiguity ("which `audit_log` does this query mean?") a schema split is supposed to remove, and it undoes the file-boundary clarity Task 1 established for a second time in the same plan. `delete_tenant` writes its deletion record into `tenant_lifecycle_log` via `self.stores.control`; the tenant-plane `audit_log` (regular per-tenant activity — approvals, reviews, etc.) is untouched by this change.
+
+  `auth_principals` is control-plane (`CONTROL_SCHEMA`, Task 1), not tenant-scoped — the pre-split version of `delete_tenant` deleted it as if it were tenant-scoped, which stopped being correct the moment Task 1 landed. Keep deleting it (a tenant's auth principals should not survive the tenant), but route that delete through `self.stores.control` explicitly, counted separately from the tenant-file table counts.
+
+  `Observability.event(tenant_id=tenant_id, ...)` must NOT be called with the just-deleted tenant's id after the file is gone — `Observability.event()` routes through `self.stores.for_tenant(tenant_id)`, which creates the file on demand if it's missing, so calling it post-deletion silently resurrects an empty database for the tenant you just removed. Call it with `tenant_id=""` (a platform-level event, matching the pattern `Scheduler`'s own bookkeeping already uses) and carry the deleted tenant's id in `resource=` instead.
 
 Do the files one at a time and run `.venv/bin/python -m pytest tests/ -q` after each, so a break is attributable to one file.
 

@@ -21,6 +21,7 @@ cookies anywhere. Offline-safe and deterministically testable.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from typing import Any, Dict, List, Optional
@@ -35,6 +36,9 @@ from .execution.base import ExecutionContext
 from .markdown import write_analysis_md, write_workpaper_md
 from .observability import Observability, new_trace
 from .stores import TenantStoreProvider
+
+
+logger = logging.getLogger(__name__)
 
 
 def _mins_since(ts: Optional[float], now: float) -> float:
@@ -364,6 +368,18 @@ class JuniorWorker:
         t0 = time.perf_counter()
         now = now if now is not None else self._clock()
         tid = tenant_id or self.tenant_id
+        # Defend the class invariant: this worker's self.store was resolved once,
+        # in __init__, for self.tenant_id only (see the constructor's comment). A
+        # caller passing a different tenant_id here would otherwise have every
+        # subsequent read/write in this method use that OTHER tenant's identity
+        # (tid) while physically hitting THIS worker's store -- a cross-tenant
+        # write. Refuse rather than silently writing to the wrong database.
+        if tid != self.tenant_id:
+            logger.warning(
+                "run_cycle called for tenant %r but this worker is bound to "
+                "tenant %r; refusing rather than writing to the wrong store",
+                tid, self.tenant_id)
+            return {"ran": False, "tenant_id": tid, "reason": "wrong_tenant"}
         # R6 gate: the operator can turn the junior analyst off entirely. When off,
         # the worker never asks/solves, regardless of window/rate.
         try:

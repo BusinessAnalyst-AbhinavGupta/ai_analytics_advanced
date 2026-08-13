@@ -1,6 +1,7 @@
 """P8 — Commercial hardening: retention purge + full tenant deletion (GDPR)."""
 from __future__ import annotations
 
+import os
 import unittest
 
 from analytics_platform.domain import now_iso
@@ -58,6 +59,9 @@ class TestRetention(unittest.TestCase):
         d = self.ctx.retention.delete_tenant(self.tid)
         self.assertIn("knowledge_nodes", d["deleted_tables"])
         self.assertIsNone(self.ctx.tenants.get_tenant(self.tid))
+        # the tenant's database file itself must be gone, not just the registry
+        # row -- confirms `evict()` + the filesystem delete actually ran.
+        self.assertFalse(os.path.exists(self.ctx.stores.tenant_db_path(self.tid)))
         # the tenant's own database is gone by now, so the audit record about
         # its deletion lives on the control plane -- see task-5-report.md.
         audit = self.ctx.stores.control.query_one(

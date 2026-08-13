@@ -808,6 +808,25 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
         if worker is None:
             raise HTTPException(400, "no background junior worker configured")
         tid = tenant_id or worker.tenant_id
+        if tid != worker.tenant_id:
+            # The process-wide singleton `worker` is permanently bound to its own
+            # tenant's store (see JuniorWorker.__init__). Reusing it for a
+            # different tenant here would write that tenant's data into the
+            # singleton's store -- build a correctly-scoped worker instead,
+            # the same way /tenants/{tenant_id}/junior/run does.
+            from .junior_worker import JuniorWorker
+            eng = JuniorEngine(ctx.stores, executor=_api_junior_executor(ctx.settings, ctx.executor),
+                               tenants=ctx.tenants, observability=ctx.observability,
+                               settings=ctx.settings)
+            worker = JuniorWorker(ctx.stores, eng, tenant_id=tid,
+                                  work_start=ctx.settings.junior_work_start,
+                                  work_end=ctx.settings.junior_work_end,
+                                  min_interval_minutes=ctx.settings.junior_min_interval_minutes,
+                                  daily_cap=ctx.settings.junior_daily_cap,
+                                  review_backlog_max=ctx.settings.junior_review_backlog_max,
+                                  autopromote_cap=ctx.settings.junior_autopromote_cap,
+                                  supporting_cap=ctx.settings.junior_supporting_cap,
+                                  observability=ctx.observability)
         return {"status": "ok", **worker.run_cycle(tid)}
 
     # -- onboarding wizard -----------------------------------------------
