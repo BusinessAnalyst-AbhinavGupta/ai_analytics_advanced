@@ -34,6 +34,7 @@ from .domain import (AnalysisRun, AnswerMode, NodeKind, ReviewStatus, RunStatus,
 from .execution.base import ExecutionContext
 from .markdown import write_analysis_md, write_workpaper_md
 from .observability import Observability, new_trace
+from .stores import TenantStoreProvider
 
 
 def _mins_since(ts: Optional[float], now: float) -> float:
@@ -45,7 +46,7 @@ def _mins_since(ts: Optional[float], now: float) -> float:
 class JuniorWorker:
     """One-tenant, serial, rate-limited background junior (Phase 9)."""
 
-    def __init__(self, store: Store, junior: Any, *, tenant_id: str,
+    def __init__(self, stores: TenantStoreProvider, junior: Any, *, tenant_id: str,
                  work_start: str = "10:00", work_end: str = "19:00",
                  min_interval_minutes: int = 60,
                  daily_cap: int = 3,
@@ -56,9 +57,13 @@ class JuniorWorker:
                  clock: Any = time.time, default_tenant: Optional[str] = None,
                  reviews_dir: str = "data/reviews",
                  row_limit: int = 50000):
-        self.store = store
-        self.junior = junior            # JuniorEngine (suggestions + executor)
+        self.stores = stores
         self.tenant_id = tenant_id      # also exposed for Scheduler.tick
+        # One tenant per worker, so its own database is resolved once here.
+        # `scheduler_state` (rate/daily-cap bookkeeping) is control-plane and is
+        # accessed via `self.stores.control` explicitly where needed below.
+        self.store = stores.for_tenant(tenant_id)
+        self.junior = junior            # JuniorEngine (suggestions + executor)
         self.work_start = work_start
         self.work_end = work_end
         self.min_interval_minutes = int(min_interval_minutes)
@@ -71,7 +76,7 @@ class JuniorWorker:
         # low-level probes (exempt from daily/rate caps) up to `supporting_cap`.
         self.autopromote_cap = int(autopromote_cap)
         self.supporting_cap = int(supporting_cap)
-        self.obs = observability or Observability(store)
+        self.obs = observability or Observability(stores)
         self._clock = clock
         self._lock = threading.Lock()   # serial gate: one query at a time
         self.default_tenant = default_tenant or tenant_id
@@ -106,9 +111,12 @@ class JuniorWorker:
         return f"junior_daily:{self.tenant_id}:{day}"
 
     def _runs_today(self, now: float) -> int:
-        """Persisted count of junior analyses already run this UTC day."""
+        """Persisted count of junior analyses already run this UTC day.
+
+        `scheduler_state` is a control-plane table (one file, not per tenant);
+        this worker's own database has no such table."""
         try:
-            row = self.store.query_one(
+            row = self.stores.control.query_one(
                 "SELECT value FROM scheduler_state WHERE key=?", (self._daily_key(now),))
             if row and row["value"]:
                 return int(float(row["value"]))
@@ -118,7 +126,7 @@ class JuniorWorker:
 
     def _last_ran_ts(self) -> Optional[float]:
         try:
-            row = self.store.query_one(
+            row = self.stores.control.query_one(
                 "SELECT value FROM scheduler_state WHERE key=?", (self._state_key(),))
             if row and row["value"]:
                 return float(row["value"])
@@ -128,7 +136,7 @@ class JuniorWorker:
 
     def _record_ran(self, now: float) -> None:
         try:
-            self.store.execute(
+            self.stores.control.execute(
                 "INSERT INTO scheduler_state (key,value,updated_at) VALUES (?,?,?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value, "
                 "updated_at=excluded.updated_at",
@@ -137,7 +145,7 @@ class JuniorWorker:
 
             # persist the per-UTC-day count so restarts never reset the 3/day cap
             dkey = self._daily_key(now)
-            self.store.execute(
+            self.stores.control.execute(
                 "INSERT INTO scheduler_state (key,value,updated_at) VALUES (?,?,?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value, "
                 "updated_at=excluded.updated_at",

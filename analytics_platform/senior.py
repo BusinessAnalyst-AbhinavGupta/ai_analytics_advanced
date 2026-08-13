@@ -20,16 +20,17 @@ from .config import Settings
 from .domain import ReviewStatus, RunStatus, clamp_junior_depth
 from .llm.client import make_role_client
 from .observability import Observability
+from .stores import TenantStoreProvider
 
 
 class SeniorService:
-    def __init__(self, store, pipeline, tenants, observability=None,
+    def __init__(self, stores: TenantStoreProvider, pipeline, tenants, observability=None,
                  reviews_dir: str = "data/reviews",
                  settings: Optional[Settings] = None):
-        self.store = store
+        self.stores = stores
         self.pipeline = pipeline
         self.tenants = tenants
-        self.obs = observability or Observability(store)
+        self.obs = observability or Observability(stores)
         self.reviews_dir = reviews_dir
         self.settings = settings or Settings()
 
@@ -39,7 +40,7 @@ class SeniorService:
         cfg = self.tenants.get_analyst_config(tenant_id)
         s = cfg.senior
         try:
-            row = self.store.query_one(
+            row = self.stores.for_tenant(tenant_id).query_one(
                 "SELECT COUNT(*) AS c FROM analysis_runs WHERE tenant_id=? "
                 "AND executor='junior-bg' AND review_status=? "
                 "AND COALESCE(supportive_of, '')=''",
@@ -134,13 +135,14 @@ class SeniorService:
         nodes in the knowledge graph; rejected ones are recorded as declined.
         """
         cfg = self.tenants.get_analyst_config(tenant_id)
-        rows = self.store.query_all(
+        store = self.stores.for_tenant(tenant_id)
+        rows = store.query_all(
             "SELECT * FROM analysis_runs WHERE tenant_id=? "
             "AND status IN (?,?) AND COALESCE(supportive_of, '')='' "
             "ORDER BY generated_at DESC LIMIT ?",
             (tenant_id, RunStatus.COMPLETED.value, RunStatus.EXECUTED.value, limit))
         out = []
-        for r in self.store.rows_to_dicts(rows):
+        for r in store.rows_to_dicts(rows):
             rv = r.get("review_status") or ReviewStatus.CANDIDATE.value
             if rv in (ReviewStatus.APPROVED.value, ReviewStatus.REJECTED.value,
                       ReviewStatus.SUPERSEDED.value, ReviewStatus.ARCHIVED.value):
@@ -157,7 +159,7 @@ class SeniorService:
         return out
 
     def _set_review_status(self, run_id: str, tenant_id: str, status: str) -> None:
-        self.store.execute(
+        self.stores.for_tenant(tenant_id).execute(
             "UPDATE analysis_runs SET review_status=? WHERE id=? AND tenant_id=?",
             (status, run_id, tenant_id))
 

@@ -51,7 +51,7 @@ class TestJuniorDepth(unittest.TestCase):
 
     def test_suggest_questions_depth(self):
         from analytics_platform.junior import JuniorEngine
-        eng = JuniorEngine(self.ctx.store, executor=self.ctx.executor,
+        eng = JuniorEngine(self.ctx.stores, executor=self.ctx.executor,
                            tenants=self.ctx.tenants, observability=self.ctx.obs)
         self.ctx.tenants.set_analyst_config(self.tid, {"junior_depth": 0})
         basic = eng.suggest_questions(self.tid)
@@ -63,7 +63,7 @@ class TestJuniorDepth(unittest.TestCase):
 
     def test_suggest_hypotheses_scale(self):
         from analytics_platform.junior import JuniorEngine
-        eng = JuniorEngine(self.ctx.store, executor=self.ctx.executor,
+        eng = JuniorEngine(self.ctx.stores, executor=self.ctx.executor,
                            tenants=self.ctx.tenants, observability=self.ctx.obs)
         self.ctx.tenants.set_analyst_config(self.tid, {"junior_depth": 0})
         self.assertEqual(eng.suggest_hypotheses(self.tid)["hypotheses"], [])
@@ -76,8 +76,9 @@ def _completed_run(ctx, tid, question="Order completion rate by month",
     ctx.pipeline.register_approved_query(tid, sql, "Baseline events", by="admin")
     run = ctx.pipeline.run(tid, question)
     if run.status != RunStatus.COMPLETED:
-        ctx.store.execute("UPDATE analysis_runs SET status=? WHERE id=? AND tenant_id=?",
-                          (RunStatus.COMPLETED.value, run.id, tid))
+        ctx.stores.for_tenant(tid).execute(
+            "UPDATE analysis_runs SET status=? WHERE id=? AND tenant_id=?",
+            (RunStatus.COMPLETED.value, run.id, tid))
         run = ctx.pipeline.get_run(tid, run.id)
     return run
 
@@ -86,7 +87,7 @@ class TestSeniorControl(unittest.TestCase):
     def setUp(self):
         self.ctx = make_ctx(warehouse=build_retail_warehouse())
         self.tid = self.ctx.tenants.create_tenant("SenCo").id
-        self.senior = SeniorService(self.ctx.store, self.ctx.pipeline,
+        self.senior = SeniorService(self.ctx.stores, self.ctx.pipeline,
                                     self.ctx.tenants, observability=self.ctx.obs)
         self.ctx.tenants.add_datasource(self.tid, "warehouse", DataSourceKind.DIRECT_DB,
                                         tables=["events"])
@@ -136,7 +137,7 @@ class TestSeniorControl(unittest.TestCase):
 
     def test_senior_reviewer_alias_and_settings(self):
         s = Settings(llm_provider="ollama", llm_model="llama3")
-        reviewer = SeniorReviewer(self.ctx.store, self.ctx.pipeline,
+        reviewer = SeniorReviewer(self.ctx.stores, self.ctx.pipeline,
                                   self.ctx.tenants, observability=self.ctx.obs,
                                   settings=s)
         self.assertIs(reviewer.settings, s)

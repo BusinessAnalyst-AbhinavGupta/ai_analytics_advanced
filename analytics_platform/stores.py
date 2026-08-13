@@ -121,6 +121,17 @@ class TenantStoreProvider:
                 out.append(entry)
         return out
 
+    def evict(self, tenant_id: str) -> None:
+        """Close and forget this tenant's cached Store, e.g. right before its
+        database file is removed (full tenant deletion). A later `for_tenant`
+        call reopens fresh, from whatever is left on disk."""
+        store = self._tenants.pop(tenant_id, None)
+        if store is not None:
+            try:
+                store.close()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("closing store for %s failed: %s", tenant_id, exc)
+
     def close_all(self) -> None:
         for tenant_id, store in list(self._tenants.items()):
             try:

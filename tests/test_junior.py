@@ -40,7 +40,7 @@ class TestJunior(unittest.TestCase):
     def setUp(self):
         self.ctx = self._ctx_with_warehouse()
         self.tid = self.ctx.tenants.create_tenant("JuniorCo").id
-        self.engine = JuniorEngine(self.ctx.store, executor=self.ctx.executor,
+        self.engine = JuniorEngine(self.ctx.stores, executor=self.ctx.executor,
                                    tenants=self.ctx.tenants)
 
     def tearDown(self):
@@ -120,7 +120,7 @@ class TestJunior(unittest.TestCase):
     def test_suggest_questions_llm_enrichment(self, mock_make_role_client):
         mock_make_role_client.return_value = _FakeLLM("1. What drives the view_to_order drop?\n"
                                                        "2. Segment completion rate by region")
-        eng = JuniorEngine(self.ctx.store, executor=self.ctx.executor,
+        eng = JuniorEngine(self.ctx.stores, executor=self.ctx.executor,
                            tenants=self.ctx.tenants)
         s = eng.suggest_questions(self.tid)
         self.assertTrue(any(x["source"] == "llm" for x in s["suggestions"]))
@@ -134,7 +134,7 @@ class TestJunior(unittest.TestCase):
             def generate(self, prompt, system_prompt="", **kw):
                 raise RuntimeError("boom")
         mock_make_role_client.return_value = _Boom("")
-        eng = JuniorEngine(self.ctx.store, executor=self.ctx.executor,
+        eng = JuniorEngine(self.ctx.stores, executor=self.ctx.executor,
                            tenants=self.ctx.tenants)
         s = eng.suggest_questions(self.tid)  # must not raise
         self.assertFalse(any(x["source"] == "llm" for x in s["suggestions"]))
@@ -158,7 +158,7 @@ class TestJunior(unittest.TestCase):
             database_id=59, expected_host="metabase.om.yo-digital.com",
             runner=make_runner(probe_payload(host="metabase.om.yo-digital.com"),
                                exec_payload(rows=[[1, "a"]], cols=["month", "orders"])))
-        eng = JuniorEngine(self.ctx.store, executor=live, tenants=self.ctx.tenants)
+        eng = JuniorEngine(self.ctx.stores, executor=live, tenants=self.ctx.tenants)
 
         # stage () reproduces the approved query through the browser executor
         st = eng.stage(self.tid)

@@ -13,6 +13,7 @@ full tenant deletion (or archive them via the review workflow).
 """
 from __future__ import annotations
 
+import os
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -20,6 +21,7 @@ from typing import Any, Dict, List, Optional
 from .database import Store
 from .domain import new_id, now_iso
 from .observability import Observability
+from .stores import TenantStoreProvider
 from .tenancy import TenantService
 
 # mutable activity tables with an ISO-8601 UTC timestamp column to age out
@@ -38,11 +40,11 @@ def _cutoff_iso(retention_days: int) -> str:
 
 
 class RetentionService:
-    def __init__(self, store: Store, tenants: Optional[TenantService] = None,
+    def __init__(self, stores: TenantStoreProvider, tenants: Optional[TenantService] = None,
                  observability: Optional[Observability] = None):
-        self.store = store
-        self.tenants = tenants or TenantService(store)
-        self.obs = observability or Observability(store)
+        self.stores = stores
+        self.tenants = tenants or TenantService(stores)
+        self.obs = observability or Observability(stores)
 
     # -- review ---------------------------------------------------------------
     def review(self) -> Dict[str, Any]:
@@ -59,9 +61,10 @@ class RetentionService:
 
     def _count_expired(self, tenant_id: str, retention_days: int) -> Dict[str, int]:
         cutoff = _cutoff_iso(retention_days)
+        store = self.stores.for_tenant(tenant_id)
         counts: Dict[str, int] = {}
         for table, col in RETENTION_TABLES:
-            r = self.store.query_one(
+            r = store.query_one(
                 f"SELECT COUNT(*) c FROM {table} WHERE tenant_id=? AND {col}<?",
                 (tenant_id, cutoff))
             counts[table] = r["c"]
@@ -76,14 +79,15 @@ class RetentionService:
             tenants = [t for t in tenants if t["id"] == tenant_id]
         removed = {"tenants": [], "tables": {}}
         for t in tenants:
+            store = self.stores.for_tenant(t["id"])
             cutoff = _cutoff_iso(int(t["retention_days"] or 90))
             table_counts: Dict[str, int] = {}
             for table, col in RETENTION_TABLES:
-                cur = self.store.query_one(
+                cur = store.query_one(
                     f"SELECT COUNT(*) c FROM {table} WHERE tenant_id=? AND {col}<?",
                     (t["id"], cutoff))["c"]
                 if not dry_run and cur:
-                    self.store.execute(
+                    store.execute(
                         f"DELETE FROM {table} WHERE tenant_id=? AND {col}<?",
                         (t["id"], cutoff))
                 table_counts[table] = cur
@@ -96,29 +100,57 @@ class RetentionService:
 
     # -- tenant deletion (GDPR) ------------------------------------------------
     def delete_tenant(self, tenant_id: str, by: str = "owner") -> Dict[str, Any]:
-        """Wipe every tenant-owned row; keep an append-only audit record."""
-        targets = [
+        """Wipe every tenant-owned row.
+
+        Each tenant is its own SQLite file, so deletion is a filesystem
+        operation -- close the cached handle and remove the file (+ WAL/SHM
+        sidecars) -- rather than a `DELETE FROM {table}` per table. Row counts
+        are still gathered first (from the tenant's own database, before it's
+        removed) so the audit record says what was actually destroyed.
+        `auth_principals` is control-plane, so it's deleted there explicitly.
+        The audit record itself is written to the control database's
+        `audit_log`: a record about a deleted tenant cannot live inside that
+        tenant's own (about-to-be-removed) database.
+        """
+        tenant_tables = [
             "knowledge_nodes", "company_profiles", "data_sources", "questions",
             "analysis_runs", "stakeholder_answers", "stakeholder_feedback",
-            "research_sources", "research_docs", "auth_principals",
+            "research_sources", "research_docs",
         ]
-        deleted: Dict[str, int] = {}
-        for table in targets:
-            cur = self.store.query_one(
-                f"SELECT COUNT(*) c FROM {table} WHERE tenant_id=?", (tenant_id,))["c"]
-            if cur:
-                self.store.execute(f"DELETE FROM {table} WHERE tenant_id=?", (tenant_id,))
-            deleted[table] = cur
-        tenants = self.tenants.list_tenants()
-        if any(t["id"] == tenant_id for t in tenants):
-            self.store.execute("DELETE FROM tenants WHERE id=?", (tenant_id,))
-        self.store.execute(
+        db_path = self.stores.tenant_db_path(tenant_id)
+        deleted: Dict[str, int] = {table: 0 for table in tenant_tables}
+        if os.path.exists(db_path):
+            store = self.stores.for_tenant(tenant_id)
+            for table in tenant_tables:
+                r = store.query_one(f"SELECT COUNT(*) c FROM {table} WHERE tenant_id=?",
+                                    (tenant_id,))
+                deleted[table] = r["c"] if r else 0
+
+        auth_row = self.stores.control.query_one(
+            "SELECT COUNT(*) c FROM auth_principals WHERE tenant_id=?", (tenant_id,))
+        deleted["auth_principals"] = auth_row["c"] if auth_row else 0
+        if deleted["auth_principals"]:
+            self.stores.control.execute(
+                "DELETE FROM auth_principals WHERE tenant_id=?", (tenant_id,))
+
+        self.stores.control.execute("DELETE FROM tenants WHERE id=?", (tenant_id,))
+
+        self.stores.evict(tenant_id)
+        for suffix in ("", "-wal", "-shm"):
+            path = db_path + suffix
+            if os.path.exists(path):
+                os.remove(path)
+
+        self.stores.control.execute(
             "INSERT INTO audit_log (ts,tenant_id,actor,role,action,resource,outcome,detail) "
             "VALUES (?,?,?,?,?,?,?,?)",
             (now_iso(), tenant_id, by, "owner", "tenant.delete", tenant_id, "OK",
              _b64dump(deleted)))
-        self.obs.event(tenant_id=tenant_id, stage="retention.delete", actor=by,
-                       status="OK", meta={"deleted": deleted})
+        # tenant_id="" (platform-level): the tenant's own database is gone, so
+        # routing this through the normal tenant_id path would silently
+        # recreate an (empty) file for it. `resource` still names the tenant.
+        self.obs.event(tenant_id="", stage="retention.delete", actor=by,
+                       resource=tenant_id, status="OK", meta={"deleted": deleted})
         return {"tenant_id": tenant_id, "deleted_rows": deleted,
                 "deleted_tables": [t for t, c in deleted.items() if c]}
 

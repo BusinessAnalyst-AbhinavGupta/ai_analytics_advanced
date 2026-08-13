@@ -20,21 +20,22 @@ from .execution.base import ExecutionContext, QueryExecutor
 from .execution.policy import QueryPolicy
 from .llm.client import LLMClient, make_client
 from .observability import Observability, new_trace
+from .stores import TenantStoreProvider
 from .tenancy import TenantService
 
 BrainFactory = Callable[[Store, str], CompanyBrain]
 
 
 class Pipeline:
-    def __init__(self, store: Store, settings: Optional[Settings] = None,
+    def __init__(self, stores: TenantStoreProvider, settings: Optional[Settings] = None,
                  tenant_service: Optional[TenantService] = None,
                  brain_factory: Optional[BrainFactory] = None,
                  executor: Optional[QueryExecutor] = None,
                  llm: Optional[LLMClient] = None,
                  observability: Optional[Observability] = None):
-        self.store = store
+        self.stores = stores
         self.settings = settings or Settings()
-        self.tenants = tenant_service or TenantService(store)
+        self.tenants = tenant_service or TenantService(stores)
         self.brain_factory = brain_factory if brain_factory is not None else (
             lambda s, t: CompanyBrain(s, t))
         self.executor = executor
@@ -43,21 +44,22 @@ class Pipeline:
                                       self.settings.effective_api_key(),
                                       self.settings.ollama_base_url)
         self.policy = QueryPolicy(self.settings.policy)
-        self.obs = observability or Observability(store)
+        self.obs = observability or Observability(stores)
 
     def brain(self, tenant_id: str) -> CompanyBrain:
         self.tenants.require_tenant(tenant_id)
-        return self.brain_factory(self.store, tenant_id)
+        return self.brain_factory(self.stores.for_tenant(tenant_id), tenant_id)
 
     # ------------------------------------------------------------------ #
     def run(self, tenant_id: str, question_text: str, mode_budget: str = "low_cost",
             persisted_sql: Optional[str] = None) -> AnalysisRun:
+        store = self.stores.for_tenant(tenant_id)
         trace = new_trace()
         q = Question(id=new_id("q"), tenant_id=tenant_id, text=question_text,
                      mode_budget=mode_budget)
-        self.store.execute("INSERT INTO questions (id,tenant_id,text,mode_budget,created_at) "
-                           "VALUES (?,?,?,?,?)",
-                           (q.id, q.tenant_id, q.text, q.mode_budget, q.created_at))
+        store.execute("INSERT INTO questions (id,tenant_id,text,mode_budget,created_at) "
+                      "VALUES (?,?,?,?,?)",
+                      (q.id, q.tenant_id, q.text, q.mode_budget, q.created_at))
 
         run = AnalysisRun(id=new_id("run"), tenant_id=tenant_id, trace_id=trace,
                           question_id=q.id, question_text=question_text,
@@ -179,7 +181,7 @@ class Pipeline:
         return tables or None
 
     def _save_run(self, run: AnalysisRun) -> None:
-        self.store.execute(
+        self.stores.for_tenant(run.tenant_id).execute(
             "INSERT INTO analysis_runs (id,tenant_id,trace_id,question_id,question_text,sql,"
             "dialect,executor,status,answer_mode,review_status,generated_at,execution_ms,row_count,"
             "profile_summary,rule_triggers,answer,facts,hypotheses,uncertainties,next_actions,"
@@ -203,8 +205,8 @@ class Pipeline:
              dump_json(run.source_node_ids)))
 
     def get_run(self, tenant_id: str, run_id: str) -> Optional[AnalysisRun]:
-        row = self.store.query_one("SELECT * FROM analysis_runs WHERE id=? AND tenant_id=?",
-                                   (run_id, tenant_id))
+        row = self.stores.for_tenant(tenant_id).query_one(
+            "SELECT * FROM analysis_runs WHERE id=? AND tenant_id=?", (run_id, tenant_id))
         return self._run_from_row(row) if row else None
 
     def _run_from_row(self, row) -> AnalysisRun:
@@ -225,8 +227,9 @@ class Pipeline:
         return AnalysisRun(**r)
 
     def list_runs(self, tenant_id: str, limit: int = 50) -> List[AnalysisRun]:
-        rows = self.store.query_all("SELECT * FROM analysis_runs WHERE tenant_id=? "
-                                    "ORDER BY generated_at DESC LIMIT ?", (tenant_id, limit))
+        rows = self.stores.for_tenant(tenant_id).query_all(
+            "SELECT * FROM analysis_runs WHERE tenant_id=? "
+            "ORDER BY generated_at DESC LIMIT ?", (tenant_id, limit))
         return [self._run_from_row(r) for r in rows]
 # <<P4>>
     # ------------------------------------------------------------------ #

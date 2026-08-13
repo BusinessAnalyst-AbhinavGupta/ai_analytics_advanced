@@ -18,7 +18,7 @@ class TestTriage(unittest.TestCase):
         self.ctx = make_ctx()
         self.tid = self.ctx.tenants.create_tenant("ReviewCo").id
         self.brain = self.ctx.pipeline.brain(self.tid)
-        self.svc = TriageService(self.ctx.store, self.ctx.obs)
+        self.svc = TriageService(self.ctx.stores, self.ctx.obs)
 
     def tearDown(self):
         self.ctx.close()

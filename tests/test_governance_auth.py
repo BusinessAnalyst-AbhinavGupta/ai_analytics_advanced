@@ -13,9 +13,9 @@ def enabled_ctx(secret="test-secret"):
     base = make_ctx()
     base.settings.auth_enabled = True
     base.settings.auth_secret = secret
-    onboarding = OnboardingService(base.store, tenants=base.tenants,
+    onboarding = OnboardingService(base.stores, tenants=base.tenants,
                                    pipeline=base.pipeline, observability=base.obs)
-    ctx = AppContext(settings=base.settings, store=base.store, tenants=base.tenants,
+    ctx = AppContext(settings=base.settings, stores=base.stores, tenants=base.tenants,
                      observability=base.obs, pipeline=base.pipeline, executor=base.executor,
                      onboarding=onboarding)
     return ensure_services(ctx), base

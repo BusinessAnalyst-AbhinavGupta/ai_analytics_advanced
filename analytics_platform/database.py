@@ -33,8 +33,18 @@ CREATE TABLE IF NOT EXISTS auth_principals (
     id TEXT PRIMARY KEY, tenant_id TEXT, role TEXT, name TEXT, email TEXT,
     scopes TEXT, created_at TEXT
 );
+-- Same shape as the tenant-plane `audit_log` below. Most audit events are
+-- tenant activity and belong in the tenant's own database; full tenant
+-- deletion (retention.py) is the one record that must outlive the tenant's
+-- own (removed) file, so it is written here instead (Task 5).
+CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT, tenant_id TEXT, actor TEXT, role TEXT, action TEXT,
+    resource TEXT, outcome TEXT, detail TEXT
+);
 CREATE INDEX IF NOT EXISTS idx_api_logs_ts ON api_logs(ts);
 CREATE INDEX IF NOT EXISTS idx_api_logs_tenant ON api_logs(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_audit_tenant_control ON audit_log(tenant_id);
 """
 
 TENANT_SCHEMA = """

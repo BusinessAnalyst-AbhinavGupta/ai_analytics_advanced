@@ -58,6 +58,7 @@ from .retention import RetentionService
 from .scheduler import Scheduler
 from .senior import SeniorService
 from .stakeholder import StakeholderService
+from .stores import TenantStoreProvider
 from .tenancy import TenantService
 from .triage import TriageService
 
@@ -252,7 +253,7 @@ class PurgeIn(BaseModel):
 @dataclass
 class AppContext:
     settings: Settings
-    store: Store
+    stores: TenantStoreProvider
     tenants: TenantService
     observability: Observability
     pipeline: Pipeline
@@ -268,13 +269,20 @@ class AppContext:
     junior: Optional[Any] = None
     senior: Optional[Any] = None
 
+    @property
+    def store(self) -> Store:
+        """DEPRECATED: the control store. Tenant work must go through `stores`."""
+        return self.stores.control
+
 
 def make_context(settings: Optional[Settings] = None,
                  warehouse: Optional[Dict[str, Any]] = None) -> AppContext:
     settings = settings or Settings.from_env()
-    store = Store(settings.resolve_db_path())
-    tenants = TenantService(store)
-    obs = Observability(store)
+    stores = TenantStoreProvider(
+        control_db_path=settings.resolve_control_db_path(),
+        tenants_root=settings.resolve_tenants_root())
+    tenants = TenantService(stores)
+    obs = Observability(stores)
     executor = SamplerExecutor(warehouse or {})
     try:
         from .brain.vector_store import BrainVectorStore
@@ -282,29 +290,29 @@ def make_context(settings: Optional[Settings] = None,
     except Exception:
         vector_store = None
 
-    pipeline = Pipeline(store, settings=settings, tenant_service=tenants,
+    pipeline = Pipeline(stores, settings=settings, tenant_service=tenants,
                         executor=executor, observability=obs,
                         brain_factory=lambda s, t: CompanyBrain(s, t, vector_store=vector_store))
-    onboarding = OnboardingService(store, tenants=tenants, pipeline=pipeline,
+    onboarding = OnboardingService(stores, tenants=tenants, pipeline=pipeline,
                                    observability=obs)
-    stakeholder = StakeholderService(store, tenants=tenants, executor=executor,
+    stakeholder = StakeholderService(stores, tenants=tenants, executor=executor,
                                      observability=obs,
                                      settings=settings,
                                      cost_per_1k_input=settings.cost_per_1k_input,
                                      cost_per_1k_output=settings.cost_per_1k_output)
-    research = ResearchService(store, observability=obs)
+    research = ResearchService(stores, observability=obs)
     auth = AuthGate(settings)
-    billing = BillingService(store, settings=settings, observability=obs)
-    retention = RetentionService(store, tenants=tenants, observability=obs)
-    junior = JuniorEngine(store, executor=executor, tenants=tenants,
+    billing = BillingService(stores, settings=settings, observability=obs)
+    retention = RetentionService(stores, tenants=tenants, observability=obs)
+    junior = JuniorEngine(stores, executor=executor, tenants=tenants,
                           observability=obs, settings=settings)
-    junior_worker = _make_junior_worker(settings, store, junior, obs)
-    scheduler = Scheduler(store, observability=obs,
+    junior_worker = _make_junior_worker(settings, stores, junior, obs)
+    scheduler = Scheduler(stores, observability=obs,
                           retention_days=settings.log_retention_days,
                           maintenance_interval_days=settings.maintenance_interval_days,
                           junior_worker=junior_worker)
-    senior = SeniorService(store, pipeline, tenants, observability=obs, settings=settings)
-    return AppContext(settings=settings, store=store, tenants=tenants,
+    senior = SeniorService(stores, pipeline, tenants, observability=obs, settings=settings)
+    return AppContext(settings=settings, stores=stores, tenants=tenants,
                       observability=obs, pipeline=pipeline, executor=executor,
                       onboarding=onboarding, stakeholder=stakeholder,
                       research=research, auth=auth, billing=billing,
@@ -312,7 +320,7 @@ def make_context(settings: Optional[Settings] = None,
                       junior_worker=junior_worker, junior=junior, senior=senior)
 
 
-def _make_junior_worker(settings: Settings, store: Store, junior: Any,
+def _make_junior_worker(settings: Settings, stores: TenantStoreProvider, junior: Any,
                         obs: Observability) -> Optional[JuniorWorker]:
     """Build a background youth worker bound to a tenant.
 
@@ -321,12 +329,12 @@ def _make_junior_worker(settings: Settings, store: Store, junior: Any,
     DB never spins a worker with nowhere to go.
     """
     try:
-        tenants = TenantService(store).list_tenants()
-        if not tenants:
+        tenant_list = TenantService(stores).list_tenants()
+        if not tenant_list:
             return None
-        target = sorted(tenants, key=lambda t: t.get("created_at", ""))[0]
+        target = sorted(tenant_list, key=lambda t: t.get("created_at", ""))[0]
         return JuniorWorker(
-            store, junior, tenant_id=target["id"],
+            stores, junior, tenant_id=target["id"],
             work_start=settings.junior_work_start,
             work_end=settings.junior_work_end,
             min_interval_minutes=settings.junior_min_interval_minutes,
@@ -344,37 +352,37 @@ def ensure_services(ctx: AppContext) -> AppContext:
     (e.g. by test helpers) with only the core P1-P3 fields."""
     if ctx.stakeholder is None:
         ctx.stakeholder = StakeholderService(
-            ctx.store, tenants=ctx.tenants, executor=ctx.executor,
+            ctx.stores, tenants=ctx.tenants, executor=ctx.executor,
             observability=ctx.observability, settings=ctx.settings,
             cost_per_1k_input=ctx.settings.cost_per_1k_input,
             cost_per_1k_output=ctx.settings.cost_per_1k_output)
     if ctx.research is None:
-        ctx.research = ResearchService(ctx.store, observability=ctx.observability)
+        ctx.research = ResearchService(ctx.stores, observability=ctx.observability)
     if ctx.auth is None:
         ctx.auth = AuthGate(ctx.settings)
     if ctx.billing is None:
-        ctx.billing = BillingService(ctx.store, settings=ctx.settings,
+        ctx.billing = BillingService(ctx.stores, settings=ctx.settings,
                                      observability=ctx.observability)
     if ctx.retention is None:
-        ctx.retention = RetentionService(ctx.store, tenants=ctx.tenants,
+        ctx.retention = RetentionService(ctx.stores, tenants=ctx.tenants,
                                          observability=ctx.observability)
     if ctx.junior is None:
         from .junior import JuniorEngine
-        ctx.junior = JuniorEngine(ctx.store, executor=ctx.executor,
+        ctx.junior = JuniorEngine(ctx.stores, executor=ctx.executor,
                                   tenants=ctx.tenants,
                                   observability=ctx.observability,
                                   settings=ctx.settings)
     if ctx.junior_worker is None:
-        ctx.junior_worker = _make_junior_worker(ctx.settings, ctx.store,
+        ctx.junior_worker = _make_junior_worker(ctx.settings, ctx.stores,
                                                 ctx.junior, ctx.observability)
     if ctx.scheduler is None:
         ctx.scheduler = Scheduler(
-            ctx.store, observability=ctx.observability,
+            ctx.stores, observability=ctx.observability,
             retention_days=ctx.settings.log_retention_days,
             maintenance_interval_days=ctx.settings.maintenance_interval_days,
             junior_worker=ctx.junior_worker)
     if ctx.senior is None:
-        ctx.senior = SeniorService(ctx.store, ctx.pipeline, ctx.tenants,
+        ctx.senior = SeniorService(ctx.stores, ctx.pipeline, ctx.tenants,
                                    observability=ctx.observability,
                                    settings=ctx.settings)
     return ctx
@@ -844,7 +852,7 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
     # -- triage (senior-review inbox over the Brain) ----------------------
     def _triage(tenant_id: str) -> TriageService:
         tenant_or_404(tenant_id)
-        return TriageService(ctx.store, ctx.observability)
+        return TriageService(ctx.stores, ctx.observability)
 
     @app.get("/triage/{tenant_id}/summary")
     def triage_summary(tenant_id: str) -> Dict[str, Any]:
@@ -889,7 +897,7 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
             if all_tnts:
                 tenant_id = all_tnts[0].id
         tenant_or_404(tenant_id)
-        return JuniorEngine(ctx.store, executor=_api_junior_executor(ctx.settings, ctx.executor),
+        return JuniorEngine(ctx.stores, executor=_api_junior_executor(ctx.settings, ctx.executor),
                             tenants=ctx.tenants, observability=ctx.observability,
                             settings=ctx.settings)
 
@@ -934,10 +942,10 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
         """
         tenant_or_404(tenant_id)
         from .junior_worker import JuniorWorker
-        eng = JuniorEngine(ctx.store, executor=_api_junior_executor(ctx.settings, ctx.executor),
+        eng = JuniorEngine(ctx.stores, executor=_api_junior_executor(ctx.settings, ctx.executor),
                            tenants=ctx.tenants, observability=ctx.observability,
                            settings=ctx.settings)
-        worker = JuniorWorker(ctx.store, eng, tenant_id=tenant_id,
+        worker = JuniorWorker(ctx.stores, eng, tenant_id=tenant_id,
                               work_start=ctx.settings.junior_work_start,
                               work_end=ctx.settings.junior_work_end,
                               min_interval_minutes=ctx.settings.junior_min_interval_minutes,

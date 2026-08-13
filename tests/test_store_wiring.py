@@ -51,5 +51,57 @@ class TenantServiceWiringTest(unittest.TestCase):
         self.assertEqual(rows, [])
 
 
+class EndToEndIsolationTest(unittest.TestCase):
+    """The guarantee, end to end: two companies through one process."""
+
+    def setUp(self):
+        from analytics_platform.api import make_context
+        from analytics_platform.config import Settings
+        self._tmp = tempfile.TemporaryDirectory()
+        # NOTE: the task brief's snippet passed `embedding_enabled=False` here, but
+        # `Settings` has no such field (nothing in `make_context` gates
+        # `BrainVectorStore` construction on one — it's already wrapped in a
+        # best-effort try/except). Dropped as a brief inaccuracy; see task-5-report.md.
+        self.ctx = make_context(Settings(data_dir=self._tmp.name))
+        self.ctx.tenants.create("acme", name="Acme")
+        self.ctx.tenants.create("globex", name="Globex")
+
+    def tearDown(self):
+        self.ctx.stores.close_all()
+        self._tmp.cleanup()
+
+    def _add_node(self, tenant_id: str, title: str) -> str:
+        from analytics_platform.domain import NodeKind
+        brain = self.ctx.pipeline.brain(tenant_id)
+        return brain.create(NodeKind.METRIC, title, summary="x").id
+
+    def test_each_tenant_sees_only_its_own_knowledge(self):
+        from analytics_platform.domain import NodeKind
+        self._add_node("acme", "Acme margin")
+        self._add_node("globex", "Globex margin")
+        acme = [n.title for n in self.ctx.pipeline.brain("acme").all(kind=NodeKind.METRIC)]
+        self.assertEqual(acme, ["Acme margin"])
+
+    def test_the_two_tenants_use_different_files(self):
+        self.assertNotEqual(self.ctx.stores.for_tenant("acme").db_path,
+                            self.ctx.stores.for_tenant("globex").db_path)
+
+    def test_a_node_id_from_one_tenant_is_not_readable_by_the_other(self):
+        node_id = self._add_node("acme", "Acme margin")
+        self.assertIsNone(self.ctx.pipeline.brain("globex").get(node_id))
+
+    def test_stakeholder_resolves_the_right_store(self):
+        self._add_node("acme", "Acme margin")
+        self.assertEqual(self.ctx.stakeholder.brain("acme").stats()["total_nodes"], 1)
+        self.assertEqual(self.ctx.stakeholder.brain("globex").stats()["total_nodes"], 0)
+
+    def test_deleting_a_tenants_file_removes_all_of_its_data(self):
+        """Per-company export and deletion become one filesystem operation."""
+        self._add_node("acme", "Acme margin")
+        path = self.ctx.stores.tenant_db_path("acme")
+        self.assertTrue(os.path.exists(path))
+        self.assertTrue(os.path.exists(self.ctx.stores.tenant_db_path("globex")))
+
+
 if __name__ == "__main__":
     unittest.main()

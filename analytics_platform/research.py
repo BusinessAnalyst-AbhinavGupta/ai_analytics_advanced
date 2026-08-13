@@ -18,6 +18,7 @@ from .brain.store import CompanyBrain
 from .database import Store, dump_json, load_json
 from .domain import NodeKind, ReviewStatus, new_id, now_iso
 from .observability import Observability
+from .stores import TenantStoreProvider
 
 CREDIBILITY_SCORE = {"official": 1.0, "government": 0.95, "industry_analyst": 0.85,
                      "vendor": 0.6, "blog": 0.4, "forum": 0.3}
@@ -37,16 +38,17 @@ DEFAULT_SOURCES = [
 
 
 class ResearchService:
-    def __init__(self, store: Store, observability: Optional[Observability] = None,
+    def __init__(self, stores: TenantStoreProvider, observability: Optional[Observability] = None,
                  sources: Optional[List[Dict[str, Any]]] = None):
-        self.store = store
-        self.obs = observability or Observability(store)
+        self.stores = stores
+        self.obs = observability or Observability(stores)
         self.default_sources = sources or DEFAULT_SOURCES
 
     # -- sources (allow/block) --------------------------------------------- #
     def seed_sources(self, tenant_id: str) -> List[Dict[str, Any]]:
+        store = self.stores.for_tenant(tenant_id)
         for s in self.default_sources:
-            self.store.execute(
+            store.execute(
                 "INSERT INTO research_sources (id,tenant_id,name,url,kind,credibility,policy,created_at) "
                 "VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING",
                 (new_id("src"), tenant_id, s["name"], s["url"], s["kind"],
@@ -54,9 +56,10 @@ class ResearchService:
         return self.list_sources(tenant_id)
 
     def list_sources(self, tenant_id: str) -> List[Dict[str, Any]]:
-        rows = self.store.query_all(
+        store = self.stores.for_tenant(tenant_id)
+        rows = store.query_all(
             "SELECT * FROM research_sources WHERE tenant_id=? ORDER BY credibility", (tenant_id,))
-        return self.store.rows_to_dicts(rows)
+        return store.rows_to_dicts(rows)
 
     def allowed_sources(self, tenant_id: str) -> List[Dict[str, Any]]:
         return [s for s in self.list_sources(tenant_id) if s["policy"] == "allow"]
@@ -64,7 +67,7 @@ class ResearchService:
     def set_source_policy(self, tenant_id: str, source_id: str, policy: str) -> Dict[str, Any]:
         if policy not in ("allow", "block"):
             return {"error": "policy must be allow|block"}
-        self.store.execute(
+        self.stores.for_tenant(tenant_id).execute(
             "UPDATE research_sources SET policy=? WHERE id=? AND tenant_id=?",
             (policy, source_id, tenant_id))
         for s in self.list_sources(tenant_id):
@@ -105,9 +108,10 @@ class ResearchService:
     def capture(self, tenant_id: str, query: str,
                 claims: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         saved = []
+        store = self.stores.for_tenant(tenant_id)
         for c in claims:
             did = new_id("rd")
-            self.store.execute(
+            store.execute(
                 "INSERT INTO research_docs (id,tenant_id,query,url,title,source_id,credibility,"
                 "snippet,claims,origin,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (did, tenant_id, query, c.get("url", ""), c.get("title", ""),
@@ -122,11 +126,12 @@ class ResearchService:
         return saved
 
     def list_docs(self, tenant_id: str, limit: int = 50) -> List[Dict[str, Any]]:
-        rows = self.store.query_all(
+        store = self.stores.for_tenant(tenant_id)
+        rows = store.query_all(
             "SELECT * FROM research_docs WHERE tenant_id=? ORDER BY created_at DESC LIMIT ?",
             (tenant_id, limit))
         out = []
-        for r in self.store.rows_to_dicts(rows):
+        for r in store.rows_to_dicts(rows):
             r["claims"] = load_json(r["claims"], [])
             out.append(r)
         return out
@@ -134,13 +139,14 @@ class ResearchService:
     # -- promote a cited claim to the Brain (never auto-approved) ----------- #
     def promote(self, tenant_id: str, doc_id: str, by: str = "analyst",
                 note: str = "") -> Optional[Dict[str, Any]]:
-        row = self.store.query_one(
+        store = self.stores.for_tenant(tenant_id)
+        row = store.query_one(
             "SELECT * FROM research_docs WHERE id=? AND tenant_id=?", (doc_id, tenant_id))
         if not row:
             return None
         claims = load_json(row["claims"], [])
         claim = claims[0] if claims else {}
-        brain = CompanyBrain(self.store, tenant_id)
+        brain = CompanyBrain(store, tenant_id)
         node = brain.create(
             NodeKind.EXTERNAL,
             title=claim.get("title") or row["title"] or ("External claim: " + row["query"]),

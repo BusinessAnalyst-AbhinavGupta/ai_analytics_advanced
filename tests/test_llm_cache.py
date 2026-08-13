@@ -36,7 +36,7 @@ def _eng(ctx, ttl_minutes=60, daily_cap=20):
         "targets": [{"name": "Grow orders", "category": "growth", "priority": 1}]})
     ctx.tenants.set_analyst_config(tid, {"junior_depth": 2})
     s = Settings(junior_llm_cache_ttl_minutes=ttl_minutes, llm_daily_cap=daily_cap)
-    eng = JuniorEngine(ctx.store, tenants=ctx.tenants, observability=ctx.obs,
+    eng = JuniorEngine(ctx.stores, tenants=ctx.tenants, observability=ctx.obs,
                        settings=s)
     return tid, eng
 
@@ -76,7 +76,7 @@ class TestLlmEnrichmentThrottle(unittest.TestCase):
         self.assertEqual(llm.calls, 1)
         llm2 = CountingLLM()
         mock_make_client.return_value = llm2
-        eng2 = JuniorEngine(self.ctx.store, tenants=self.ctx.tenants,
+        eng2 = JuniorEngine(self.ctx.stores, tenants=self.ctx.tenants,
                             observability=self.ctx.obs, settings=eng.settings)
         eng2.suggest_questions(tid)
         self.assertEqual(llm2.calls, 0)  # served from the shared cache
@@ -108,9 +108,10 @@ class TestLlmEnrichmentThrottle(unittest.TestCase):
         # reuse the SAME tenant so the persisted budget key matches
         eng2.suggest_questions(tid)         # stale cache (fresh instance) -> tries to fire
         self.assertEqual(fresh.calls, 0)    # blocked by persisted daily budget
-        # budget counter persisted in scheduler_state
+        # budget counter persisted in scheduler_state (control plane: it's one
+        # file, not one per tenant -- the tenant_id lives inside the key)
         key = f"llm_daily:{tid}:{time.strftime('%Y-%m-%d', time.gmtime())}"
-        row = self.ctx.store.query_one(
+        row = self.ctx.stores.control.query_one(
             "SELECT value FROM scheduler_state WHERE key=?", (key,))
         self.assertEqual(int(float(row["value"])), 1)
 

@@ -164,7 +164,7 @@ def cmd_review(args: argparse.Namespace) -> int:
     except KeyError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
-    svc = TriageService(ctx.store, ctx.observability)
+    svc = TriageService(ctx.stores, ctx.observability)
     kind = _parse_kind(args.kind)
 
     if args.approve:
@@ -218,7 +218,7 @@ def cmd_junior(args: argparse.Namespace) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 1
     executor = _resolve_junior_executor(ctx.settings, ctx.executor or SamplerExecutor())
-    eng = JuniorEngine(ctx.store, executor=executor,
+    eng = JuniorEngine(ctx.stores, executor=executor,
                        tenants=ctx.tenants, observability=ctx.observability,
                        settings=ctx.settings)
     _print("Junior readiness", eng.stage(args.tenant_id, limit=args.limit))

@@ -27,6 +27,7 @@ from .domain import KnowledgeNode, NodeKind, ReviewStatus, clamp_junior_depth
 from .execution.base import ExecutionContext, QueryExecutor
 from .llm.client import make_role_client
 from .observability import Observability
+from .stores import TenantStoreProvider
 from .tenancy import TenantService
 
 # Deterministic hypothesis templates (scaled by junior depth; always additive).
@@ -42,16 +43,16 @@ _LLM_ENRICH_LOCK = threading.Lock()
 
 
 class JuniorEngine:
-    def __init__(self, store: Store, executor: Optional[QueryExecutor] = None,
+    def __init__(self, stores: TenantStoreProvider, executor: Optional[QueryExecutor] = None,
                  tenants: Optional[TenantService] = None,
                  observability: Optional[Observability] = None,
                  settings: Optional[Settings] = None):
         from .execution.sampler import SamplerExecutor
         from .config import Settings
-        self.store = store
+        self.stores = stores
         self.executor = executor or SamplerExecutor()
-        self.tenants = tenants or TenantService(store)
-        self.obs = observability or Observability(store)
+        self.tenants = tenants or TenantService(stores)
+        self.obs = observability or Observability(stores)
         self.settings = settings or Settings()
 
     @property
@@ -84,8 +85,10 @@ class JuniorEngine:
         return f"llm_daily:{tenant_id}:{time.strftime('%Y-%m-%d', time.gmtime())}"
 
     def _llm_budget_ok(self, tenant_id: str) -> bool:
+        # scheduler_state is a control-plane table (there is one, not one per
+        # tenant); the tenant_id lives inside the key, not in which file it's in.
         try:
-            row = self.store.query_one(
+            row = self.stores.control.query_one(
                 "SELECT value FROM scheduler_state WHERE key=?", (self._llm_budget_key(tenant_id),))
             used = int(float(row["value"])) if row and row["value"] else 0
             return used < self.llm_daily_cap
@@ -95,10 +98,10 @@ class JuniorEngine:
     def _llm_spend(self, tenant_id: str) -> None:
         try:
             key = self._llm_budget_key(tenant_id)
-            row = self.store.query_one(
+            row = self.stores.control.query_one(
                 "SELECT value FROM scheduler_state WHERE key=?", (key,))
             used = int(float(row["value"])) if row and row["value"] else 0
-            self.store.execute(
+            self.stores.control.execute(
                 "INSERT INTO scheduler_state (key,value,updated_at) VALUES (?,?,?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value, "
                 "updated_at=excluded.updated_at",
@@ -108,7 +111,7 @@ class JuniorEngine:
             pass
 
     def brain(self, tenant_id: str) -> CompanyBrain:
-        return CompanyBrain(self.store, tenant_id)
+        return CompanyBrain(self.stores.for_tenant(tenant_id), tenant_id)
 
     # -- reads ---------------------------------------------------------------
     def approved_queries(self, tenant_id: str, limit: int = 200) -> List[KnowledgeNode]:
@@ -183,7 +186,7 @@ class JuniorEngine:
                     seen.append(t)
                     
         # CP-16: Also discover root tables embedded in the knowledge queue
-        brain = CompanyBrain(self.store, tenant_id)
+        brain = self.brain(tenant_id)
         from .brain.ingest import extract
         
         for node in brain.all(kind=NodeKind.QUERY, limit=1000):

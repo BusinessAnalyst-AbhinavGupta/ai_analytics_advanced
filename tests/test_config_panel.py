@@ -15,9 +15,9 @@ from analytics_platform.onboarding import OnboardingService
 
 def _full_app(warehouse=None):
     base = make_ctx()
-    onboarding = OnboardingService(base.store, tenants=base.tenants,
+    onboarding = OnboardingService(base.stores, tenants=base.tenants,
                                    pipeline=base.pipeline, observability=base.obs)
-    ctx = AppContext(settings=base.settings, store=base.store, tenants=base.tenants,
+    ctx = AppContext(settings=base.settings, stores=base.stores, tenants=base.tenants,
                      observability=base.obs, pipeline=base.pipeline,
                      executor=base.executor, onboarding=onboarding)
     ctx = ensure_services(ctx)
@@ -94,7 +94,7 @@ class TestJuniorWorkerGate(unittest.TestCase):
 
     def test_junior_disabled_blocks_run_cycle(self):
         from analytics_platform.junior_worker import JuniorWorker
-        worker = JuniorWorker(self.base.store, self.ctx.junior, tenant_id=self.tid)
+        worker = JuniorWorker(self.base.stores, self.ctx.junior, tenant_id=self.tid)
         # enabled (default) -> runs a cycle inside the window
         self.ctx.tenants.set_analyst_config(self.tid, {"junior": {"enabled": True}})
         res = worker.run_cycle(tenant_id=self.tid, now=1900000000.0)
@@ -108,7 +108,7 @@ class TestJuniorWorkerGate(unittest.TestCase):
         from analytics_platform.junior_worker import JuniorWorker
         # Always-in-window window so only the hourly + daily caps gate the test.
         def mk_worker():
-            return JuniorWorker(self.base.store, self.ctx.junior, tenant_id=self.tid,
+            return JuniorWorker(self.base.stores, self.ctx.junior, tenant_id=self.tid,
                                 daily_cap=2, min_interval_minutes=60,
                                 work_start="00:00", work_end="23:59")
         worker = mk_worker()

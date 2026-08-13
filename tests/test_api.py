@@ -23,9 +23,9 @@ from tests.helpers import make_ctx
 def app_ctx(warehouse=None):
     """Wrap the test Ctx into the AppContext `create_app` expects."""
     base = make_ctx(warehouse=warehouse)
-    onboarding = OnboardingService(base.store, tenants=base.tenants,
+    onboarding = OnboardingService(base.stores, tenants=base.tenants,
                                    pipeline=base.pipeline, observability=base.obs)
-    ctx = AppContext(settings=base.settings, store=base.store, tenants=base.tenants,
+    ctx = AppContext(settings=base.settings, stores=base.stores, tenants=base.tenants,
                      observability=base.obs, pipeline=base.pipeline, executor=base.executor,
                      onboarding=onboarding)
     return ctx, base

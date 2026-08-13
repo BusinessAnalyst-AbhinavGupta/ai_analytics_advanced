@@ -19,7 +19,7 @@ LEGACY_SQL = "SELECT date_format(CAST(created_at AS TIMESTAMP), '%Y-%m') AS mont
 class TestOnboarding(unittest.TestCase):
     def setUp(self):
         self.ctx = make_ctx()
-        self.svc = OnboardingService(self.ctx.store, tenants=self.ctx.tenants,
+        self.svc = OnboardingService(self.ctx.stores, tenants=self.ctx.tenants,
                                      pipeline=self.ctx.pipeline,
                                      observability=self.ctx.obs)
         self.tid = self.svc.provision_company(PROFILE,

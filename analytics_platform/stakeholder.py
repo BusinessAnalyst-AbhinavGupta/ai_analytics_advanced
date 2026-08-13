@@ -21,6 +21,7 @@ from .domain import AnswerMode, NodeKind, new_id, now_iso
 from .execution.base import ExecutionContext
 from .llm.client import make_role_client
 from .observability import Observability, new_trace
+from .stores import TenantStoreProvider
 from .tenancy import TenantService
 from .skills import SkillRegistry, SkillEngine
 
@@ -39,17 +40,17 @@ HIGH_RISK_MARKERS: List[str] = [
 
 
 class StakeholderService:
-    def __init__(self, store: Store, tenants: Optional[TenantService] = None,
+    def __init__(self, stores: TenantStoreProvider, tenants: Optional[TenantService] = None,
                  executor: Optional[Any] = None,
                  observability: Optional[Observability] = None,
                  cost_per_1k_input: float = 0.30,
                  cost_per_1k_output: float = 1.20,
                  settings: Optional[Settings] = None):
         from .execution.sampler import SamplerExecutor
-        self.store = store
-        self.tenants = tenants or TenantService(store)
+        self.stores = stores
+        self.tenants = tenants or TenantService(stores)
         self.executor = executor or SamplerExecutor()
-        self.obs = observability or Observability(store)
+        self.obs = observability or Observability(stores)
         self.settings = settings or Settings()
         self.cost_per_1k_input = cost_per_1k_input
         self.cost_per_1k_output = cost_per_1k_output
@@ -58,7 +59,7 @@ class StakeholderService:
         self.skill_engine = SkillEngine()
 
     def brain(self, tenant_id: str) -> CompanyBrain:
-        return CompanyBrain(self.store, tenant_id)
+        return CompanyBrain(self.stores.for_tenant(tenant_id), tenant_id)
 
     def classify(self, question: str) -> str:
         q = question.lower()
@@ -334,7 +335,7 @@ class StakeholderService:
         freshness = 0.0
         for c in citations or []:
             freshness = max(freshness, float(c.get("freshness", 0.0)))
-        self.store.execute(
+        self.stores.for_tenant(tenant_id).execute(
             "INSERT INTO stakeholder_answers (id,tenant_id,question,user_id,category,answer,"
             "answer_mode,status,trace_id,created_at,source_node_ids,citations,facts,caveats,"
             "freshness,tokens_in,tokens_out,cost,escalated,queries_run) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -351,12 +352,13 @@ class StakeholderService:
     # -- feedback + quality -------------------------------------------------
     def record_feedback(self, tenant_id: str, answer_id: str, user_id: str,
                         rating: str, comment: str = "") -> Dict[str, Any]:
-        row = self.store.query_one(
+        store = self.stores.for_tenant(tenant_id)
+        row = store.query_one(
             "SELECT * FROM stakeholder_answers WHERE id=? AND tenant_id=?", (answer_id, tenant_id))
         if not row:
             return {"error": "answer not found"}
         fid = new_id("fb")
-        self.store.execute(
+        store.execute(
             "INSERT INTO stakeholder_feedback (id,tenant_id,answer_id,user_id,rating,comment,"
             "created_at) VALUES (?,?,?,?,?,?,?)",
             (fid, tenant_id, answer_id, user_id, rating, comment, now_iso()))
@@ -365,9 +367,10 @@ class StakeholderService:
         return {"feedback_id": fid, "answer_id": answer_id, "rating": rating}
 
     def quality(self, tenant_id: str) -> Dict[str, Any]:
-        answers = self.store.query_all(
+        store = self.stores.for_tenant(tenant_id)
+        answers = store.query_all(
             "SELECT * FROM stakeholder_answers WHERE tenant_id=?", (tenant_id,))
-        feedbacks = self.store.query_all(
+        feedbacks = store.query_all(
             "SELECT * FROM stakeholder_feedback WHERE tenant_id=?", (tenant_id,))
         total = len(answers)
         answered = sum(1 for a in answers if a["status"] == "ANSWERED")

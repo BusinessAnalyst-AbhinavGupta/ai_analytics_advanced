@@ -91,7 +91,7 @@ class TestJuniorWorker(unittest.TestCase):
     def setUp(self):
         self.ctx = Ctx()
         self.worker = JuniorWorker(
-            self.ctx.store, FakeJunior(self.ctx.store, self.ctx.executor),
+            self.ctx.stores, FakeJunior(self.ctx.store, self.ctx.executor),
             tenant_id="t1", work_start="10:00", work_end="19:00",
             min_interval_minutes=60, observability=self.ctx.obs)
 

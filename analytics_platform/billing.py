@@ -14,28 +14,30 @@ from typing import Any, Dict, List, Optional
 from .config import Settings
 from .database import Store
 from .observability import Observability
+from .stores import TenantStoreProvider
 
 
 class BillingService:
-    def __init__(self, store: Store, settings: Optional[Settings] = None,
+    def __init__(self, stores: TenantStoreProvider, settings: Optional[Settings] = None,
                  observability: Optional[Observability] = None):
-        self.store = store
+        self.stores = stores
         self.settings = settings or Settings()
-        self.obs = observability or Observability(store)
+        self.obs = observability or Observability(stores)
 
     def usage(self, tenant_id: str) -> Dict[str, Any]:
-        row = self.store.query_one(
+        store = self.stores.for_tenant(tenant_id)
+        row = store.query_one(
             "SELECT COUNT(*) spans, "
             "SUM(CASE WHEN status='FAILED' THEN 1 ELSE 0 END) failed, "
             "AVG(duration_ms) avg_ms, "
             "SUM(COALESCE(tokens_in,0)) t_in, SUM(COALESCE(tokens_out,0)) t_out "
             "FROM telemetry WHERE tenant_id=?", (tenant_id,))
-        by_stage = self.store.query_all(
+        by_stage = store.query_all(
             "SELECT stage, COUNT(*) c, AVG(duration_ms) a FROM telemetry "
             "WHERE tenant_id=? GROUP BY stage ORDER BY stage", (tenant_id,))
-        runs = self.store.query_one(
+        runs = store.query_one(
             "SELECT COUNT(*) c FROM analysis_runs WHERE tenant_id=?", (tenant_id,))["c"]
-        answers = self.store.query_one(
+        answers = store.query_one(
             "SELECT COUNT(*) c FROM stakeholder_answers WHERE tenant_id=?", (tenant_id,))["c"]
         tin = int(row["t_in"] or 0)
         tout = int(row["t_out"] or 0)
@@ -56,23 +58,25 @@ class BillingService:
         }
 
     def platform_report(self) -> Dict[str, Any]:
-        rows = self.store.query_all(
-            "SELECT tenant_id, COUNT(*) spans, "
-            "SUM(CASE WHEN status='FAILED' THEN 1 ELSE 0 END) failed, "
-            "SUM(COALESCE(tokens_in,0)) t_in, SUM(COALESCE(tokens_out,0)) t_out "
-            "FROM telemetry GROUP BY tenant_id ORDER BY tenant_id")
-        tenants = self.store.rows_to_dicts(
-            self.store.query_all("SELECT id, name FROM tenants ORDER BY id"))
+        # The tenant registry is control-plane; usage/telemetry is per-tenant, so
+        # this aggregates one query per tenant against that tenant's own store
+        # rather than a single GROUP BY over one flat file.
+        tenants = self.stores.control.rows_to_dicts(
+            self.stores.control.query_all("SELECT id, name FROM tenants ORDER BY id"))
         by_tenant = {t["id"]: {"name": t["name"], "spans": 0, "cost_usd": 0.0} for t in tenants}
         total = 0.0
-        for r in rows:
-            tin = int(r["t_in"] or 0)
-            tout = int(r["t_out"] or 0)
+        for t in tenants:
+            store = self.stores.for_tenant(t["id"])
+            r = store.query_one(
+                "SELECT COUNT(*) spans, "
+                "SUM(COALESCE(tokens_in,0)) t_in, SUM(COALESCE(tokens_out,0)) t_out "
+                "FROM telemetry WHERE tenant_id=?", (t["id"],))
+            tin = int(r["t_in"] or 0) if r else 0
+            tout = int(r["t_out"] or 0) if r else 0
             cost = (tin / 1000.0) * self.settings.cost_per_1k_input \
                 + (tout / 1000.0) * self.settings.cost_per_1k_output
-            if r["tenant_id"] in by_tenant:
-                by_tenant[r["tenant_id"]]["spans"] = int(r["spans"] or 0)
-                by_tenant[r["tenant_id"]]["cost_usd"] = round(cost, 6)
+            by_tenant[t["id"]]["spans"] = int(r["spans"] or 0) if r else 0
+            by_tenant[t["id"]]["cost_usd"] = round(cost, 6)
             total += cost
         return {"as_of": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "tenants": list(by_tenant.values()),
