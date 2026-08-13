@@ -4,15 +4,19 @@
 
 **Goal:** Replace the broken ChromaDB retrieval path with a SQLite-native hybrid search (BM25 + dense vectors, fused by Reciprocal Rank Fusion) so the Company Brain actually returns relevant nodes for natural-language questions.
 
-**Architecture:** SQLite remains the single source of truth. Two new tables live beside `knowledge_nodes` in the same database and the same transaction: an FTS5 virtual table for lexical recall, and a `knowledge_vectors` BLOB table for dense recall. Retrieval runs a hard SQL pre-filter (tenant + status + kind) to produce a candidate id set, runs both recall legs restricted to those ids, fuses the two rankings with RRF, and re-ranks by stored confidence. ChromaDB is removed entirely.
+**Architecture:** SQLite remains the single source of truth, and **each tenant has its own database file** (see the prerequisite below). Two new tables live beside `knowledge_nodes` in that same tenant database and the same transaction: an FTS5 virtual table for lexical recall, and a `knowledge_vectors` BLOB table for dense recall. Retrieval runs a hard SQL pre-filter (status + kind, inside the tenant's own file) to produce a candidate id set, runs both recall legs restricted to those ids, fuses the two rankings with RRF, and re-ranks by stored confidence. ChromaDB is removed entirely.
 
 **Tech Stack:** Python 3.14, stdlib `sqlite3` (FTS5 already compiled in, verified), `numpy` 2.5.1, `sentence-transformers` 5.7.0, `unittest` + `pytest` runner.
+
+## Prerequisite
+
+**This plan depends on [Tenant Store Isolation](2026-08-13-tenant-store-isolation.md), which must land first.** That plan gives every tenant its own SQLite file and a `TenantStoreProvider` to resolve it. This plan's two tables live in `TENANT_SCHEMA`, and its index objects are constructed against a tenant's own store — neither exists until that plan is done.
 
 ## Global Constraints
 
 - **No new dependencies.** Every library this plan uses is already installed. `chromadb` is *removed* from `requirements-advanced.txt`.
 - **Core, not tenant.** All code lands in `analytics_platform/` — nothing tenant-specific. Per `AGENTS.md` Part 1 §2.
-- **Tenant isolation is a SQL invariant.** Every query against `knowledge_fts` and `knowledge_vectors` filters on `tenant_id` in SQL. No isolation may depend on a secondary index's metadata filter.
+- **Tenant isolation is the database file.** `knowledge_fts` and `knowledge_vectors` live in the tenant's own database, so a query physically cannot reach another company's rows. The `tenant_id` columns and filters this plan keeps are **defence-in-depth behind that boundary** — a second check, never the primary one. No isolation may ever depend on a secondary index's metadata filter.
 - **No silent failures.** Every `except` in code this plan touches must log at WARNING or higher via `logging.getLogger(__name__)`. A bare `except: pass` is a review rejection. This is the defect class that hid every bug in the current implementation.
 - **Embedding model is configuration, not a literal.** Per `AGENTS.md` Part 1 §1 ("LLM Configurability").
 - **Degrade loudly, never silently.** If embeddings are unavailable, retrieval falls back to lexical-only *and says so in the logs*.
@@ -47,10 +51,10 @@
 
 ### Task 1: Schema for the two recall legs
 
-**Why:** Both recall legs need somewhere to live inside the source-of-truth database. Putting them here — rather than in a separate store — is what removes the dual-write drift problem: an index write and a node write happen against the same connection, so they cannot diverge unnoticed. Existing databases must pick the tables up without being recreated, which is what `_migrate` is for.
+**Why:** Both recall legs need somewhere to live inside the source-of-truth database. Putting them there — rather than in a separate store — is what removes the dual-write drift problem: an index write and a node write happen against the same connection, so they cannot diverge unnoticed. They belong to `TENANT_SCHEMA` because a company's search index is that company's data. Existing databases must pick the tables up without being recreated, which is what `_migrate` is for.
 
 **Files:**
-- Modify: `analytics_platform/database.py:33-39` (add to `SCHEMA`), `analytics_platform/database.py:~140` (add to `_migrate`)
+- Modify: `analytics_platform/database.py` (add to `TENANT_SCHEMA`, beside `knowledge_nodes`), `analytics_platform/database.py` `_migrate`
 - Test: `tests/test_brain_index.py`
 
 **Interfaces:**
@@ -115,7 +119,7 @@ Expected: FAIL — `test_fts_table_exists` and `test_vectors_table_exists` asser
 
 - [ ] **Step 3: Add the tables to SCHEMA**
 
-In `analytics_platform/database.py`, immediately after the `knowledge_nodes` table definition inside the `SCHEMA` string, add:
+In `analytics_platform/database.py`, immediately after the `knowledge_nodes` table definition inside the **`TENANT_SCHEMA`** string, add:
 
 ```sql
 CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
@@ -135,26 +139,34 @@ CREATE TABLE IF NOT EXISTS knowledge_vectors (
 );
 ```
 
-And in the index block at the end of `SCHEMA`, add:
+And in the index block at the end of `TENANT_SCHEMA`, add:
 
 ```sql
 CREATE INDEX IF NOT EXISTS idx_kv_tenant ON knowledge_vectors(tenant_id);
 ```
 
+Both tables carry `tenant_id` even though they live in a single-tenant database. That is deliberate defence-in-depth: the file boundary is the isolation guarantee, and the column is a second check that costs one indexed comparison.
+
 - [ ] **Step 4: Make the migration non-destructive for existing databases**
 
-`CREATE TABLE IF NOT EXISTS` in `SCHEMA` already covers existing databases, because `init_db` runs `executescript(SCHEMA)` on every open. Add an explicit guard to `_migrate` in `analytics_platform/database.py` so a database created before FTS5 was available fails loudly rather than silently lacking search. Insert this inside `_migrate`, before the final `conn.commit()`:
+`CREATE TABLE IF NOT EXISTS` in `TENANT_SCHEMA` already covers existing databases, because `init_db` runs `executescript(schema)` on every open. Add an explicit guard to `_migrate` in `analytics_platform/database.py` so a tenant database created before FTS5 was available fails loudly rather than silently lacking search. Insert this inside `_migrate`, before the final `conn.commit()`:
 
 ```python
         # Brain retrieval: both recall legs must exist or search silently degrades.
-        have = {row[0] for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' "
-            "AND name IN ('knowledge_fts','knowledge_vectors')").fetchall()}
-        missing = {"knowledge_fts", "knowledge_vectors"} - have
-        if missing:
-            raise RuntimeError(
-                f"Brain retrieval tables missing after schema init: {sorted(missing)}. "
-                "SQLite may lack FTS5 support.")
+        # Only tenant databases carry them — a control store legitimately has neither,
+        # so key the check off knowledge_nodes rather than asserting unconditionally.
+        is_tenant_db = bool(conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='knowledge_nodes'").fetchone())
+        if is_tenant_db:
+            have = {row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name IN ('knowledge_fts','knowledge_vectors')").fetchall()}
+            missing = {"knowledge_fts", "knowledge_vectors"} - have
+            if missing:
+                raise RuntimeError(
+                    f"Brain retrieval tables missing after schema init: "
+                    f"{sorted(missing)}. SQLite may lack FTS5 support.")
 ```
 
 Note the existing `except Exception: pass` at the end of `_migrate` would swallow this. Change that handler to re-raise `RuntimeError` and log everything else:
@@ -1478,8 +1490,10 @@ git commit -m "feat(brain): hybrid search with SQL prefilter, replacing LIKE fal
 - Test: `tests/test_brain_retrieval.py` (append)
 
 **Interfaces:**
-- Consumes: `BrainIndex` (Tasks 4-5), `get_embedder` (Task 3).
-- Produces: every service that builds a `CompanyBrain` accepts an optional `index: Optional[BrainIndex] = None` constructor argument and threads it through. `make_context` builds exactly one `BrainIndex` and passes it to all of them.
+- Consumes: `BrainIndex` (Tasks 4-5), `get_embedder` (Task 3), `TenantStoreProvider` (prerequisite plan).
+- Produces: every service that builds a `CompanyBrain` accepts an `embedder: Optional[Embedder] = None` constructor argument and constructs the index per tenant inside `brain()`.
+
+**Note the shape change from per-tenant databases.** There is no single process-wide `BrainIndex` any more — an index is bound to one tenant's store, so it is built where the store is resolved. What *is* shared is the `Embedder`: loading a model costs seconds and hundreds of megabytes, so exactly one is created in `make_context` and handed to every service. `BrainIndex` itself is a thin wrapper over `(store, embedder)` and is cheap to construct per call.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1494,47 +1508,52 @@ class ContextWiringTest(unittest.TestCase):
     """
 
     def setUp(self):
+        import tempfile
+        from analytics_platform.api import make_context
         from analytics_platform.config import Settings
-        import tempfile, os
         self._tmp = tempfile.TemporaryDirectory()
-        self.settings = Settings(db_path=os.path.join(self._tmp.name, "t.db"),
-                                 embedding_enabled=False)
+        self.ctx = make_context(Settings(data_dir=self._tmp.name,
+                                         embedding_enabled=False))
+        self.ctx.tenants.create("t1", name="T1")
 
     def tearDown(self):
+        self.ctx.stores.close_all()
         self._tmp.cleanup()
 
     def test_every_brain_reader_has_an_index(self):
-        from analytics_platform.api import make_context
-        ctx = make_context(self.settings)
-        try:
-            for name in ("stakeholder", "junior", "onboarding", "research", "triage"):
-                service = getattr(ctx, name, None)
-                if service is None:
-                    continue
-                brain = service.brain("t1")
-                self.assertIsNotNone(
-                    brain.index, f"{name}.brain() has no BrainIndex — searches "
-                                f"will silently return recency order")
-        finally:
-            ctx.store.close()
+        for name in ("stakeholder", "junior", "onboarding", "research", "triage"):
+            service = getattr(self.ctx, name, None)
+            if service is None:
+                continue
+            brain = service.brain("t1")
+            self.assertIsNotNone(
+                brain.index, f"{name}.brain() has no BrainIndex — searches "
+                             f"will silently return recency order")
+
+    def test_each_brain_index_uses_its_own_tenants_store(self):
+        """An index bound to the wrong store would read another company's data."""
+        self.ctx.tenants.create("t2", name="T2")
+        a = self.ctx.stakeholder.brain("t1").index
+        b = self.ctx.stakeholder.brain("t2").index
+        self.assertNotEqual(a.store.db_path, b.store.db_path)
+
+    def test_the_embedder_is_shared_across_tenants(self):
+        """Loading a model per tenant would cost seconds and hundreds of MB each."""
+        self.ctx.tenants.create("t2", name="T2")
+        self.assertIs(self.ctx.stakeholder.brain("t1").index.embedder,
+                      self.ctx.stakeholder.brain("t2").index.embedder)
 
     def test_stakeholder_retrieves_an_approved_query_from_a_paraphrase(self):
-        from analytics_platform.api import make_context
-        ctx = make_context(self.settings)
-        try:
-            ctx.tenants.create("t1", name="T1")
-            brain = ctx.stakeholder.brain("t1")
-            node = brain.create(NodeKind.QUERY, "Checkout conversion rate",
-                                payload={"sql": "SELECT 1", "dialect": "duckdb"},
-                                summary="Share of sessions reaching payment")
-            brain.submit(node.id, by="junior")
-            brain.approve(node.id, by="senior")
+        brain = self.ctx.stakeholder.brain("t1")
+        node = brain.create(NodeKind.QUERY, "Checkout conversion rate",
+                            payload={"sql": "SELECT 1", "dialect": "duckdb"},
+                            summary="Share of sessions reaching payment")
+        brain.submit(node.id, by="junior")
+        brain.approve(node.id, by="senior")
 
-            q, d = ctx.stakeholder._retrieve(
-                "t1", "how is our checkout conversion doing?")
-            self.assertIn(node.id, [n.id for n in q])
-        finally:
-            ctx.store.close()
+        q, d = self.ctx.stakeholder._retrieve(
+            "t1", "how is our checkout conversion doing?")
+        self.assertIn(node.id, [n.id for n in q])
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -1542,22 +1561,27 @@ class ContextWiringTest(unittest.TestCase):
 Run: `.venv/bin/python -m pytest tests/test_brain_retrieval.py::ContextWiringTest -v`
 Expected: FAIL — `test_every_brain_reader_has_an_index` reports `stakeholder.brain() has no BrainIndex`.
 
-- [ ] **Step 3: Thread the index through each service**
+- [ ] **Step 3: Thread the shared embedder through each service**
 
-For each of these files, add `index: Optional[BrainIndex] = None` to the constructor signature, store it as `self.index = index`, and pass `index=self.index` into every `CompanyBrain(...)` call in that file.
+For each of these files, add `embedder: Optional[Embedder] = None` to the constructor signature, store it as `self.embedder = embedder`, and build the index where the tenant's store is resolved.
 
-`analytics_platform/stakeholder.py` — add the import and change `brain()`:
+`analytics_platform/stakeholder.py` — add the imports and change `brain()`:
 
 ```python
+from .brain.embedding import Embedder
 from .brain.index import BrainIndex
 ```
 
 ```python
     def brain(self, tenant_id: str) -> CompanyBrain:
-        return CompanyBrain(self.store, tenant_id, index=self.index)
+        # The index is bound to one tenant's database, so it is built where that
+        # store is resolved. The embedder is the expensive part and is shared.
+        store = self.stores.for_tenant(tenant_id)
+        return CompanyBrain(store, tenant_id,
+                            index=BrainIndex(store, embedder=self.embedder))
 ```
 
-Add `index: Optional[BrainIndex] = None` to `StakeholderService.__init__` (after `settings`) and set `self.index = index` alongside the other assignments.
+Add `embedder: Optional[Embedder] = None` to `StakeholderService.__init__` (after `settings`) and set `self.embedder = embedder` alongside the other assignments.
 
 Apply the identical change to:
 - `analytics_platform/onboarding.py:30` (`OnboardingService.brain`)
@@ -1565,12 +1589,13 @@ Apply the identical change to:
 - `analytics_platform/triage.py:30`
 - `analytics_platform/research.py:143`
 - `analytics_platform/anomaly.py:11` (the `self.brain = lambda t: ...` closure)
-- `analytics_platform/junior_worker.py:307` and `:483`
-- `analytics_platform/pipeline.py:39` — the default `brain_factory` becomes `lambda s, t: CompanyBrain(s, t, index=self.index)`
+- `analytics_platform/junior_worker.py:307` and `:483` — this class is per-tenant, so build one `BrainIndex` in `__init__` and reuse it
+- `analytics_platform/pipeline.py:39` — the default `brain_factory` becomes
+  `lambda s, t: CompanyBrain(s, t, index=BrainIndex(s, embedder=self.embedder))`
 
-- [ ] **Step 4: Build one index in make_context**
+- [ ] **Step 4: Build one shared embedder in make_context**
 
-In `analytics_platform/api.py`, replace the vector-store block (lines 280-287):
+In `analytics_platform/api.py`, replace the vector-store block:
 
 ```python
     try:
@@ -1584,9 +1609,10 @@ with:
 
 ```python
     from .brain.embedding import get_embedder
-    from .brain.index import BrainIndex
-    index = BrainIndex(store, embedder=get_embedder(settings))
-    if not index.embedding_available:
+    # One model for the whole process. Loading it costs seconds and hundreds of
+    # megabytes; the per-tenant BrainIndex objects that wrap it are free.
+    embedder = get_embedder(settings)
+    if not embedder.available:
         logger.warning("Brain retrieval running lexical-only: embeddings unavailable")
 ```
 
@@ -1599,13 +1625,16 @@ Replace the `brain_factory` line:
 with:
 
 ```python
-                        brain_factory=lambda s, t: CompanyBrain(s, t, index=index))
+                        brain_factory=lambda s, t: CompanyBrain(
+                            s, t, index=BrainIndex(s, embedder=embedder)))
 ```
 
-Then pass `index=index` into the constructors of `StakeholderService`, `OnboardingService`, `ResearchService`, `JuniorEngine`, and any other service updated in Step 3. Add near the top of `api.py` if not present:
+Then pass `embedder=embedder` into the constructors of `StakeholderService`, `OnboardingService`, `ResearchService`, `JuniorEngine`, and any other service updated in Step 3. Add near the top of `api.py` if not present:
 
 ```python
 import logging
+
+from .brain.index import BrainIndex
 
 logger = logging.getLogger(__name__)
 ```
@@ -1613,7 +1642,7 @@ logger = logging.getLogger(__name__)
 - [ ] **Step 5: Run test to verify it passes**
 
 Run: `.venv/bin/python -m pytest tests/test_brain_retrieval.py -v`
-Expected: 14 passed.
+Expected: 16 passed.
 
 - [ ] **Step 6: Run the full suite**
 
@@ -1723,16 +1752,22 @@ def _cmd_reindex(args) -> int:
     from .brain.embedding import get_embedder
     from .brain.index import BrainIndex
     from .config import Settings
-    from .database import Store
+    from .stores import TenantStoreProvider
 
     settings = Settings.from_env()
-    store = Store(settings.resolve_db_path())
-    index = BrainIndex(store, embedder=get_embedder(settings))
-    if not index.embedding_available:
-        print("warning: embeddings unavailable; rebuilding the lexical leg only")
-    total = index.reindex_tenant(args.tenant)
-    print(f"reindexed {total} node(s) for tenant {args.tenant}")
-    store.close()
+    stores = TenantStoreProvider(
+        control_db_path=settings.resolve_control_db_path(),
+        tenants_root=settings.resolve_tenants_root())
+    try:
+        # Reindexing a tenant means opening that tenant's own database.
+        store = stores.for_tenant(args.tenant)
+        index = BrainIndex(store, embedder=get_embedder(settings))
+        if not index.embedding_available:
+            print("warning: embeddings unavailable; rebuilding the lexical leg only")
+        total = index.reindex_tenant(args.tenant)
+        print(f"reindexed {total} node(s) for tenant {args.tenant} ({store.db_path})")
+    finally:
+        stores.close_all()
     return 0
 ```
 
@@ -1770,7 +1805,7 @@ Expected: all pass. The pre-existing failures baseline from Task 1 Step 6 should
 - [ ] **Step 9: Reindex the existing tenant and verify by hand**
 
 ```bash
-.venv/bin/python -m analytics_platform reindex --tenant DTDL
+.venv/bin/python -m analytics_platform reindex --tenant tnt_d23cd823d4c6
 ```
 
 Expected: a non-zero node count. Then confirm retrieval works on real data:
@@ -1781,14 +1816,14 @@ from analytics_platform.api import make_context
 from analytics_platform.config import Settings
 from analytics_platform.domain import NodeKind
 ctx = make_context(Settings.from_env())
-hits = ctx.stakeholder.brain('DTDL').search('checkout conversion', kind=NodeKind.QUERY)
+hits = ctx.stakeholder.brain('tnt_d23cd823d4c6').search('checkout conversion', kind=NodeKind.QUERY)
 print(f'{len(hits)} hit(s)')
 for n in hits[:5]:
     print(' -', n.title)
 "
 ```
 
-Expected: at least one hit if the tenant has approved QUERY nodes whose titles or summaries relate to the phrase. If it prints `0 hit(s)`, check `.venv/bin/python -m analytics_platform reindex` actually reported a non-zero count, and confirm the tenant has approved nodes with `ctx.stakeholder.brain('DTDL').stats()`.
+Expected: at least one hit if the tenant has approved QUERY nodes whose titles or summaries relate to the phrase. If it prints `0 hit(s)`, check `.venv/bin/python -m analytics_platform reindex` actually reported a non-zero count, and confirm the tenant has approved nodes with `ctx.stakeholder.brain('tnt_d23cd823d4c6').stats()`.
 
 - [ ] **Step 10: Clean up the orphaned Chroma directories**
 
@@ -1796,6 +1831,7 @@ These are no longer read by anything. Confirm the previous step worked before re
 
 ```bash
 rm -rf .chroma_db tenants/DTDL/.chroma_db
+# The legacy per-tenant Chroma dir goes too; vectors now live in tenant.db.
 ```
 
 - [ ] **Step 11: Commit**
@@ -1818,7 +1854,7 @@ After Task 9, confirm the whole plan landed:
 - [ ] `.venv/bin/python -m pytest tests/ -q` — all green
 - [ ] `grep -rni "chroma" analytics_platform/ tests/ requirements*.txt` — no matches
 - [ ] `grep -rn "except Exception:\s*$" analytics_platform/brain/` followed by a `pass` — no matches
-- [ ] `.venv/bin/python -m analytics_platform reindex --tenant DTDL` — non-zero count
+- [ ] `.venv/bin/python -m analytics_platform reindex --tenant tnt_d23cd823d4c6` — non-zero count
 - [ ] A paraphrased question against a real approved node returns that node (Task 9 Step 9)
 
 ## Follow-on plans

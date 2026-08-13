@@ -25,7 +25,7 @@
 - `analytics_platform/skills/contract.py` — contract parsing, binding resolution, satisfiability
 - `analytics_platform/skills/bindings.py` — loading a tenant's binding file
 - `tests/test_skill_substitution.py`, `tests/test_skill_registry.py`, `tests/test_skill_contract.py`, `tests/test_skill_integration.py`
-- `tenants/DTDL/skill_bindings.json` — the DTDL binding (gitignored)
+- `tenants/<tenant_id>/skill_bindings.json` — the DTDL binding (gitignored), beside that tenant's `tenant.db`
 - `.agents/skills/funnel-conversion-analysis/references/*.sql` — rewritten against contract names
 
 **Modified:**
@@ -801,7 +801,7 @@ git commit -m "feat(skills): data contracts and per-tenant schema bindings"
 
 **Files:**
 - Modify: `.agents/skills/funnel-conversion-analysis/SKILL.md`, both files in `.agents/skills/funnel-conversion-analysis/references/`
-- Create: `tenants/DTDL/skill_bindings.json`
+- Create: `tenants/<tenant_id>/skill_bindings.json`
 - Modify: `.gitignore`
 
 - [ ] **Step 1: Declare the contract**
@@ -857,7 +857,10 @@ Expected: no matches. Any hit is a value that still needs a contract placeholder
 
 - [ ] **Step 4: Write the DTDL binding**
 
-Create `tenants/DTDL/skill_bindings.json` using the values removed in Step 2:
+Create `tenants/tnt_d23cd823d4c6/skill_bindings.json` using the values removed in Step 2.
+(That directory is DTDL's tenant id — the same one holding its `tenant.db` after the
+tenant-store-isolation plan's `adopt-db` step. Bindings live beside the database they
+describe, so a company's whole footprint is one directory.)
 
 ```json
 {
@@ -895,8 +898,8 @@ tenants/*/skill_bindings.json
 Confirm the file is untracked:
 
 ```bash
-git status --porcelain tenants/DTDL/skill_bindings.json
-git check-ignore -v tenants/DTDL/skill_bindings.json
+git status --porcelain tenants/tnt_d23cd823d4c6/skill_bindings.json
+git check-ignore -v tenants/tnt_d23cd823d4c6/skill_bindings.json
 ```
 
 Expected: no output from the first (ignored), a matching rule from the second.
@@ -1206,7 +1209,7 @@ as CANDIDATE findings so the Brain compounds."
 
 - [ ] `.venv/bin/python -m pytest tests/ -q` — all green
 - [ ] `grep -rniE "eshop_data|es_events_v2|identifiers_page_name|internalemployee" .agents/ analytics_platform/` — no matches
-- [ ] `git check-ignore -v tenants/DTDL/skill_bindings.json` — matched by a rule
+- [ ] `git check-ignore -v tenants/tnt_d23cd823d4c6/skill_bindings.json` — matched by a rule
 - [ ] `SkillRegistry().load_skills()` returns only analytics skills
 - [ ] A tenant with no binding is offered no skills, and the answer path still returns a sensible fallback
 - [ ] A successful skill run creates exactly one `CANDIDATE` FINDING
