@@ -21,8 +21,8 @@ import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
 
-from .database import Store
 from .observability import Observability
+from .stores import TenantStoreProvider
 
 log = logging.getLogger("ai_analytics.scheduler")
 
@@ -31,15 +31,15 @@ _DEFAULT_INTERVAL_S = 60.0  # how often the loop wakes to check dues
 class Scheduler:
     """Background loop with persistent due-state. Offline-safe and testable."""
 
-    def __init__(self, store: Store, observability: Optional[Observability] = None,
+    def __init__(self, stores: TenantStoreProvider, observability: Optional[Observability] = None,
                  retention_days: int = 30, maintenance_interval_days: int = 7,
                  junior_worker: Optional[Any] = None,
                  anomaly: Optional[Any] = None,
                  pipeline: Optional[Any] = None,
                  interval_seconds: float = _DEFAULT_INTERVAL_S,
                  clock: Callable[[], float] = time.time):
-        self.store = store
-        self.obs = observability or Observability(store)
+        self.stores = stores
+        self.obs = observability or Observability(stores)
         self.retention_days = int(retention_days)
         self.maintenance_interval_days = int(maintenance_interval_days)
         self.junior = junior_worker
@@ -56,7 +56,7 @@ class Scheduler:
     # -- persisted due-state ------------------------------------------------- #
     def _get_state(self, key: str) -> Optional[float]:
         try:
-            row = self.store.query_one(
+            row = self.stores.control.query_one(
                 "SELECT value FROM scheduler_state WHERE key=?", (key,))
             if row and row["value"]:
                 return float(row["value"])
@@ -66,7 +66,7 @@ class Scheduler:
 
     def _set_state(self, key: str, value: float) -> None:
         try:
-            self.store.execute(
+            self.stores.control.execute(
                 "INSERT INTO scheduler_state (key,value,updated_at) VALUES (?,?,?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value, "
                 "updated_at=excluded.updated_at",

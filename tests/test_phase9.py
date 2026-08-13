@@ -27,7 +27,7 @@ class TestSchedulerRetention(unittest.TestCase):
     def setUp(self):
         self.ctx = Ctx()
         self.now = _ts(2026, 1, 15, 12, 0)  # fixed "now"
-        self.s = Scheduler(self.ctx.store, observability=self.ctx.obs,
+        self.s = Scheduler(self.ctx.stores, observability=self.ctx.obs,
                            retention_days=30, maintenance_interval_days=7)
 
     def tearDown(self):
@@ -52,7 +52,7 @@ class TestSchedulerRetention(unittest.TestCase):
         self.assertEqual(res["reason"], "due")
 
     def test_purge_removes_rows_older_than_retention(self):
-        store = self.ctx.store
+        store = self.ctx.stores.control  # api_logs is control-plane
         old_sql = ("INSERT INTO api_logs (ts,tenant_id,method,path,status,duration_ms,"
                    "actor,meta) VALUES (?,?,?,?,?,?,?,?)")
         store.execute(old_sql, (self._iso_for(45), "t1", "GET", "/health",

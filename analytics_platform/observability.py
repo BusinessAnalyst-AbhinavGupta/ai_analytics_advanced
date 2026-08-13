@@ -12,7 +12,8 @@ import uuid
 from contextlib import contextmanager
 from typing import Any, Dict, Iterator, List, Optional
 
-from .database import Store, dump_json, load_json
+from .database import dump_json, load_json
+from .stores import TenantStoreProvider
 
 
 def new_trace() -> str:
@@ -20,8 +21,8 @@ def new_trace() -> str:
 
 
 class Observability:
-    def __init__(self, store: Store, on_event: Optional[Any] = None):
-        self._store = store
+    def __init__(self, stores: TenantStoreProvider, on_event: Optional[Any] = None):
+        self.stores = stores
         self._inmem: List[Dict[str, Any]] = []
         self.on_event = on_event
 
@@ -63,25 +64,42 @@ class Observability:
         sql = ("INSERT INTO telemetry (ts,tenant_id,trace_id,stage,actor,resource,status,"
                "duration_ms,bytes_in,tokens_in,tokens_out,meta) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
         try:
-            self._store.execute(sql, (rec["ts"], tenant_id, trace_id, stage, actor, resource,
-                                      status, duration_ms, bytes_in, tokens_in, tokens_out, dump_json(rec["meta"])))
+            # telemetry is tenant-scoped: it lives in the company's own database.
+            # An empty tenant_id (platform-level events, e.g. the scheduler's
+            # maintenance ticks) has no tenant database to route to, so
+            # `for_tenant("")` raises and the write is skipped here — the record
+            # still lands in `self._inmem` and reaches `on_event` below.
+            self.stores.for_tenant(tenant_id).execute(
+                sql, (rec["ts"], tenant_id, trace_id, stage, actor, resource,
+                     status, duration_ms, bytes_in, tokens_in, tokens_out, dump_json(rec["meta"])))
         except Exception:
             pass  # observability must never break the pipeline
-            
+
         if self.on_event:
             try:
                 self.on_event(rec)
             except Exception:
                 pass
-                
+
         return trace_id
 
     # -- queries ---------------------------------------------------------------
+    def _telemetry_stores(self, tenant_id: str) -> List[Any]:
+        """The tenant store to query, or every known tenant's store when no
+        single tenant is named (telemetry has no cross-tenant table anymore)."""
+        if tenant_id:
+            return [self.stores.for_tenant(tenant_id)]
+        return [self.stores.for_tenant(t) for t in self.stores.known_tenants()]
+
     def recent(self, limit: int = 100, tenant_id: str = "") -> List[Dict[str, Any]]:
-        rows = self._store.query_all(
-            "SELECT * FROM telemetry WHERE (?='' OR tenant_id=?) ORDER BY id DESC LIMIT ?",
-            (tenant_id, tenant_id, limit))
-        out = [dict(r) for r in rows]
+        out: List[Dict[str, Any]] = []
+        for store in self._telemetry_stores(tenant_id):
+            rows = store.query_all(
+                "SELECT * FROM telemetry WHERE (?='' OR tenant_id=?) ORDER BY id DESC LIMIT ?",
+                (tenant_id, tenant_id, limit))
+            out.extend(dict(r) for r in rows)
+        out.sort(key=lambda r: (r.get("ts") or "", r.get("id") or 0), reverse=True)
+        out = out[:limit]
         for r in out:
             r["meta"] = load_json(r.get("meta"), {})
         return out
@@ -89,29 +107,46 @@ class Observability:
     def metrics(self, tenant_id: str = "") -> Dict[str, Any]:
         where = "WHERE (?='' OR tenant_id=?)"
         args = (tenant_id, tenant_id)
-        total = self._store.query_one(f"SELECT COUNT(*) c, "
-                                      f"SUM(CASE WHEN status='FAILED' THEN 1 ELSE 0 END) f, "
-                                      f"AVG(duration_ms) a FROM telemetry {where}", args)
-        by_stage = self._store.query_all(
-            f"SELECT stage, COUNT(*) c, AVG(duration_ms) a FROM telemetry {where} GROUP BY stage ORDER BY stage", args)
-        by_status = self._store.query_all(
-            f"SELECT status, COUNT(*) c FROM telemetry {where} GROUP BY status", args)
+        count = 0
+        failed = 0
+        duration_total = 0.0
+        by_stage: Dict[str, Dict[str, Any]] = {}
+        by_status: Dict[str, int] = {}
+        for store in self._telemetry_stores(tenant_id):
+            total = store.query_one(f"SELECT COUNT(*) c, "
+                                    f"SUM(CASE WHEN status='FAILED' THEN 1 ELSE 0 END) f, "
+                                    f"AVG(duration_ms) a FROM telemetry {where}", args)
+            if total and total["c"]:
+                count += total["c"]
+                failed += total["f"] or 0
+                duration_total += (total["a"] or 0.0) * total["c"]
+            for r in store.query_all(
+                    f"SELECT stage, COUNT(*) c, AVG(duration_ms) a FROM telemetry {where} "
+                    f"GROUP BY stage ORDER BY stage", args):
+                agg = by_stage.setdefault(r["stage"], {"count": 0, "duration_total": 0.0})
+                agg["count"] += r["c"]
+                agg["duration_total"] += (r["a"] or 0.0) * r["c"]
+            for r in store.query_all(
+                    f"SELECT status, COUNT(*) c FROM telemetry {where} GROUP BY status", args):
+                by_status[r["status"]] = by_status.get(r["status"], 0) + r["c"]
         return {
             "scope": tenant_id or "platform",
-            "total_spans": total["c"] if total else 0,
-            "failed_spans": total["f"] if total else 0,
-            "avg_span_ms": round(total["a"], 2) if total and total["a"] else 0.0,
-            "by_stage": [{"stage": r["stage"], "count": r["c"], "avg_ms": round(r["a"], 2)} for r in by_stage],
-            "by_status": [{"status": r["status"], "count": r["c"]} for r in by_status],
+            "total_spans": count,
+            "failed_spans": failed,
+            "avg_span_ms": round(duration_total / count, 2) if count else 0.0,
+            "by_stage": [{"stage": stage, "count": agg["count"],
+                         "avg_ms": round(agg["duration_total"] / agg["count"], 2) if agg["count"] else 0.0}
+                        for stage, agg in sorted(by_stage.items())],
+            "by_status": [{"status": status, "count": c} for status, c in by_status.items()],
         }
 
-    # -- Phase 9: owner-facing API logs (30-day retention) -------------------
+    # -- Phase 9: owner-facing API logs (30-day retention; control plane) ----
     def log_access(self, *, tenant_id: str = "", method: str = "", path: str = "",
                    status: int = 200, duration_ms: float = 0.0,
                    actor: str = "system", meta: Optional[Dict[str, Any]] = None) -> None:
         """Record one HTTP request in `api_logs` (owner-facing, never credentials)."""
         try:
-            self._store.execute(
+            self.stores.control.execute(
                 "INSERT INTO api_logs (ts,tenant_id,method,path,status,duration_ms,actor,meta) "
                 "VALUES (?,?,?,?,?,?,?,?)",
                 (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), tenant_id,
@@ -121,7 +156,7 @@ class Observability:
             pass  # logging must never break the API
 
     def logs(self, *, tenant_id: str = "", limit: int = 200) -> List[Dict[str, Any]]:
-        rows = self._store.query_all(
+        rows = self.stores.control.query_all(
             "SELECT * FROM api_logs WHERE (?='' OR tenant_id=?) ORDER BY id DESC LIMIT ?",
             (tenant_id, tenant_id, limit))
         out = [dict(r) for r in rows]
@@ -135,10 +170,10 @@ class Observability:
         now = now if now is not None else time.time()
         cutoff_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ",
                                     time.gmtime(now - retention_days * 86400.0))
-        cur = self._store.query_one(
+        cur = self.stores.control.query_one(
             "SELECT COUNT(*) c FROM api_logs WHERE ts < ?", (cutoff_iso,))
         count = cur["c"] if cur else 0
         if not dry_run and count:
-            self._store.execute("DELETE FROM api_logs WHERE ts < ?", (cutoff_iso,))
+            self.stores.control.execute("DELETE FROM api_logs WHERE ts < ?", (cutoff_iso,))
         return {"dry_run": dry_run, "retention_days": retention_days,
                 "cutoff": cutoff_iso, "expired_rows": count}
