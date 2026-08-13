@@ -130,7 +130,7 @@ class _ShimJunior:
     def stage(self, *a, **k):
         return {}
 
-    def catalog(self, *a, **k):
+    def refresh_catalog(self, *a, **k):
         return {"tables_known": 0, "tables_described": 0, "tables": []}
 
     def suggest_questions(self, *a, **k):

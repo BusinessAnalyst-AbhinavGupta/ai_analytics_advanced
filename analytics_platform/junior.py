@@ -405,7 +405,7 @@ class JuniorEngine:
         profile = self.tenants.get_company_profile(tenant_id)
         defs = self._usable_definitions(tenant_id)
         query_titles = [n.title for n in self.approved_queries(tenant_id)]
-        catalog = self.catalog(tenant_id)
+        catalog = self.refresh_catalog(tenant_id)
         catalog_columns = {c for t in catalog["tables"] for c in t["columns"]}
         targets = list(profile.targets) if profile else []
         suggestions = []

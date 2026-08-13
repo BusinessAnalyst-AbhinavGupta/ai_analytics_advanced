@@ -222,7 +222,7 @@ def cmd_junior(args: argparse.Namespace) -> int:
                        tenants=ctx.tenants, observability=ctx.observability,
                        settings=ctx.settings)
     _print("Junior readiness", eng.stage(args.tenant_id, limit=args.limit))
-    cat = eng.catalog(args.tenant_id)
+    cat = eng.refresh_catalog(args.tenant_id)
     _print("Catalog", {"tables_known": cat["tables_known"],
                        "tables_described": cat["tables_described"],
                        "tables": [{"table": t["table"], "columns": t["columns"][:12],
