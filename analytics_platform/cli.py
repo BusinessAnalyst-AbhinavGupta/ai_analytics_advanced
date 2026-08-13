@@ -9,6 +9,8 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
+import sqlite3
 import sys
 from typing import Any, Dict, List
 
@@ -242,20 +244,72 @@ TENANT_TABLES = (
 )
 
 
+def _open_source_readonly(source_path: str) -> sqlite3.Connection:
+    """Open a legacy database strictly for reading.
+
+    A migration tool must never write to the file it is migrating *from*. Going
+    through `Store` would run `init_db` against the source — creating missing
+    tables, applying ALTER TABLE migrations, and switching it to WAL mode, all
+    on the one file the operator most needs left untouched.
+    """
+    try:
+        conn = sqlite3.connect(f"file:{source_path}?mode=ro", uri=True)
+        conn.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchone()
+    except sqlite3.Error as exc:
+        raise ValueError(
+            f"could not open {source_path} read-only: {exc}. If it is a WAL "
+            f"database with an un-checkpointed -wal sidecar, checkpoint it "
+            f"first (sqlite3 {source_path} 'PRAGMA wal_checkpoint(TRUNCATE);') "
+            f"and retry — adopt-db will not open the source for writing."
+        ) from exc
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _sidecars(source_path: str) -> List[str]:
+    return [source_path + "-wal", source_path + "-shm"]
+
+
+def _tidy_source_sidecars(source_path: str, pre_existing: Dict[str, bool]) -> None:
+    """Remove the -wal/-shm files *our* read session created on the source.
+
+    A read-only connection to a WAL database still needs a -shm (and SQLite
+    materialises an empty -wal alongside it), and it cannot checkpoint or unlink
+    them on close because it holds no write permission on the database. A
+    sidecar that did not exist before we opened the file therefore holds no data
+    — the source had nothing un-checkpointed — so removing it restores the
+    directory to exactly the state we found it in. Sidecars that were already
+    present are left strictly alone: those may carry committed-but-un-checkpointed
+    pages, and deleting one would destroy source data.
+    """
+    for path in _sidecars(source_path):
+        if pre_existing.get(path):
+            continue
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            logger.warning("adopt_db: could not remove the sidecar %s it created "
+                           "on the source: %s", path, exc)
+
+
 def adopt_db(source_path: str, tenant_id: str, stores) -> int:
     """Move a legacy single-file database into the per-tenant layout.
 
     Refuses a source holding more than one tenant: splitting co-mingled companies
     is a data-ownership decision, not something a CLI should guess at.
-    """
-    from .database import SCHEMA_LEGACY_ALL, Store
 
-    legacy = Store(source_path, schema=SCHEMA_LEGACY_ALL)
+    The source is opened read-only; only the target stores are written to.
+    """
+    pre_existing = {p: os.path.exists(p) for p in _sidecars(source_path)}
+    legacy = _open_source_readonly(source_path)
     try:
         found = set()
         for table in TENANT_TABLES:
             try:
-                rows = legacy.query_all(f"SELECT DISTINCT tenant_id FROM {table}")
+                rows = legacy.execute(
+                    f"SELECT DISTINCT tenant_id FROM {table}").fetchall()
             except Exception as exc:
                 logger.warning("adopt_db: could not scan %s for tenant_id: %s", table, exc, exc_info=True)
                 continue
@@ -271,8 +325,9 @@ def adopt_db(source_path: str, tenant_id: str, stores) -> int:
         moved = 0
         for table in TENANT_TABLES:
             try:
-                rows = legacy.query_all(f"SELECT * FROM {table} WHERE tenant_id = ?",
-                                        (tenant_id,))
+                rows = legacy.execute(
+                    f"SELECT * FROM {table} WHERE tenant_id = ?",
+                    (tenant_id,)).fetchall()
             except Exception as exc:
                 logger.warning("adopt_db: could not copy rows from %s: %s", table, exc, exc_info=True)
                 continue
@@ -286,7 +341,14 @@ def adopt_db(source_path: str, tenant_id: str, stores) -> int:
             if table == "knowledge_nodes":
                 moved = len(rows)
 
-        for row in legacy.query_all("SELECT * FROM tenants WHERE id = ?", (tenant_id,)):
+        try:
+            registry_rows = legacy.execute(
+                "SELECT * FROM tenants WHERE id = ?", (tenant_id,)).fetchall()
+        except Exception as exc:
+            logger.warning("adopt_db: could not read the tenants registry row "
+                           "from %s: %s", source_path, exc, exc_info=True)
+            registry_rows = []
+        for row in registry_rows:
             data = dict(row)
             cols = ",".join(data)
             marks = ",".join("?" for _ in data)
@@ -296,6 +358,7 @@ def adopt_db(source_path: str, tenant_id: str, stores) -> int:
         return moved
     finally:
         legacy.close()
+        _tidy_source_sidecars(source_path, pre_existing)
 
 
 def _cmd_adopt_db(args: argparse.Namespace) -> int:

@@ -279,6 +279,28 @@ class AdoptDbTest(unittest.TestCase):
         rows = self.stores.for_tenant("acme").query_all("SELECT id FROM knowledge_nodes")
         self.assertEqual(len(rows), 1)
 
+    def test_the_source_file_is_not_modified(self):
+        """A migration tool must never write to the file it migrates from."""
+        from analytics_platform.cli import adopt_db
+        before = os.stat(self.legacy)
+        with open(self.legacy, "rb") as fh:
+            before_bytes = fh.read()
+        adopt_db(self.legacy, "acme", self.stores)
+        after = os.stat(self.legacy)
+        with open(self.legacy, "rb") as fh:
+            self.assertEqual(fh.read(), before_bytes)
+        self.assertEqual(before.st_mtime_ns, after.st_mtime_ns)
+
+    def test_adoption_adds_no_sidecars_to_the_source(self):
+        """Opening the source for writing leaves -wal/-shm files behind on it."""
+        from analytics_platform.cli import adopt_db
+        sidecars = (self.legacy + "-wal", self.legacy + "-shm")
+        before = {p: os.path.exists(p) for p in sidecars}
+        adopt_db(self.legacy, "acme", self.stores)
+        after = {p: os.path.exists(p) for p in sidecars}
+        self.assertEqual(before, after,
+                         "adopt_db changed which sidecars sit beside the source")
+
 
 if __name__ == "__main__":
     unittest.main()
