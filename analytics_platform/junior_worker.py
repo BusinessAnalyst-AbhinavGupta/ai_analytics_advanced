@@ -21,6 +21,7 @@ cookies anywhere. Offline-safe and deterministically testable.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from typing import Any, Dict, List, Optional
@@ -34,6 +35,10 @@ from .domain import (AnalysisRun, AnswerMode, NodeKind, ReviewStatus, RunStatus,
 from .execution.base import ExecutionContext
 from .markdown import write_analysis_md, write_workpaper_md
 from .observability import Observability, new_trace
+from .stores import TenantStoreProvider
+
+
+logger = logging.getLogger(__name__)
 
 
 def _mins_since(ts: Optional[float], now: float) -> float:
@@ -45,7 +50,7 @@ def _mins_since(ts: Optional[float], now: float) -> float:
 class JuniorWorker:
     """One-tenant, serial, rate-limited background junior (Phase 9)."""
 
-    def __init__(self, store: Store, junior: Any, *, tenant_id: str,
+    def __init__(self, stores: TenantStoreProvider, junior: Any, *, tenant_id: str,
                  work_start: str = "10:00", work_end: str = "19:00",
                  min_interval_minutes: int = 60,
                  daily_cap: int = 3,
@@ -56,9 +61,13 @@ class JuniorWorker:
                  clock: Any = time.time, default_tenant: Optional[str] = None,
                  reviews_dir: str = "data/reviews",
                  row_limit: int = 50000):
-        self.store = store
-        self.junior = junior            # JuniorEngine (suggestions + executor)
+        self.stores = stores
         self.tenant_id = tenant_id      # also exposed for Scheduler.tick
+        # One tenant per worker, so its own database is resolved once here.
+        # `scheduler_state` (rate/daily-cap bookkeeping) is control-plane and is
+        # accessed via `self.stores.control` explicitly where needed below.
+        self.store = stores.for_tenant(tenant_id)
+        self.junior = junior            # JuniorEngine (suggestions + executor)
         self.work_start = work_start
         self.work_end = work_end
         self.min_interval_minutes = int(min_interval_minutes)
@@ -71,7 +80,7 @@ class JuniorWorker:
         # low-level probes (exempt from daily/rate caps) up to `supporting_cap`.
         self.autopromote_cap = int(autopromote_cap)
         self.supporting_cap = int(supporting_cap)
-        self.obs = observability or Observability(store)
+        self.obs = observability or Observability(stores)
         self._clock = clock
         self._lock = threading.Lock()   # serial gate: one query at a time
         self.default_tenant = default_tenant or tenant_id
@@ -106,29 +115,44 @@ class JuniorWorker:
         return f"junior_daily:{self.tenant_id}:{day}"
 
     def _runs_today(self, now: float) -> int:
-        """Persisted count of junior analyses already run this UTC day."""
+        """Persisted count of junior analyses already run this UTC day.
+
+        `scheduler_state` is a control-plane table (one file, not per tenant);
+        this worker's own database has no such table."""
         try:
-            row = self.store.query_one(
+            row = self.stores.control.query_one(
                 "SELECT value FROM scheduler_state WHERE key=?", (self._daily_key(now),))
             if row and row["value"]:
                 return int(float(row["value"]))
         except Exception:  # noqa: BLE001 - best-effort
-            pass
+            # Falls back to 0, which reads as "nothing has run today" and so
+            # re-opens the daily cap for this tenant.
+            logger.warning(
+                "could not read today's junior run count for tenant %r from the "
+                "control store; treating it as 0, which leaves the %d/day cap "
+                "unenforced for this tick", self.tenant_id, self.daily_cap,
+                exc_info=True)
         return 0
 
     def _last_ran_ts(self) -> Optional[float]:
         try:
-            row = self.store.query_one(
+            row = self.stores.control.query_one(
                 "SELECT value FROM scheduler_state WHERE key=?", (self._state_key(),))
             if row and row["value"]:
                 return float(row["value"])
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001 - best-effort
+            # Falls back to None, which _mins_since reads as "never ran", so the
+            # minimum-interval throttle stops applying.
+            logger.warning(
+                "could not read the last junior run timestamp for tenant %r from "
+                "the control store; treating it as never-run, which leaves the "
+                "%d-minute interval throttle unenforced for this tick",
+                self.tenant_id, self.min_interval_minutes, exc_info=True)
         return None
 
     def _record_ran(self, now: float) -> None:
         try:
-            self.store.execute(
+            self.stores.control.execute(
                 "INSERT INTO scheduler_state (key,value,updated_at) VALUES (?,?,?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value, "
                 "updated_at=excluded.updated_at",
@@ -137,15 +161,21 @@ class JuniorWorker:
 
             # persist the per-UTC-day count so restarts never reset the 3/day cap
             dkey = self._daily_key(now)
-            self.store.execute(
+            self.stores.control.execute(
                 "INSERT INTO scheduler_state (key,value,updated_at) VALUES (?,?,?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value, "
                 "updated_at=excluded.updated_at",
                 (dkey, str(self._runs_today(now) + 1),
                  time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())))
-        except Exception:
-            pass
-        # -- pipeline -------------------------------------------------------- #
+        except Exception:  # noqa: BLE001 - best-effort
+            # The run happened but was not booked against the caps: both the
+            # 1/hour interval and the N/day count now under-report it.
+            logger.warning(
+                "could not record a junior run for tenant %r in the control "
+                "store; this run is not booked against the interval or daily "
+                "caps", self.tenant_id, exc_info=True)
+
+    # -- pipeline -------------------------------------------------------- #
     def pick_problem_statement(self) -> Dict[str, Any]:
         """Pick the next problem statement across the two-tier taxonomy (CP-15).
 
@@ -356,6 +386,18 @@ class JuniorWorker:
         t0 = time.perf_counter()
         now = now if now is not None else self._clock()
         tid = tenant_id or self.tenant_id
+        # Defend the class invariant: this worker's self.store was resolved once,
+        # in __init__, for self.tenant_id only (see the constructor's comment). A
+        # caller passing a different tenant_id here would otherwise have every
+        # subsequent read/write in this method use that OTHER tenant's identity
+        # (tid) while physically hitting THIS worker's store -- a cross-tenant
+        # write. Refuse rather than silently writing to the wrong database.
+        if tid != self.tenant_id:
+            logger.warning(
+                "run_cycle called for tenant %r but this worker is bound to "
+                "tenant %r; refusing rather than writing to the wrong store",
+                tid, self.tenant_id)
+            return {"ran": False, "tenant_id": tid, "reason": "wrong_tenant"}
         # R6 gate: the operator can turn the junior analyst off entirely. When off,
         # the worker never asks/solves, regardless of window/rate.
         try:

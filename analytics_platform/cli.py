@@ -8,10 +8,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
+import os
+import sqlite3
 import sys
 from typing import Any, Dict, List
 
 from .api import bootstrap_demo, make_context
+
+logger = logging.getLogger(__name__)
 
 
 def _print(label: str, obj: Any) -> None:
@@ -164,7 +169,7 @@ def cmd_review(args: argparse.Namespace) -> int:
     except KeyError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
-    svc = TriageService(ctx.store, ctx.observability)
+    svc = TriageService(ctx.stores, ctx.observability)
     kind = _parse_kind(args.kind)
 
     if args.approve:
@@ -218,7 +223,7 @@ def cmd_junior(args: argparse.Namespace) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 1
     executor = _resolve_junior_executor(ctx.settings, ctx.executor or SamplerExecutor())
-    eng = JuniorEngine(ctx.store, executor=executor,
+    eng = JuniorEngine(ctx.stores, executor=executor,
                        tenants=ctx.tenants, observability=ctx.observability,
                        settings=ctx.settings)
     _print("Junior readiness", eng.stage(args.tenant_id, limit=args.limit))
@@ -228,6 +233,188 @@ def cmd_junior(args: argparse.Namespace) -> int:
                        "tables": [{"table": t["table"], "columns": t["columns"][:12],
                                    "error": t["error"]} for t in cat["tables"]]})
     _print("Suggested questions", eng.suggest_questions(args.tenant_id))
+    return 0
+
+
+TENANT_TABLES = (
+    "company_profiles", "data_sources", "knowledge_nodes", "questions",
+    "analysis_runs", "telemetry", "stakeholder_answers", "stakeholder_feedback",
+    "research_sources", "research_docs", "audit_log", "company_profile_history",
+    "analyst_configs", "analyst_config_history", "kpis",
+)
+
+
+def _open_source_readonly(source_path: str) -> sqlite3.Connection:
+    """Open a legacy database strictly for reading.
+
+    A migration tool must never write to the file it is migrating *from*. Going
+    through `Store` would run `init_db` against the source — creating missing
+    tables, applying ALTER TABLE migrations, and switching it to WAL mode, all
+    on the one file the operator most needs left untouched.
+    """
+    try:
+        conn = sqlite3.connect(f"file:{source_path}?mode=ro", uri=True)
+        conn.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchone()
+    except sqlite3.Error as exc:
+        raise ValueError(
+            f"could not open {source_path} read-only: {exc}. If it is a WAL "
+            f"database with an un-checkpointed -wal sidecar, checkpoint it "
+            f"first (sqlite3 {source_path} 'PRAGMA wal_checkpoint(TRUNCATE);') "
+            f"and retry — adopt-db will not open the source for writing."
+        ) from exc
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _sidecars(source_path: str) -> List[str]:
+    return [source_path + "-wal", source_path + "-shm"]
+
+
+def _tidy_source_sidecars(source_path: str, pre_existing: Dict[str, bool]) -> None:
+    """Remove the -wal/-shm files *our* read session created on the source.
+
+    A read-only connection to a WAL database still needs a -shm (and SQLite
+    materialises an empty -wal alongside it), and it cannot checkpoint or unlink
+    them on close because it holds no write permission on the database. A
+    sidecar that did not exist before we opened the file therefore holds no data
+    — the source had nothing un-checkpointed — so removing it restores the
+    directory to exactly the state we found it in. Sidecars that were already
+    present are left strictly alone: those may carry committed-but-un-checkpointed
+    pages, and deleting one would destroy source data.
+    """
+    for path in _sidecars(source_path):
+        if pre_existing.get(path):
+            continue
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            logger.warning("adopt_db: could not remove the sidecar %s it created "
+                           "on the source: %s", path, exc)
+
+
+def adopt_db(source_path: str, tenant_id: str, stores,
+             allow_orphan_rows: bool = False) -> int:
+    """Move a legacy single-file database into the per-tenant layout.
+
+    Refuses a source holding more than one tenant: splitting co-mingled companies
+    is a data-ownership decision, not something a CLI should guess at. Refuses,
+    for the same reason, a source holding rows with a NULL or empty `tenant_id`:
+    the copy is driven by `WHERE tenant_id = ?`, so those rows would be dropped
+    on the floor without a word. Pass `allow_orphan_rows=True` (`--allow-orphan-rows`)
+    to proceed anyway, having decided the orphans are expendable — the count and
+    the tables are reported either way.
+
+    The source is opened read-only; only the target stores are written to.
+    """
+    # Before this check a typo'd --source was the worst possible outcome for a
+    # once-in-production command: silent success on the wrong input. The old code
+    # went straight to Store(), which CREATES the file if it is missing, then
+    # found no tenants, copied nothing, and printed "adopted 0 knowledge node(s)"
+    # with exit code 0.
+    if not os.path.exists(source_path):
+        raise ValueError(f"source database does not exist: {source_path}")
+
+    pre_existing = {p: os.path.exists(p) for p in _sidecars(source_path)}
+    legacy = _open_source_readonly(source_path)
+    try:
+        found = set()
+        orphans: Dict[str, int] = {}
+        for table in TENANT_TABLES:
+            try:
+                # GROUP BY gives the distinct ids and their row counts in one
+                # pass, and SQLite groups NULL as its own bucket — so the same
+                # scan that powers the multi-tenant refusal also sees the rows
+                # the WHERE tenant_id = ? copy below would silently leave behind.
+                rows = legacy.execute(
+                    f"SELECT tenant_id, COUNT(*) AS n FROM {table} "
+                    f"GROUP BY tenant_id").fetchall()
+            except Exception as exc:
+                logger.warning("adopt_db: could not scan %s for tenant_id: %s", table, exc, exc_info=True)
+                continue
+            for row in rows:
+                if row["tenant_id"]:
+                    found.add(row["tenant_id"])
+                else:
+                    orphans[table] = orphans.get(table, 0) + row["n"]
+        extra = found - {tenant_id}
+        if extra:
+            raise ValueError(
+                f"{source_path} holds data for {sorted(found)}, not just "
+                f"{tenant_id!r}. Each tenant is a separate company; split this "
+                f"file by hand before adopting it.")
+
+        if orphans:
+            total = sum(orphans.values())
+            breakdown = ", ".join(f"{t}={n}" for t, n in sorted(orphans.items()))
+            detail = (f"{source_path} holds {total} row(s) with a NULL or empty "
+                      f"tenant_id ({breakdown}). The copy is driven by "
+                      f"WHERE tenant_id = ?, so these rows would not be carried "
+                      f"over.")
+            if not allow_orphan_rows:
+                raise ValueError(
+                    detail + " Assign them an owner in the source, or re-run "
+                    "with --allow-orphan-rows to adopt without them.")
+            logger.warning("adopt_db: %s Proceeding without them "
+                           "(--allow-orphan-rows).", detail)
+            print(f"WARNING: {detail} Proceeding without them "
+                  f"(--allow-orphan-rows).")
+
+        target = stores.for_tenant(tenant_id)
+        moved = 0
+        for table in TENANT_TABLES:
+            try:
+                rows = legacy.execute(
+                    f"SELECT * FROM {table} WHERE tenant_id = ?",
+                    (tenant_id,)).fetchall()
+            except Exception as exc:
+                logger.warning("adopt_db: could not copy rows from %s: %s", table, exc, exc_info=True)
+                continue
+            for row in rows:
+                data = dict(row)
+                cols = ",".join(data)
+                marks = ",".join("?" for _ in data)
+                target.execute(
+                    f"INSERT OR REPLACE INTO {table} ({cols}) VALUES ({marks})",
+                    tuple(data.values()))
+            if table == "knowledge_nodes":
+                moved = len(rows)
+
+        try:
+            registry_rows = legacy.execute(
+                "SELECT * FROM tenants WHERE id = ?", (tenant_id,)).fetchall()
+        except Exception as exc:
+            logger.warning("adopt_db: could not read the tenants registry row "
+                           "from %s: %s", source_path, exc, exc_info=True)
+            registry_rows = []
+        for row in registry_rows:
+            data = dict(row)
+            cols = ",".join(data)
+            marks = ",".join("?" for _ in data)
+            stores.control.execute(
+                f"INSERT OR REPLACE INTO tenants ({cols}) VALUES ({marks})",
+                tuple(data.values()))
+        return moved
+    finally:
+        legacy.close()
+        _tidy_source_sidecars(source_path, pre_existing)
+
+
+def _cmd_adopt_db(args: argparse.Namespace) -> int:
+    from .config import Settings
+    from .stores import TenantStoreProvider
+    settings = Settings.from_env()
+    stores = TenantStoreProvider(
+        control_db_path=settings.resolve_control_db_path(),
+        tenants_root=settings.resolve_tenants_root())
+    try:
+        moved = adopt_db(args.source, args.tenant, stores,
+                         allow_orphan_rows=getattr(args, "allow_orphan_rows", False))
+        print(f"adopted {moved} knowledge node(s) into "
+              f"{stores.tenant_db_path(args.tenant)}")
+    finally:
+        stores.close_all()
     return 0
 
 
@@ -278,6 +465,14 @@ def build_parser() -> argparse.ArgumentParser:
     jn.add_argument("tenant_id")
     jn.add_argument("--limit", type=int, default=50, help="max approved queries to reproduce")
     jn.set_defaults(func=cmd_junior)
+    p_adopt = sub.add_parser("adopt-db",
+                             help="move a legacy single-tenant database into tenants/")
+    p_adopt.add_argument("--source", required=True)
+    p_adopt.add_argument("--tenant", required=True)
+    p_adopt.add_argument("--allow-orphan-rows", action="store_true",
+                         help="adopt even though the source holds rows with a "
+                              "NULL/empty tenant_id; those rows are NOT copied")
+    p_adopt.set_defaults(func=_cmd_adopt_db)
     return p
 
 

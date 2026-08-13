@@ -23,9 +23,9 @@ from tests.helpers import make_ctx
 def app_ctx(warehouse=None):
     """Wrap the test Ctx into the AppContext `create_app` expects."""
     base = make_ctx(warehouse=warehouse)
-    onboarding = OnboardingService(base.store, tenants=base.tenants,
+    onboarding = OnboardingService(base.stores, tenants=base.tenants,
                                    pipeline=base.pipeline, observability=base.obs)
-    ctx = AppContext(settings=base.settings, store=base.store, tenants=base.tenants,
+    ctx = AppContext(settings=base.settings, stores=base.stores, tenants=base.tenants,
                      observability=base.obs, pipeline=base.pipeline, executor=base.executor,
                      onboarding=onboarding)
     return ctx, base
@@ -300,6 +300,25 @@ class TestApiObservability(unittest.TestCase):
         self.assertIn("min_interval_minutes", j)
         self.assertEqual(j["min_interval_minutes"], 60)
 
+    def test_junior_run_unknown_tenant_404_no_store_created(self):
+        # The background singleton worker is bound to self.tid; passing a
+        # *different*, non-existent tenant_id must 404 -- not silently build
+        # a fresh worker/store for a tenant that was never registered, and a
+        # malformed id must surface as a clean 404 (via tenant_or_404), not an
+        # uncaught ValueError from validate_tenant_id inside stores.for_tenant.
+        import os
+        unknown = "nope-unknown-tenant"
+        db_path = self.ctx.stores.tenant_db_path(unknown)
+        self.assertFalse(os.path.exists(db_path))
+        with self.assertRaises(HTTPException) as cm:
+            self._run("POST", "/observability/junior/run", unknown)
+        self.assertEqual(cm.exception.status_code, 404)
+        # the tenant store must not have been created as a side effect
+        self.assertFalse(os.path.exists(db_path))
+        with self.assertRaises(HTTPException) as cm:
+            self._run("POST", "/observability/junior/run", "../../etc")
+        self.assertEqual(cm.exception.status_code, 404)
+
 
 class TestMakeContext(unittest.TestCase):
     def test_make_context_uses_resolve_vector_path_custom_data_dir(self):
@@ -308,7 +327,10 @@ class TestMakeContext(unittest.TestCase):
 
         settings = Settings(data_dir="/tmp/test_tenant")
 
-        with patch("analytics_platform.api.Store"), \
+        # Patch the Store the *provider* constructs (analytics_platform.stores),
+        # not api.Store — otherwise make_context really opens control.db on disk
+        # and scatters it outside the test's control.
+        with patch("analytics_platform.stores.Store"), \
              patch("analytics_platform.brain.vector_store.BrainVectorStore") as mock_vector_store:
             ctx = make_context(settings=settings)
             mock_vector_store.assert_called_once_with("/tmp/test_tenant/.chroma_db")
@@ -319,7 +341,9 @@ class TestMakeContext(unittest.TestCase):
 
         settings = Settings(data_dir="")
 
-        with patch("analytics_platform.api.Store"), \
+        # As above: patching analytics_platform.stores.Store keeps the default
+        # (data_dir="") case from writing data/control.db into the repo tree.
+        with patch("analytics_platform.stores.Store"), \
              patch("analytics_platform.brain.vector_store.BrainVectorStore") as mock_vector_store:
             ctx = make_context(settings=settings)
             mock_vector_store.assert_called_once_with(".chroma_db")

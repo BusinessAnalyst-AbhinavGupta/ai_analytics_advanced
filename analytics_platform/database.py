@@ -7,17 +7,53 @@ later phase this can be swapped for PostgreSQL without changing call sites.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 import threading
 from typing import Any, Dict, List, Optional
 
 _LOCK = threading.RLock()
+_LOG = logging.getLogger(__name__)
 
-SCHEMA = """
+CONTROL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS tenants (
     id TEXT PRIMARY KEY, name TEXT, region TEXT, llm_provider TEXT,
     retention_days INTEGER, status TEXT, created_at TEXT, purpose TEXT
+);
+CREATE TABLE IF NOT EXISTS scheduler_state (
+    key TEXT PRIMARY KEY, value TEXT, updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS api_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT, tenant_id TEXT, method TEXT, path TEXT, status INTEGER,
+    duration_ms REAL, actor TEXT, meta TEXT
+);
+CREATE TABLE IF NOT EXISTS auth_principals (
+    id TEXT PRIMARY KEY, tenant_id TEXT, role TEXT, name TEXT, email TEXT,
+    scopes TEXT, created_at TEXT
+);
+-- Distinctly named from the tenant-plane `audit_log` below (not a shared
+-- name across schemas -- that would reintroduce the "which audit_log?"
+-- ambiguity the schema split exists to remove). Most audit events are
+-- tenant activity and belong in the tenant's own database; full tenant
+-- deletion (retention.py) is the one record that must outlive the tenant's
+-- own (removed) file, so it is written here instead (Task 5).
+CREATE TABLE IF NOT EXISTS tenant_lifecycle_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT, tenant_id TEXT, actor TEXT, role TEXT, action TEXT,
+    resource TEXT, outcome TEXT, detail TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_api_logs_ts ON api_logs(ts);
+CREATE INDEX IF NOT EXISTS idx_api_logs_tenant ON api_logs(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_tenant_lifecycle_log_tenant ON tenant_lifecycle_log(tenant_id);
+"""
+
+TENANT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS db_owner (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    tenant_id TEXT NOT NULL,
+    bound_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS company_profiles (
     tenant_id TEXT PRIMARY KEY,
@@ -76,10 +112,6 @@ CREATE TABLE IF NOT EXISTS research_docs (
     source_id TEXT, credibility TEXT, snippet TEXT, claims TEXT, origin TEXT,
     status TEXT, created_at TEXT
 );
-CREATE TABLE IF NOT EXISTS auth_principals (
-    id TEXT PRIMARY KEY, tenant_id TEXT, role TEXT, name TEXT, email TEXT,
-    scopes TEXT, created_at TEXT
-);
 CREATE TABLE IF NOT EXISTS audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts TEXT, tenant_id TEXT, actor TEXT, role TEXT, action TEXT,
@@ -89,14 +121,6 @@ CREATE TABLE IF NOT EXISTS company_profile_history (
     id TEXT PRIMARY KEY, tenant_id TEXT, version INTEGER,
     snapshot TEXT, changed_by TEXT, created_at TEXT
 );
-CREATE TABLE IF NOT EXISTS api_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts TEXT, tenant_id TEXT, method TEXT, path TEXT, status INTEGER,
-    duration_ms REAL, actor TEXT, meta TEXT
-);
-CREATE TABLE IF NOT EXISTS scheduler_state (
-    key TEXT PRIMARY KEY, value TEXT, updated_at TEXT
-);
 CREATE TABLE IF NOT EXISTS analyst_configs (
     tenant_id TEXT PRIMARY KEY, config TEXT, updated_at TEXT
 );
@@ -105,11 +129,9 @@ CREATE TABLE IF NOT EXISTS analyst_config_history (
     snapshot TEXT, changed_by TEXT, created_at TEXT
 );
 CREATE TABLE IF NOT EXISTS kpis (
-    id TEXT PRIMARY KEY, tenant_id TEXT, name TEXT, description TEXT, 
+    id TEXT PRIMARY KEY, tenant_id TEXT, name TEXT, description TEXT,
     sql_query TEXT, frequency TEXT, is_active INTEGER, created_at TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_api_logs_ts ON api_logs(ts);
-CREATE INDEX IF NOT EXISTS idx_api_logs_tenant ON api_logs(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_kn_tenant ON knowledge_nodes(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_runs_tenant ON analysis_runs(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_tel_tenant ON telemetry(tenant_id);
@@ -123,6 +145,11 @@ CREATE INDEX IF NOT EXISTS idx_ach_tenant ON analyst_config_history(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_kpis_tenant ON kpis(tenant_id);
 """
 
+# The pre-split single-file schema. Retained ONLY so `adopt-db` can open a legacy
+# database. Never pass this to a Store that will be written to — a file with both
+# planes is exactly the co-mingling this design removes.
+SCHEMA_LEGACY_ALL = CONTROL_SCHEMA + TENANT_SCHEMA
+
 
 def get_conn(db_path: str) -> sqlite3.Connection:
     parent = os.path.dirname(os.path.abspath(db_path))
@@ -135,9 +162,11 @@ def get_conn(db_path: str) -> sqlite3.Connection:
     return conn
 
 
-def init_db(conn: sqlite3.Connection) -> None:
+def init_db(conn: sqlite3.Connection, schema: str) -> None:
+    """Apply one plane's schema. `schema` is required: defaulting it to the
+    combined legacy schema is how a database ends up holding both planes."""
     with _LOCK:
-        conn.executescript(SCHEMA)
+        conn.executescript(schema)
         conn.commit()
         _migrate(conn)
 
@@ -147,23 +176,30 @@ def _migrate(conn: sqlite3.Connection) -> None:
 
     CREATE TABLE IF NOT EXISTS never adds columns to an already-created table, so
     add the CP-12 columns to `analysis_runs` when they are missing."""
+    def _has(table: str) -> bool:
+        return bool(conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            (table,)).fetchone())
+
     try:
-        cols = {row[1] for row in conn.execute("PRAGMA table_info(analysis_runs)").fetchall()}
-        for col in ("insights", "assumptions"):
-            if col not in cols:
-                conn.execute(f"ALTER TABLE analysis_runs ADD COLUMN {col} TEXT")
-                
+        if _has("analysis_runs"):
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(analysis_runs)").fetchall()}
+            for col in ("insights", "assumptions"):
+                if col not in cols:
+                    conn.execute(f"ALTER TABLE analysis_runs ADD COLUMN {col} TEXT")
+            # CP-15: two-tier junior (low/high) + supporting-workpaper linkage
+            for col in ("level", "category", "supportive_of"):
+                if col not in cols:
+                    conn.execute(f"ALTER TABLE analysis_runs ADD COLUMN {col} TEXT")
+
         # CP-15: Stakeholder queries_run migration
-        sa_cols = {row[1] for row in conn.execute("PRAGMA table_info(stakeholder_answers)").fetchall()}
-        if "queries_run" not in sa_cols:
-            conn.execute("ALTER TABLE stakeholder_answers ADD COLUMN queries_run TEXT")
-        # CP-15: two-tier junior (low/high) + supporting-workpaper linkage
-        for col in ("level", "category", "supportive_of"):
-            if col not in cols:
-                conn.execute(f"ALTER TABLE analysis_runs ADD COLUMN {col} TEXT")
+        if _has("stakeholder_answers"):
+            sa_cols = {row[1] for row in conn.execute("PRAGMA table_info(stakeholder_answers)").fetchall()}
+            if "queries_run" not in sa_cols:
+                conn.execute("ALTER TABLE stakeholder_answers ADD COLUMN queries_run TEXT")
         conn.commit()
     except Exception:  # noqa: BLE001 - migration must never block startup
-        pass
+        _LOG.warning("Database migration failed; continuing startup", exc_info=True)
 
 
 def dump_json(obj: Any) -> str:
@@ -180,12 +216,24 @@ def load_json(raw: Optional[str], default: Any = None) -> Any:
 
 
 class Store:
-    """Thin wrapper: safe single write + serialization helpers."""
+    """Thin wrapper: safe single write + serialization helpers.
 
-    def __init__(self, db_path: str):
+    A Store is one SQLite file. Tenant stores hold one company's data and nothing
+    else; the control store holds the cross-tenant registry.
+
+    `schema` is REQUIRED. It used to default to `SCHEMA_LEGACY_ALL`, so
+    `Store("anything.db")` silently produced a file holding both planes at once —
+    the exact co-mingling this design exists to prevent. Every production caller
+    now goes through `TenantStoreProvider`, which always passes `CONTROL_SCHEMA`
+    or `TENANT_SCHEMA` explicitly, so nothing needs the permissive default and
+    keeping it only leaves the footgun loaded.
+    """
+
+    def __init__(self, db_path: str, schema: str):
         self.db_path = db_path
+        self.schema = schema
         self.conn = get_conn(db_path)
-        init_db(self.conn)
+        init_db(self.conn, self.schema)
 
     def connect(self) -> sqlite3.Connection:
         return self.conn

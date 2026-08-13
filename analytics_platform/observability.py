@@ -7,12 +7,16 @@ credentials, cookies, or sensitive rows.
 """
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from contextlib import contextmanager
 from typing import Any, Dict, Iterator, List, Optional
 
-from .database import Store, dump_json, load_json
+from .database import dump_json, load_json
+from .stores import TenantIsolationError, TenantStoreProvider
+
+logger = logging.getLogger(__name__)
 
 
 def new_trace() -> str:
@@ -20,8 +24,8 @@ def new_trace() -> str:
 
 
 class Observability:
-    def __init__(self, store: Store, on_event: Optional[Any] = None):
-        self._store = store
+    def __init__(self, stores: TenantStoreProvider, on_event: Optional[Any] = None):
+        self.stores = stores
         self._inmem: List[Dict[str, Any]] = []
         self.on_event = on_event
 
@@ -63,25 +67,89 @@ class Observability:
         sql = ("INSERT INTO telemetry (ts,tenant_id,trace_id,stage,actor,resource,status,"
                "duration_ms,bytes_in,tokens_in,tokens_out,meta) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
         try:
-            self._store.execute(sql, (rec["ts"], tenant_id, trace_id, stage, actor, resource,
-                                      status, duration_ms, bytes_in, tokens_in, tokens_out, dump_json(rec["meta"])))
-        except Exception:
-            pass  # observability must never break the pipeline
-            
+            # telemetry is tenant-scoped: it lives in the company's own database.
+            # An empty tenant_id (platform-level events, e.g. the scheduler's
+            # maintenance ticks) has no tenant database to route to, so
+            # `for_tenant("")` raises and the write is skipped here — the record
+            # still lands in `self._inmem` and reaches `on_event` below.
+            self.stores.for_tenant(tenant_id).execute(
+                sql, (rec["ts"], tenant_id, trace_id, stage, actor, resource,
+                     status, duration_ms, bytes_in, tokens_in, tokens_out, dump_json(rec["meta"])))
+        except TenantIsolationError as e:
+            # An isolation failure is not an ordinary telemetry-write hiccup: it
+            # means this tenant's database file records a DIFFERENT company as
+            # its owner. This method's contract is that observability must never
+            # break the pipeline, so it cannot re-raise — but it must not be
+            # indistinguishable from a routine WARNING either. ERROR, named as
+            # security-relevant, so it separates cleanly in the logs.
+            logger.error(
+                "SECURITY: tenant isolation failure while persisting a telemetry "
+                "event (stage=%r, tenant_id=%r): %s. This tenant's database is "
+                "owned by another company; the event was NOT persisted and the "
+                "store must be investigated before it is used again.",
+                stage, tenant_id, e, exc_info=True)
+        except Exception as e:
+            logger.warning(f"Failed to persist telemetry event (stage={stage!r}, tenant_id={tenant_id!r}): {e}")
+            # observability must never break the pipeline
+
         if self.on_event:
             try:
                 self.on_event(rec)
             except Exception:
                 pass
-                
+
         return trace_id
 
     # -- queries ---------------------------------------------------------------
+    def _telemetry_stores(self, tenant_id: str) -> List[Any]:
+        """The tenant store to query, or every known tenant's store when no
+        single tenant is named (telemetry has no cross-tenant table anymore).
+
+        In the platform-wide fan-out, one unusable tenant must not take the
+        aggregate view down for everyone else. `known_tenants()` lists whatever
+        directories sit under the tenants root, so a stray non-tenant directory
+        fails `validate_tenant_id`, and a mis-restored file fails the `db_owner`
+        check — either would previously propagate out of the list comprehension
+        and 500 the whole of /observability/metrics. Those tenants are now logged
+        and skipped.
+
+        When a specific tenant IS named the caller asked for exactly that store,
+        so the error propagates: silently returning an empty result for the one
+        tenant that was requested would be a wrong answer, not a partial one.
+        """
+        if tenant_id:
+            return [self.stores.for_tenant(tenant_id)]
+        out: List[Any] = []
+        for t in self.stores.known_tenants():
+            try:
+                out.append(self.stores.for_tenant(t))
+            except TenantIsolationError as exc:
+                logger.error(
+                    "SECURITY: tenant isolation failure opening %r during a "
+                    "platform-wide telemetry fan-out: %s. Skipping it; the "
+                    "aggregate below excludes this tenant.", t, exc, exc_info=True)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "skipping tenant %r in the platform-wide telemetry fan-out: "
+                    "%s. The aggregate below excludes it.", t, exc, exc_info=True)
+        return out
+
     def recent(self, limit: int = 100, tenant_id: str = "") -> List[Dict[str, Any]]:
-        rows = self._store.query_all(
-            "SELECT * FROM telemetry WHERE (?='' OR tenant_id=?) ORDER BY id DESC LIMIT ?",
-            (tenant_id, tenant_id, limit))
-        out = [dict(r) for r in rows]
+        out: List[Dict[str, Any]] = []
+        for store in self._telemetry_stores(tenant_id):
+            try:
+                rows = store.query_all(
+                    "SELECT * FROM telemetry WHERE (?='' OR tenant_id=?) ORDER BY id DESC LIMIT ?",
+                    (tenant_id, tenant_id, limit))
+            except Exception as exc:  # noqa: BLE001
+                if tenant_id:
+                    raise
+                logger.warning("skipping %s in the platform-wide recent-events "
+                               "fan-out: %s", store.db_path, exc, exc_info=True)
+                continue
+            out.extend(dict(r) for r in rows)
+        out.sort(key=lambda r: (r.get("ts") or "", r.get("id") or 0), reverse=True)
+        out = out[:limit]
         for r in out:
             r["meta"] = load_json(r.get("meta"), {})
         return out
@@ -89,29 +157,69 @@ class Observability:
     def metrics(self, tenant_id: str = "") -> Dict[str, Any]:
         where = "WHERE (?='' OR tenant_id=?)"
         args = (tenant_id, tenant_id)
-        total = self._store.query_one(f"SELECT COUNT(*) c, "
-                                      f"SUM(CASE WHEN status='FAILED' THEN 1 ELSE 0 END) f, "
-                                      f"AVG(duration_ms) a FROM telemetry {where}", args)
-        by_stage = self._store.query_all(
-            f"SELECT stage, COUNT(*) c, AVG(duration_ms) a FROM telemetry {where} GROUP BY stage ORDER BY stage", args)
-        by_status = self._store.query_all(
-            f"SELECT status, COUNT(*) c FROM telemetry {where} GROUP BY status", args)
+        count = 0
+        failed = 0
+        # SUM(duration_ms) with COUNT(duration_ms), never AVG(duration_ms) *
+        # COUNT(*): SQL's AVG ignores NULL duration_ms rows while COUNT(*)
+        # counts them, so reconstructing the sum from the average inflated the
+        # reported figure by exactly the NULL ratio. COUNT(<column>) already
+        # excludes NULLs, so it is the right denominator.
+        duration_total = 0.0
+        duration_count = 0
+        by_stage: Dict[str, Dict[str, Any]] = {}
+        by_status: Dict[str, int] = {}
+        for store in self._telemetry_stores(tenant_id):
+            try:
+                total = store.query_one(
+                    f"SELECT COUNT(*) c, "
+                    f"SUM(CASE WHEN status='FAILED' THEN 1 ELSE 0 END) f, "
+                    f"SUM(duration_ms) d, COUNT(duration_ms) dc "
+                    f"FROM telemetry {where}", args)
+                stage_rows = store.query_all(
+                    f"SELECT stage, COUNT(*) c, SUM(duration_ms) d, "
+                    f"COUNT(duration_ms) dc FROM telemetry {where} "
+                    f"GROUP BY stage ORDER BY stage", args)
+                status_rows = store.query_all(
+                    f"SELECT status, COUNT(*) c FROM telemetry {where} GROUP BY status",
+                    args)
+            except Exception as exc:  # noqa: BLE001
+                if tenant_id:
+                    raise
+                logger.warning("skipping %s in the platform-wide metrics "
+                               "fan-out: %s", store.db_path, exc, exc_info=True)
+                continue
+            if total and total["c"]:
+                count += total["c"]
+                failed += total["f"] or 0
+                duration_total += total["d"] or 0.0
+                duration_count += total["dc"] or 0
+            for r in stage_rows:
+                agg = by_stage.setdefault(r["stage"], {"count": 0, "duration_total": 0.0,
+                                                       "duration_count": 0})
+                agg["count"] += r["c"]
+                agg["duration_total"] += r["d"] or 0.0
+                agg["duration_count"] += r["dc"] or 0
+            for r in status_rows:
+                by_status[r["status"]] = by_status.get(r["status"], 0) + r["c"]
         return {
             "scope": tenant_id or "platform",
-            "total_spans": total["c"] if total else 0,
-            "failed_spans": total["f"] if total else 0,
-            "avg_span_ms": round(total["a"], 2) if total and total["a"] else 0.0,
-            "by_stage": [{"stage": r["stage"], "count": r["c"], "avg_ms": round(r["a"], 2)} for r in by_stage],
-            "by_status": [{"status": r["status"], "count": r["c"]} for r in by_status],
+            "total_spans": count,
+            "failed_spans": failed,
+            "avg_span_ms": round(duration_total / duration_count, 2) if duration_count else 0.0,
+            "by_stage": [{"stage": stage, "count": agg["count"],
+                         "avg_ms": round(agg["duration_total"] / agg["duration_count"], 2)
+                                   if agg["duration_count"] else 0.0}
+                        for stage, agg in sorted(by_stage.items())],
+            "by_status": [{"status": status, "count": c} for status, c in by_status.items()],
         }
 
-    # -- Phase 9: owner-facing API logs (30-day retention) -------------------
+    # -- Phase 9: owner-facing API logs (30-day retention; control plane) ----
     def log_access(self, *, tenant_id: str = "", method: str = "", path: str = "",
                    status: int = 200, duration_ms: float = 0.0,
                    actor: str = "system", meta: Optional[Dict[str, Any]] = None) -> None:
         """Record one HTTP request in `api_logs` (owner-facing, never credentials)."""
         try:
-            self._store.execute(
+            self.stores.control.execute(
                 "INSERT INTO api_logs (ts,tenant_id,method,path,status,duration_ms,actor,meta) "
                 "VALUES (?,?,?,?,?,?,?,?)",
                 (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), tenant_id,
@@ -121,7 +229,7 @@ class Observability:
             pass  # logging must never break the API
 
     def logs(self, *, tenant_id: str = "", limit: int = 200) -> List[Dict[str, Any]]:
-        rows = self._store.query_all(
+        rows = self.stores.control.query_all(
             "SELECT * FROM api_logs WHERE (?='' OR tenant_id=?) ORDER BY id DESC LIMIT ?",
             (tenant_id, tenant_id, limit))
         out = [dict(r) for r in rows]
@@ -135,10 +243,10 @@ class Observability:
         now = now if now is not None else time.time()
         cutoff_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ",
                                     time.gmtime(now - retention_days * 86400.0))
-        cur = self._store.query_one(
+        cur = self.stores.control.query_one(
             "SELECT COUNT(*) c FROM api_logs WHERE ts < ?", (cutoff_iso,))
         count = cur["c"] if cur else 0
         if not dry_run and count:
-            self._store.execute("DELETE FROM api_logs WHERE ts < ?", (cutoff_iso,))
+            self.stores.control.execute("DELETE FROM api_logs WHERE ts < ?", (cutoff_iso,))
         return {"dry_run": dry_run, "retention_days": retention_days,
                 "cutoff": cutoff_iso, "expired_rows": count}

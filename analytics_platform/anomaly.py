@@ -1,23 +1,25 @@
 """Proactive Anomaly Triggers and KPI management."""
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .domain import new_id, now_iso
 from .brain.store import CompanyBrain
+from .stores import TenantStoreProvider
 
 class AnomalyService:
-    def __init__(self, store, tenants):
-        self.store = store
+    def __init__(self, stores: TenantStoreProvider, tenants):
+        self.stores = stores
         self.tenants = tenants
-        self.brain = lambda t: CompanyBrain(store, t)
+        self.brain = lambda t: CompanyBrain(stores.for_tenant(t), t)
 
     def list_kpis(self, tenant_id: str) -> List[Dict[str, Any]]:
-        rows = self.store.query_all("SELECT * FROM kpis WHERE tenant_id = ? ORDER BY created_at DESC", (tenant_id,))
+        rows = self.stores.for_tenant(tenant_id).query_all(
+            "SELECT * FROM kpis WHERE tenant_id = ? ORDER BY created_at DESC", (tenant_id,))
         return [dict(r) for r in rows]
 
     def add_kpi(self, tenant_id: str, name: str, description: str, sql_query: str, frequency: str = "daily", threshold: Optional[str] = None) -> Dict[str, Any]:
         self.tenants.require_tenant(tenant_id)
         kpi_id = new_id("kpi")
-        self.store.execute(
+        self.stores.for_tenant(tenant_id).execute(
             "INSERT INTO kpis (id, tenant_id, name, description, sql_query, frequency, is_active, created_at, threshold) "
             "VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)",
             (kpi_id, tenant_id, name, description, sql_query, frequency, now_iso(), threshold)
@@ -26,14 +28,15 @@ class AnomalyService:
 
     def update_kpi(self, tenant_id: str, kpi_id: str, threshold: Optional[str]) -> Dict[str, Any]:
         self.tenants.require_tenant(tenant_id)
-        self.store.execute(
+        self.stores.for_tenant(tenant_id).execute(
             "UPDATE kpis SET threshold = ? WHERE id = ? AND tenant_id = ?",
             (threshold, kpi_id, tenant_id)
         )
         return self.get_kpi(tenant_id, kpi_id)
 
     def get_kpi(self, tenant_id: str, kpi_id: str) -> Dict[str, Any]:
-        row = self.store.query_one("SELECT * FROM kpis WHERE id = ? AND tenant_id = ?", (kpi_id, tenant_id))
+        row = self.stores.for_tenant(tenant_id).query_one(
+            "SELECT * FROM kpis WHERE id = ? AND tenant_id = ?", (kpi_id, tenant_id))
         if not row:
             raise ValueError(f"KPI {kpi_id} not found")
         return dict(row)

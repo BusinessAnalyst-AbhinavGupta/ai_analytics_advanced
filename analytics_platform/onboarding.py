@@ -14,20 +14,21 @@ from .database import Store
 from .domain import DataSource, DataSourceKind, KnowledgeNode, NodeKind, ReviewStatus, Tenant
 from .observability import Observability
 from .pipeline import Pipeline
+from .stores import TenantStoreProvider
 from .tenancy import TenantService
 
 
 class OnboardingService:
-    def __init__(self, store: Store, tenants: Optional[TenantService] = None,
+    def __init__(self, stores: TenantStoreProvider, tenants: Optional[TenantService] = None,
                  pipeline: Optional[Pipeline] = None,
                  observability: Optional[Observability] = None):
-        self.store = store
-        self.tenants = tenants or TenantService(store)
+        self.stores = stores
+        self.tenants = tenants or TenantService(stores)
         self.pipeline = pipeline
-        self.obs = observability or Observability(store)
+        self.obs = observability or Observability(stores)
 
     def brain(self, tenant_id: str) -> CompanyBrain:
-        return CompanyBrain(self.store, tenant_id)
+        return CompanyBrain(self.stores.for_tenant(tenant_id), tenant_id)
 
     # -- step 1 + 2: tenant + company profile --------------------------------
     def provision_company(self, profile: Dict[str, Any],

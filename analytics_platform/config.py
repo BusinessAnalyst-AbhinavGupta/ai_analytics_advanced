@@ -55,9 +55,23 @@ class Settings:
     junior_human_signoff_days: int = 7 # initial window: every analysis -> human review
 
     def resolve_db_path(self) -> str:
+        """DEPRECATED: the single shared database. Use resolve_control_db_path()
+        and resolve_tenants_root(). Retained so `adopt-db` can find a legacy file."""
         if self.data_dir:
             return os.path.join(self.data_dir, "platform.db")
         return self.db_path or "data/platform.db"
+
+    def resolve_control_db_path(self) -> str:
+        """The cross-tenant registry database (tenants, scheduler, api logs)."""
+        if self.data_dir:
+            return os.path.join(self.data_dir, "control.db")
+        return "data/control.db"
+
+    def resolve_tenants_root(self) -> str:
+        """Directory holding one database per company: <root>/<tenant_id>/tenant.db."""
+        if self.data_dir:
+            return os.path.join(self.data_dir, "tenants")
+        return "tenants"
 
     def resolve_vector_path(self) -> str:
         if self.data_dir:

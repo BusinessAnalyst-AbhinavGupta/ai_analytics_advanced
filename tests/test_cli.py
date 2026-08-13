@@ -85,12 +85,17 @@ class TestCliBrowser(unittest.TestCase):
         from analytics_platform.api import make_context
         from analytics_platform.domain import NodeKind
         self._tmp = tempfile.TemporaryDirectory()
-        db = os.path.join(self._tmp.name, "t.db")
-        patcher = mock.patch.dict(os.environ, {"ANALYTICS_DB_PATH": db})
+        # ANALYTICS_DATA_DIR (not ANALYTICS_DB_PATH) is what the post-split
+        # resolvers key off: Settings.resolve_control_db_path() and
+        # resolve_tenants_root() both derive from `data_dir`. Setting
+        # ANALYTICS_DB_PATH here isolated nothing — it left every run writing
+        # data/control.db and tenants/<id>/tenant.db into the real repo tree.
+        patcher = mock.patch.dict(os.environ,
+                                  {"ANALYTICS_DATA_DIR": self._tmp.name})
         patcher.start()
         self.addCleanup(patcher.stop)
         ctx = make_context()
-        self.addCleanup(ctx.store.close)
+        self.addCleanup(ctx.stores.close_all)
         return ctx, NodeKind
 
     def test_cmd_review_summary_lists_queue(self):

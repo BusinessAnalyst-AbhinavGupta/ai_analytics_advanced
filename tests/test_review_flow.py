@@ -27,9 +27,9 @@ _WAREHOUSE = {"things": pd.DataFrame({"col": [1, 2, 3, 4]})}
 
 
 def _worker(ctx, tid: str, review_backlog_max: int = 3, **kw):
-    eng = JuniorEngine(ctx.store, executor=ctx.executor, tenants=ctx.tenants,
+    eng = JuniorEngine(ctx.stores, executor=ctx.executor, tenants=ctx.tenants,
                        observability=ctx.obs)
-    return JuniorWorker(ctx.store, eng, tenant_id=tid,
+    return JuniorWorker(ctx.stores, eng, tenant_id=tid,
                         observability=ctx.obs, reviews_dir=kw.get("reviews_dir", "data/reviews"),
                         work_start=kw.get("work_start", "10:00"),
                         work_end=kw.get("work_end", "19:00"),
@@ -50,10 +50,10 @@ class TestSeniorReviewQueue(unittest.TestCase):
             "targets": [{"name": "Grow orders", "category": "growth", "priority": 1}]})
         # depth 2 => high-level (human-governed) work, so runs land in the inbox
         self.ctx.tenants.set_analyst_config(self.tid, {"junior_depth": 2}, changed_by="human")
-        self.eng = JuniorEngine(self.ctx.store, executor=self.ctx.executor,
+        self.eng = JuniorEngine(self.ctx.stores, executor=self.ctx.executor,
                                 tenants=self.ctx.tenants, observability=self.ctx.obs)
         self.worker = _worker(self.ctx, self.tid, reviews_dir=self.reviews, supporting_cap=0)
-        self.senior = SeniorService(self.ctx.store, self.ctx.pipeline, self.ctx.tenants,
+        self.senior = SeniorService(self.ctx.stores, self.ctx.pipeline, self.ctx.tenants,
                                     observability=self.ctx.obs, reviews_dir=self.reviews)
         # one approved, reproducible query in the Brain for the junior to explore
         brain = self.eng.brain(self.tid)
@@ -149,7 +149,7 @@ class TestTwoTierJunior(unittest.TestCase):
         # catalog must see the sample table so the low-level taxonomy populates
         self.ctx.tenants.add_datasource(self.tid, "warehouse", DataSourceKind.DIRECT_DB,
                                         dialect="duckdb", tables=["things"], connected=True)
-        self.senior = SeniorService(self.ctx.store, self.ctx.pipeline, self.ctx.tenants,
+        self.senior = SeniorService(self.ctx.stores, self.ctx.pipeline, self.ctx.tenants,
                                     observability=self.ctx.obs, reviews_dir=self.reviews)
 
     def tearDown(self):
@@ -159,7 +159,7 @@ class TestTwoTierJunior(unittest.TestCase):
         self.ctx.tenants.set_analyst_config(self.tid, {"junior_depth": d}, changed_by="human")
 
     def _findings(self):
-        return [n for n in CompanyBrain(self.ctx.store, self.tid).all(kind=NodeKind.FINDING)
+        return [n for n in CompanyBrain(self.ctx.stores.for_tenant(self.tid), self.tid).all(kind=NodeKind.FINDING)
                 if n.status == ReviewStatus.APPROVED]
 
     def test_demoted_junior_runs_low_level_and_auto_folds(self):
@@ -207,6 +207,38 @@ class TestTwoTierJunior(unittest.TestCase):
         # and the backlog gate only sees the high-level run (not the workpapers).
         self.assertEqual(worker._runs_today(worker._clock()), 1)
         self.assertEqual(worker._pending_review_count(self.tid), 1)
+
+
+class TestRunCycleRefusesWrongTenant(unittest.TestCase):
+    """A worker constructed for tenant A must never write tenant B's data into
+    A's store when called with a mismatched `tenant_id` (cross-tenant leak fix)."""
+
+    def setUp(self):
+        self.ctx = make_ctx(_WAREHOUSE)
+        self.tid_a = self.ctx.tenants.create_tenant("TenantA").id
+        self.tid_b = self.ctx.tenants.create_tenant("TenantB").id
+        for tid in (self.tid_a, self.tid_b):
+            self.ctx.tenants.set_company_profile(tid, {
+                "name": tid,
+                "targets": [{"name": "Grow orders", "category": "growth", "priority": 1}]})
+        self.reviews = tempfile.mkdtemp()
+        # worker is bound to tenant A only
+        self.worker = _worker(self.ctx, self.tid_a, reviews_dir=self.reviews)
+
+    def tearDown(self):
+        self.ctx.close()
+
+    def test_run_cycle_with_mismatched_tenant_id_refuses(self):
+        before = self.ctx.stores.for_tenant(self.tid_b).query_all(
+            "SELECT id FROM analysis_runs")
+        res = self.worker.run_cycle(tenant_id=self.tid_b, force=True)
+        self.assertFalse(res["ran"])
+        self.assertEqual(res["reason"], "wrong_tenant")
+        self.assertEqual(res["tenant_id"], self.tid_b)
+        after = self.ctx.stores.for_tenant(self.tid_b).query_all(
+            "SELECT id FROM analysis_runs")
+        self.assertEqual(len(before), len(after))
+        self.assertEqual(len(after), 0)
 
 
 if __name__ == "__main__":

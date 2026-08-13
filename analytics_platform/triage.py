@@ -16,18 +16,19 @@ from .brain.store import CompanyBrain
 from .database import Store
 from .domain import KnowledgeNode, NodeKind, ReviewStatus
 from .observability import Observability
+from .stores import TenantStoreProvider
 
 ACTIONABLE = (ReviewStatus.CANDIDATE, ReviewStatus.UNDER_REVIEW,
               ReviewStatus.REVISION_REQUIRED)
 
 
 class TriageService:
-    def __init__(self, store: Store, observability: Optional[Observability] = None):
-        self.store = store
-        self.obs = observability or Observability(store)
+    def __init__(self, stores: TenantStoreProvider, observability: Optional[Observability] = None):
+        self.stores = stores
+        self.obs = observability or Observability(stores)
 
     def brain(self, tenant_id: str) -> CompanyBrain:
-        return CompanyBrain(self.store, tenant_id)
+        return CompanyBrain(self.stores.for_tenant(tenant_id), tenant_id)
 
     # -- reads ---------------------------------------------------------------
     def queue(self, tenant_id: str, *, kind: Optional[NodeKind] = None,
