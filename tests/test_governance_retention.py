@@ -61,7 +61,7 @@ class TestRetention(unittest.TestCase):
         # the tenant's own database is gone by now, so the audit record about
         # its deletion lives on the control plane -- see task-5-report.md.
         audit = self.ctx.stores.control.query_one(
-            "SELECT * FROM audit_log WHERE action='tenant.delete' AND tenant_id=?",
+            "SELECT * FROM tenant_lifecycle_log WHERE action='tenant.delete' AND tenant_id=?",
             (self.tid,))
         self.assertIsNotNone(audit)
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import tempfile
 import unittest
@@ -53,6 +54,21 @@ class SchemaSplitTest(unittest.TestCase):
 
     def test_the_two_schemas_do_not_overlap(self):
         self.assertEqual(CONTROL_TABLES & TENANT_TABLES, set())
+
+    def test_no_table_name_is_defined_in_both_schema_strings(self):
+        """Guards the actual CONTROL_SCHEMA/TENANT_SCHEMA SQL strings directly,
+        rather than the hand-maintained CONTROL_TABLES/TENANT_TABLES literals
+        above. Those literals wouldn't catch a table added straight into one
+        schema constant under a name already used by the other -- exactly the
+        bug where a `audit_log` table was added to CONTROL_SCHEMA duplicating
+        the tenant-plane `audit_log` name (fixed by renaming the control-plane
+        table to `tenant_lifecycle_log`)."""
+        pattern = re.compile(r"CREATE (?:TABLE|VIRTUAL TABLE) IF NOT EXISTS (\w+)")
+        control_names = set(pattern.findall(CONTROL_SCHEMA))
+        tenant_names = set(pattern.findall(TENANT_SCHEMA))
+        self.assertTrue(control_names, "expected to find table names in CONTROL_SCHEMA")
+        self.assertTrue(tenant_names, "expected to find table names in TENANT_SCHEMA")
+        self.assertEqual(control_names & tenant_names, set())
 
     def test_bare_store_still_gets_the_combined_schema(self):
         """Every unmigrated caller in the codebase relies on this until Task 5."""

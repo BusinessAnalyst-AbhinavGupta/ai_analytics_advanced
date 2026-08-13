@@ -109,8 +109,10 @@ class RetentionService:
         removed) so the audit record says what was actually destroyed.
         `auth_principals` is control-plane, so it's deleted there explicitly.
         The audit record itself is written to the control database's
-        `audit_log`: a record about a deleted tenant cannot live inside that
-        tenant's own (about-to-be-removed) database.
+        `tenant_lifecycle_log` (distinct from the tenant-plane `audit_log`,
+        to avoid a same-named table meaning different things on each plane):
+        a record about a deleted tenant cannot live inside that tenant's own
+        (about-to-be-removed) database.
         """
         tenant_tables = [
             "knowledge_nodes", "company_profiles", "data_sources", "questions",
@@ -142,7 +144,7 @@ class RetentionService:
                 os.remove(path)
 
         self.stores.control.execute(
-            "INSERT INTO audit_log (ts,tenant_id,actor,role,action,resource,outcome,detail) "
+            "INSERT INTO tenant_lifecycle_log (ts,tenant_id,actor,role,action,resource,outcome,detail) "
             "VALUES (?,?,?,?,?,?,?,?)",
             (now_iso(), tenant_id, by, "owner", "tenant.delete", tenant_id, "OK",
              _b64dump(deleted)))
