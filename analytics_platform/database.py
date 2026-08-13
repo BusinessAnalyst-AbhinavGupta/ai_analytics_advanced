@@ -145,9 +145,10 @@ CREATE INDEX IF NOT EXISTS idx_ach_tenant ON analyst_config_history(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_kpis_tenant ON kpis(tenant_id);
 """
 
-# Retained so call sites still on the single-database model keep working until
-# Task 6 removes the last of them.
-SCHEMA = CONTROL_SCHEMA + TENANT_SCHEMA
+# The pre-split single-file schema. Retained ONLY so `adopt-db` can open a legacy
+# database. Never pass this to a Store that will be written to — a file with both
+# planes is exactly the co-mingling this design removes.
+SCHEMA_LEGACY_ALL = CONTROL_SCHEMA + TENANT_SCHEMA
 
 
 def get_conn(db_path: str) -> sqlite3.Connection:
@@ -163,7 +164,7 @@ def get_conn(db_path: str) -> sqlite3.Connection:
 
 def init_db(conn: sqlite3.Connection, schema: str = None) -> None:
     with _LOCK:
-        conn.executescript(schema if schema is not None else SCHEMA)
+        conn.executescript(schema if schema is not None else SCHEMA_LEGACY_ALL)
         conn.commit()
         _migrate(conn)
 
@@ -221,7 +222,7 @@ class Store:
 
     def __init__(self, db_path: str, schema: str = None):
         self.db_path = db_path
-        self.schema = schema if schema is not None else SCHEMA
+        self.schema = schema if schema is not None else SCHEMA_LEGACY_ALL
         self.conn = get_conn(db_path)
         init_db(self.conn, self.schema)
 

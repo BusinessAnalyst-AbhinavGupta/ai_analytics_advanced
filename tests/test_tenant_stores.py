@@ -217,5 +217,68 @@ class SettingsPathTest(unittest.TestCase):
         self.assertNotIn(s.resolve_control_db_path(), s.resolve_tenants_root())
 
 
+class AdoptDbTest(unittest.TestCase):
+    def setUp(self):
+        from analytics_platform.database import SCHEMA_LEGACY_ALL, Store
+        self._tmp = tempfile.TemporaryDirectory()
+        self.legacy = os.path.join(self._tmp.name, "platform.db")
+        legacy = Store(self.legacy, schema=SCHEMA_LEGACY_ALL)
+        legacy.execute("INSERT INTO tenants (id,name) VALUES (?,?)", ("acme", "Acme"))
+        legacy.execute(
+            "INSERT INTO knowledge_nodes (id,tenant_id,kind,status,version,title,"
+            "summary,payload,confidence,evidence_ref,source_ref,created_at,"
+            "updated_at,created_by,reviewed_by,review_notes,supersedes) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("kn_1", "acme", "METRIC", "APPROVED", 1, "Margin", "", "{}", "{}",
+             "", "", "2026-01-01", "2026-01-01", "s", "", "", ""))
+        legacy.close()
+        self.stores = TenantStoreProvider(
+            control_db_path=os.path.join(self._tmp.name, "control.db"),
+            tenants_root=os.path.join(self._tmp.name, "tenants"))
+
+    def tearDown(self):
+        self.stores.close_all()
+        self._tmp.cleanup()
+
+    def test_adoption_reports_the_node_count(self):
+        from analytics_platform.cli import adopt_db
+        self.assertEqual(adopt_db(self.legacy, "acme", self.stores), 1)
+
+    def test_the_nodes_land_in_the_tenant_database(self):
+        from analytics_platform.cli import adopt_db
+        adopt_db(self.legacy, "acme", self.stores)
+        rows = self.stores.for_tenant("acme").query_all(
+            "SELECT title FROM knowledge_nodes")
+        self.assertEqual([r["title"] for r in rows], ["Margin"])
+
+    def test_the_registry_row_lands_in_the_control_database(self):
+        from analytics_platform.cli import adopt_db
+        adopt_db(self.legacy, "acme", self.stores)
+        rows = self.stores.control.query_all("SELECT id FROM tenants")
+        self.assertEqual([r["id"] for r in rows], ["acme"])
+
+    def test_adopting_a_multi_tenant_database_is_refused(self):
+        from analytics_platform.cli import adopt_db
+        from analytics_platform.database import SCHEMA_LEGACY_ALL, Store
+        legacy = Store(self.legacy, schema=SCHEMA_LEGACY_ALL)
+        legacy.execute(
+            "INSERT INTO knowledge_nodes (id,tenant_id,kind,status,version,title,"
+            "summary,payload,confidence,evidence_ref,source_ref,created_at,"
+            "updated_at,created_by,reviewed_by,review_notes,supersedes) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("kn_2", "globex", "METRIC", "APPROVED", 1, "Other", "", "{}", "{}",
+             "", "", "2026-01-01", "2026-01-01", "s", "", "", ""))
+        legacy.close()
+        with self.assertRaises(ValueError):
+            adopt_db(self.legacy, "acme", self.stores)
+
+    def test_adoption_is_idempotent(self):
+        from analytics_platform.cli import adopt_db
+        adopt_db(self.legacy, "acme", self.stores)
+        adopt_db(self.legacy, "acme", self.stores)
+        rows = self.stores.for_tenant("acme").query_all("SELECT id FROM knowledge_nodes")
+        self.assertEqual(len(rows), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

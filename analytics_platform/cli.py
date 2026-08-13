@@ -231,6 +231,84 @@ def cmd_junior(args: argparse.Namespace) -> int:
     return 0
 
 
+TENANT_TABLES = (
+    "company_profiles", "data_sources", "knowledge_nodes", "questions",
+    "analysis_runs", "telemetry", "stakeholder_answers", "stakeholder_feedback",
+    "research_sources", "research_docs", "audit_log", "company_profile_history",
+    "analyst_configs", "analyst_config_history", "kpis",
+)
+
+
+def adopt_db(source_path: str, tenant_id: str, stores) -> int:
+    """Move a legacy single-file database into the per-tenant layout.
+
+    Refuses a source holding more than one tenant: splitting co-mingled companies
+    is a data-ownership decision, not something a CLI should guess at.
+    """
+    from .database import SCHEMA_LEGACY_ALL, Store
+
+    legacy = Store(source_path, schema=SCHEMA_LEGACY_ALL)
+    try:
+        found = set()
+        for table in TENANT_TABLES:
+            try:
+                rows = legacy.query_all(f"SELECT DISTINCT tenant_id FROM {table}")
+            except Exception:
+                continue
+            found.update(r["tenant_id"] for r in rows if r["tenant_id"])
+        extra = found - {tenant_id}
+        if extra:
+            raise ValueError(
+                f"{source_path} holds data for {sorted(found)}, not just "
+                f"{tenant_id!r}. Each tenant is a separate company; split this "
+                f"file by hand before adopting it.")
+
+        target = stores.for_tenant(tenant_id)
+        moved = 0
+        for table in TENANT_TABLES:
+            try:
+                rows = legacy.query_all(f"SELECT * FROM {table} WHERE tenant_id = ?",
+                                        (tenant_id,))
+            except Exception:
+                continue
+            for row in rows:
+                data = dict(row)
+                cols = ",".join(data)
+                marks = ",".join("?" for _ in data)
+                target.execute(
+                    f"INSERT OR REPLACE INTO {table} ({cols}) VALUES ({marks})",
+                    tuple(data.values()))
+            if table == "knowledge_nodes":
+                moved = len(rows)
+
+        for row in legacy.query_all("SELECT * FROM tenants WHERE id = ?", (tenant_id,)):
+            data = dict(row)
+            cols = ",".join(data)
+            marks = ",".join("?" for _ in data)
+            stores.control.execute(
+                f"INSERT OR REPLACE INTO tenants ({cols}) VALUES ({marks})",
+                tuple(data.values()))
+        return moved
+    finally:
+        legacy.close()
+
+
+def _cmd_adopt_db(args: argparse.Namespace) -> int:
+    from .config import Settings
+    from .stores import TenantStoreProvider
+    settings = Settings.from_env()
+    stores = TenantStoreProvider(
+        control_db_path=settings.resolve_control_db_path(),
+        tenants_root=settings.resolve_tenants_root())
+    try:
+        moved = adopt_db(args.source, args.tenant, stores)
+        print(f"adopted {moved} knowledge node(s) into "
+              f"{stores.tenant_db_path(args.tenant)}")
+    finally:
+        stores.close_all()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="analytics-platform")
     sub = p.add_subparsers(dest="command", required=True)
@@ -278,6 +356,11 @@ def build_parser() -> argparse.ArgumentParser:
     jn.add_argument("tenant_id")
     jn.add_argument("--limit", type=int, default=50, help="max approved queries to reproduce")
     jn.set_defaults(func=cmd_junior)
+    p_adopt = sub.add_parser("adopt-db",
+                             help="move a legacy single-tenant database into tenants/")
+    p_adopt.add_argument("--source", required=True)
+    p_adopt.add_argument("--tenant", required=True)
+    p_adopt.set_defaults(func=_cmd_adopt_db)
     return p
 
 
