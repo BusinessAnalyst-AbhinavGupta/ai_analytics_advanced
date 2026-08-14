@@ -83,6 +83,18 @@ export default function Triage() {
 
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
   const [expanded, setExpanded] = useState<ExpandedState>({});
+  // /triage/{tenant_id}/queue always caps at 100 rows -- the tab label reading
+  // "Knowledge Queue (100)" before AND after a 100-item bulk approve made a
+  // real, working action look like it did nothing. `summary` holds the true
+  // per-status counts (from /triage/{tenant_id}/summary, uncapped) so the UI
+  // can show what actually changed.
+  const [summary, setSummary] = useState<Record<string, any> | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+
+  const showToast = (msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 4000);
+  };
 
   const fetchSeniorQueue = async () => {
     try {
@@ -105,10 +117,27 @@ export default function Triage() {
     }
   };
 
+  const fetchSummary = async () => {
+    try {
+      const res = await fetch(`http://localhost:8000/triage/${tenantId}/summary`);
+      const data = await res.json();
+      setSummary(data && typeof data === 'object' ? data : null);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   useEffect(() => {
     setTriage({ loading: true });
-    Promise.all([fetchSeniorQueue(), fetchTriageQueue()]).finally(() => setTriage({ loading: false, hasFetched: true }));
+    Promise.all([fetchSeniorQueue(), fetchTriageQueue(), fetchSummary()]).finally(() => setTriage({ loading: false, hasFetched: true }));
   }, [tenantId, knowledgeFilterStatus]);
+
+  // True count for the currently selected status filter, uncapped by the
+  // queue endpoint's 100-row page limit. Falls back to the fetched page
+  // length only until the first summary load completes.
+  const trueCandidateCount = summary
+    ? (knowledgeFilterStatus === 'ALL' ? summary.total : (summary.by_status?.[knowledgeFilterStatus] ?? 0))
+    : triageQueue.length;
 
   const table = useReactTable({
     data: triageQueue,
@@ -129,32 +158,48 @@ export default function Triage() {
   const selectedIds = Object.keys(rowSelection);
 
   const handleApprove = async () => {
+    const count = selectedIds.length;
     await approveKnowledgeNodes(selectedIds);
+    await fetchSummary();
     setRowSelection({});
+    showToast(`Approved ${count} item${count === 1 ? '' : 's'}.`);
   };
 
   const handleReject = async () => {
+    const count = selectedIds.length;
     await rejectKnowledgeNodes(selectedIds);
+    await fetchSummary();
     setRowSelection({});
+    showToast(`Rejected ${count} item${count === 1 ? '' : 's'}.`);
   };
 
   return (
     <main style={{ padding: '2rem' }}>
-      <div className="glass-panel" style={{ padding: '2rem', minHeight: '80vh' }}>
+      <div className="glass-panel" style={{ padding: '2rem', minHeight: '80vh', position: 'relative' }}>
+        {toast && (
+          <div style={{
+            position: 'absolute', top: '1.5rem', right: '2rem', zIndex: 10,
+            background: 'var(--success)', color: '#fff', padding: '0.75rem 1.25rem',
+            borderRadius: '6px', fontSize: '0.9rem', fontWeight: 600,
+            boxShadow: '0 4px 12px rgba(0,0,0,0.3)'
+          }}>
+            {toast}
+          </div>
+        )}
         <h1 style={{ marginBottom: '2rem' }}>Triage & Brain</h1>
 
         <div className="flex gap-4" style={{ marginBottom: '2rem' }}>
-          <button 
+          <button
             style={{ background: activeTab === 'senior' ? 'var(--accent-primary)' : 'rgba(255,255,255,0.1)', padding: '0.75rem 1.5rem', borderRadius: '8px', border: 'none', color: '#fff', cursor: 'pointer' }}
             onClick={() => setTriage({ activeTab: 'senior' })}
           >
             Senior Inbox ({seniorQueue.length})
           </button>
-          <button 
+          <button
             style={{ background: activeTab === 'queue' ? 'var(--accent-primary)' : 'rgba(255,255,255,0.1)', padding: '0.75rem 1.5rem', borderRadius: '8px', border: 'none', color: '#fff', cursor: 'pointer' }}
             onClick={() => setTriage({ activeTab: 'queue' })}
           >
-            Knowledge Queue ({triageQueue.length})
+            Knowledge Queue ({trueCandidateCount})
           </button>
         </div>
 
@@ -212,8 +257,8 @@ export default function Triage() {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                     <span style={{ color: 'var(--text-muted)' }}>Status Filter:</span>
-                    <select 
-                      value={knowledgeFilterStatus} 
+                    <select
+                      value={knowledgeFilterStatus}
                       onChange={(e) => setTriage({ knowledgeFilterStatus: e.target.value })}
                       style={{ background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.2)', padding: '0.5rem', borderRadius: '4px', color: '#fff' }}
                     >
@@ -225,6 +270,10 @@ export default function Triage() {
                       <option value="REVISION_REQUIRED">Revision Required</option>
                       <option value="STALE">Stale</option>
                     </select>
+                    <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                      Showing {triageQueue.length} of {trueCandidateCount}
+                      {trueCandidateCount > triageQueue.length ? ' -- approve/reject to work through the rest' : ''}
+                    </span>
                   </div>
                   {selectedIds.length > 0 && (
                     <div style={{ display: 'flex', gap: '0.5rem' }}>
