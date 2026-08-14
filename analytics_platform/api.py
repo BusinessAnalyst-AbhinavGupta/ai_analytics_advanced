@@ -288,7 +288,12 @@ def make_context(settings: Optional[Settings] = None,
         tenants_root=settings.resolve_tenants_root())
     tenants = TenantService(stores)
     obs = Observability(stores)
-    executor = SamplerExecutor(warehouse or {})
+    # Live Metabase execution (ANALYTICS_MB_LIVE=1) previously only applied to a
+    # handful of ad-hoc junior endpoints via _api_junior_executor -- stakeholder,
+    # the main JuniorEngine, and the persistent background worker all silently
+    # stayed on the offline SamplerExecutor regardless of this flag. Route the
+    # one shared executor through the same live/offline gate everywhere.
+    executor = _api_junior_executor(settings, SamplerExecutor(warehouse or {}))
 
     from .brain.embedding import get_embedder
     # One model for the whole process. Loading it costs seconds and hundreds of
