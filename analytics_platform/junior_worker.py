@@ -532,7 +532,10 @@ class JuniorWorker:
             existing = [n.title for n in CompanyBrain(self.store, tid, index=self.index).all(limit=500)
                         if getattr(n, "kind", None) == NodeKind.FINDING
                         and getattr(getattr(n, "status", None), "is_usable", lambda: False)()]
-        except Exception:  # noqa: BLE001 - novelty is best-effort
+        except Exception as exc:  # noqa: BLE001 - novelty is best-effort
+            logger.warning(
+                "novelty check against Brain FINDINGs failed for tenant %r: %s",
+                tid, exc)
             existing = None
         frame = analyze_results(df, sql, question, rules=rules, existing=existing,
                                 row_limit=self.row_limit)

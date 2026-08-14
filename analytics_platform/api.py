@@ -44,6 +44,7 @@ import asyncio
 from .analysis import evaluate_rules, profile_df
 from .auth import AuthGate, Role, issue
 from .billing import BillingService
+from .brain.embedding import Embedder
 from .brain.index import BrainIndex
 from .brain.store import CompanyBrain
 from .config import Settings
@@ -271,7 +272,7 @@ class AppContext:
     junior_worker: Optional[Any] = None
     junior: Optional[Any] = None
     senior: Optional[Any] = None
-    embedder: Optional[Any] = None
+    embedder: Optional[Embedder] = None
 
     @property
     def store(self) -> Store:
@@ -337,6 +338,7 @@ def _make_junior_worker(settings: Settings, stores: TenantStoreProvider, junior:
     default background target; if none exists it returns None (no-op) so a fresh
     DB never spins a worker with nowhere to go.
     """
+    target = None
     try:
         tenant_list = TenantService(stores).list_tenants()
         if not tenant_list:
@@ -352,7 +354,10 @@ def _make_junior_worker(settings: Settings, stores: TenantStoreProvider, junior:
             autopromote_cap=settings.junior_autopromote_cap,
             supporting_cap=settings.junior_supporting_cap,
             observability=obs, default_tenant=target["id"], embedder=embedder)
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "failed to build background JuniorWorker for tenant %r: %s",
+            target.get("id") if target else None, exc)
         return None
 
 
