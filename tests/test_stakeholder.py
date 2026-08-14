@@ -180,6 +180,93 @@ class TestStakeholder(unittest.TestCase):
         self.assertGreater(res["cost"], 0.0)
 
     @patch("analytics_platform.stakeholder.make_role_client")
+    def test_sql_synthesis_repairs_after_policy_rejection(self, mock_make_role_client):
+        """First attempt leaves in a Metabase {{Date}} placeholder (policy-rejected);
+        the repair loop feeds that back to the LLM and succeeds on attempt 2,
+        rather than giving up after the first bad query."""
+        intent_resp = MagicMock(text="retail orders", ok=True, tokens_in=0, tokens_out=0)
+        bad_sql_resp = MagicMock(
+            text="```sql\nSELECT COUNT(*) AS orders FROM events WHERE {{Date}}\n```",
+            tokens_in=50, tokens_out=15)
+        fixed_sql_resp = MagicMock(
+            text="```sql\nSELECT COUNT(*) AS orders FROM events WHERE action = 'order'\n```",
+            tokens_in=60, tokens_out=20)
+        answer_resp = MagicMock(text='{"answer": "There were N orders."}', tokens_in=90, tokens_out=30)
+
+        mock_llm = MagicMock()
+        mock_llm.name = "mock_gateway"
+        mock_llm.generate.side_effect = [intent_resp, bad_sql_resp, fixed_sql_resp, answer_resp]
+        mock_make_role_client.return_value = mock_llm
+
+        self.ctx.tenants.set_analyst_config(self.tid, {
+            "stakeholder": {"enabled": True, "provider": "openrouter", "model": "anthropic/claude-3-haiku"}
+        })
+
+        res = self.ctx.stakeholder.answer(self.tid, "how many retail orders per month")
+        self.assertEqual(res["answer_mode"], AnswerMode.ADAPTED_APPROVED_QUERY.value)
+        self.assertEqual(res["status"], "ANSWERED")
+        self.assertNotIn("{{", res["queries_run"][0])
+        self.assertIn("SELECT COUNT(*) AS orders FROM events WHERE action = 'order'",
+                      res["queries_run"][0])
+        # The repair prompt for attempt 2 must actually mention the rejection
+        # reason, not just retry the same broken query blind.
+        second_call_kwargs = mock_llm.generate.call_args_list[2].kwargs
+        self.assertIn("{{Date}}", second_call_kwargs["prompt"])
+
+    @patch("analytics_platform.stakeholder.make_role_client")
+    def test_sql_synthesis_repairs_after_execution_failure(self, mock_make_role_client):
+        """First attempt is valid SQL that fails at execution (bad table name);
+        the repair loop feeds the execution error back and succeeds on attempt 2."""
+        intent_resp = MagicMock(text="retail orders", ok=True, tokens_in=0, tokens_out=0)
+        bad_table_resp = MagicMock(
+            text="```sql\nSELECT COUNT(*) AS orders FROM nonexistent_table\n```",
+            tokens_in=50, tokens_out=15)
+        fixed_sql_resp = MagicMock(
+            text="```sql\nSELECT COUNT(*) AS orders FROM events WHERE action = 'order'\n```",
+            tokens_in=60, tokens_out=20)
+        answer_resp = MagicMock(text='{"answer": "There were N orders."}', tokens_in=90, tokens_out=30)
+
+        mock_llm = MagicMock()
+        mock_llm.name = "mock_gateway"
+        mock_llm.generate.side_effect = [intent_resp, bad_table_resp, fixed_sql_resp, answer_resp]
+        mock_make_role_client.return_value = mock_llm
+
+        self.ctx.tenants.set_analyst_config(self.tid, {
+            "stakeholder": {"enabled": True, "provider": "openrouter", "model": "anthropic/claude-3-haiku"}
+        })
+
+        res = self.ctx.stakeholder.answer(self.tid, "how many retail orders per month")
+        self.assertEqual(res["answer_mode"], AnswerMode.ADAPTED_APPROVED_QUERY.value)
+        self.assertEqual(res["status"], "ANSWERED")
+        self.assertIn("FROM events", res["queries_run"][0])
+
+    @patch("analytics_platform.stakeholder.make_role_client")
+    def test_sql_synthesis_stops_after_max_attempts_and_falls_back(self, mock_make_role_client):
+        """A query that never becomes valid stops retrying at the cap (3 synthesis
+        attempts) and falls back to verbatim reuse, rather than looping forever."""
+        intent_resp = MagicMock(text="retail orders", ok=True, tokens_in=0, tokens_out=0)
+        always_bad_resp = MagicMock(
+            text="```sql\nSELECT COUNT(*) AS orders FROM events WHERE {{Date}}\n```",
+            tokens_in=50, tokens_out=15)
+        answer_resp = MagicMock(text='{"answer": "Reused answer"}', tokens_in=10, tokens_out=5)
+
+        mock_llm = MagicMock()
+        mock_llm.name = "mock_gateway"
+        # intent + 3 synthesis attempts (all rejected) + final chart synthesis
+        # on the verbatim-reuse fallback path
+        mock_llm.generate.side_effect = [
+            intent_resp, always_bad_resp, always_bad_resp, always_bad_resp, answer_resp]
+        mock_make_role_client.return_value = mock_llm
+
+        self.ctx.tenants.set_analyst_config(self.tid, {
+            "stakeholder": {"enabled": True, "provider": "openrouter", "model": "anthropic/claude-3-haiku"}
+        })
+
+        res = self.ctx.stakeholder.answer(self.tid, "how many retail orders per month")
+        self.assertEqual(res["answer_mode"], AnswerMode.REFRESHED_APPROVED_QUERY.value)
+        self.assertEqual(mock_llm.generate.call_count, 5)
+
+    @patch("analytics_platform.stakeholder.make_role_client")
     def test_sql_synthesis_falls_back_when_llm_declines(self, mock_make_role_client):
         """An LLM that returns nothing for SQL synthesis (its documented
         'context insufficient' behaviour) falls through to reusing the
@@ -204,7 +291,8 @@ class TestStakeholder(unittest.TestCase):
     def test_sql_synthesis_falls_back_when_policy_rejects_synthesized_sql(self, mock_make_role_client):
         """Synthesized SQL is LLM-authored and un-reviewed -- a write statement must
         be blocked by QueryPolicy (same read-only gate the structured pipeline
-        applies) and fall through, never reach the executor."""
+        applies) on every attempt, exhausting the repair loop and falling through
+        to verbatim reuse, never reaching the executor."""
         intent_resp = MagicMock(text="retail orders", ok=True, tokens_in=0, tokens_out=0)
         unsafe_sql_resp = MagicMock(
             text="```sql\nDELETE FROM events WHERE 1=1\n```", tokens_in=50, tokens_out=10)
@@ -212,7 +300,10 @@ class TestStakeholder(unittest.TestCase):
 
         mock_llm = MagicMock()
         mock_llm.name = "mock_gateway"
-        mock_llm.generate.side_effect = [intent_resp, unsafe_sql_resp, answer_resp]
+        # intent + 3 synthesis attempts (all the same unsafe write, all rejected)
+        # + final chart synthesis on the verbatim-reuse fallback path
+        mock_llm.generate.side_effect = [
+            intent_resp, unsafe_sql_resp, unsafe_sql_resp, unsafe_sql_resp, answer_resp]
         mock_make_role_client.return_value = mock_llm
 
         self.ctx.tenants.set_analyst_config(self.tid, {
@@ -222,18 +313,24 @@ class TestStakeholder(unittest.TestCase):
         res = self.ctx.stakeholder.answer(self.tid, "how many retail orders per month")
         self.assertEqual(res["answer_mode"], AnswerMode.REFRESHED_APPROVED_QUERY.value)
         self.assertNotIn("DELETE", " ".join(res["queries_run"]))
+        self.assertEqual(mock_llm.generate.call_count, 5)
 
     @patch("analytics_platform.stakeholder.make_role_client")
     def test_sql_synthesis_falls_back_when_generated_sql_fails_execution(self, mock_make_role_client):
-        """Synthesized SQL that fails to execute (bad syntax) falls through to the
-        verbatim-reuse path rather than surfacing a raw execution error."""
+        """Synthesized SQL against the allow-listed 'events' table (passes policy)
+        but references a column that doesn't exist -- a genuine execution-time
+        failure, not a policy rejection. Fails on every attempt, exhausting the
+        repair loop and falling through to the verbatim-reuse path."""
         intent_resp = MagicMock(text="retail orders", ok=True, tokens_in=0, tokens_out=0)
-        bad_sql_resp = MagicMock(text="```sql\nSELEKT this is not sql\n```", tokens_in=50, tokens_out=10)
+        bad_column_resp = MagicMock(
+            text="```sql\nSELECT nonexistent_column FROM events\n```",
+            tokens_in=50, tokens_out=10)
         answer_resp = MagicMock(text='{"answer": "Reused answer"}', tokens_in=10, tokens_out=5)
 
         mock_llm = MagicMock()
         mock_llm.name = "mock_gateway"
-        mock_llm.generate.side_effect = [intent_resp, bad_sql_resp, answer_resp]
+        mock_llm.generate.side_effect = [
+            intent_resp, bad_column_resp, bad_column_resp, bad_column_resp, answer_resp]
         mock_make_role_client.return_value = mock_llm
 
         self.ctx.tenants.set_analyst_config(self.tid, {
@@ -242,6 +339,7 @@ class TestStakeholder(unittest.TestCase):
 
         res = self.ctx.stakeholder.answer(self.tid, "how many retail orders per month")
         self.assertEqual(res["answer_mode"], AnswerMode.REFRESHED_APPROVED_QUERY.value)
+        self.assertEqual(mock_llm.generate.call_count, 5)
 
 
 if __name__ == "__main__":

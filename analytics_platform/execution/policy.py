@@ -36,6 +36,15 @@ class QueryPolicy:
         if head.startswith("EXPLAIN "):
             reasons.append("EXPLAIN is only permitted through the allow-list; skipping.")
 
+        # 1b. unresolved templating -- {{Date}}-style placeholders are a Metabase
+        # UI convention, not valid SQL. They parse-fail or silently misbehave at
+        # the executor, so catch them here with a clear reason instead.
+        template_placeholders = re.findall(r"\{\{\s*[\w.]+\s*\}\}", sql)
+        if template_placeholders:
+            reasons.append(
+                f"Unresolved template placeholder(s) {sorted(set(template_placeholders))} -- "
+                "not valid SQL; substitute a concrete value or remove the filter.")
+
         # 2. single statement
         if self.settings.block_multi_statement:
             stripped = sql

@@ -61,6 +61,58 @@ function TenantSelector() {
   );
 }
 
+type MetabaseStatus = { mode: 'live' | 'offline'; session_state?: string; detail?: string };
+
+function MetabaseStatusIndicator() {
+  const [status, setStatus] = useState<MetabaseStatus | null>(null);
+  const [checking, setChecking] = useState(false);
+
+  const check = () => {
+    setChecking(true);
+    fetch('http://localhost:8000/observability/metabase/status')
+      .then(res => res.json())
+      .then((data: MetabaseStatus) => setStatus(data))
+      .catch(() => setStatus({ mode: 'offline', session_state: 'unreachable', detail: "Can't reach the backend" }))
+      .finally(() => setChecking(false));
+  };
+
+  useEffect(() => {
+    check();
+    // Metabase's browser-cookie session can go stale at any time (no token to
+    // proactively refresh) -- poll so a demo never discovers this only when a
+    // query fails mid-presentation.
+    const id = setInterval(check, 20000);
+    return () => clearInterval(id);
+  }, []);
+
+  if (!status || status.mode === 'offline') {
+    return (
+      <div style={{ padding: '0.75rem 1rem', fontSize: '0.75rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--text-muted)', flexShrink: 0 }} />
+        <span>{status?.detail || 'Metabase: offline demo mode'}</span>
+      </div>
+    );
+  }
+
+  const ok = status.session_state === 'valid';
+  return (
+    <div
+      onClick={check}
+      title={status.detail || ''}
+      style={{ padding: '0.75rem 1rem', fontSize: '0.75rem', color: ok ? 'var(--text-secondary)' : 'var(--error)', display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}
+    >
+      <span style={{
+        width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0,
+        background: ok ? 'var(--success)' : 'var(--error)',
+        boxShadow: ok ? '0 0 6px var(--success)' : 'none',
+      }} />
+      <span>
+        {checking ? 'Checking…' : ok ? 'Metabase: connected' : 'Metabase: needs re-login (click to recheck)'}
+      </span>
+    </div>
+  );
+}
+
 export function Sidebar() {
   const pathname = usePathname();
 
@@ -108,6 +160,10 @@ export function Sidebar() {
           </Link>
         )
       })}
+
+      <div style={{ marginTop: 'auto', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '0.5rem' }}>
+        <MetabaseStatusIndicator />
+      </div>
     </nav>
   );
 }

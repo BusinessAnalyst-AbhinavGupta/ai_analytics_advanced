@@ -50,6 +50,7 @@ from .brain.store import CompanyBrain
 from .config import Settings
 from .database import Store
 from .domain import (AnswerMode, DataSourceKind, KnowledgeNode, NodeKind, ReviewStatus, RunStatus)
+from .execution.base import QueryExecutor
 from .execution.sampler import SamplerExecutor
 from .junior import JuniorEngine
 from .llm.client import list_provider_models
@@ -261,7 +262,9 @@ class AppContext:
     tenants: TenantService
     observability: Observability
     pipeline: Pipeline
-    executor: SamplerExecutor
+    # SamplerExecutor (offline) or BrowserSessionExecutor (ANALYTICS_MB_LIVE=1) --
+    # both implement QueryExecutor, chosen at make_context() time.
+    executor: QueryExecutor
     onboarding: OnboardingService
     stakeholder: Optional[StakeholderService] = None
     research: Optional[ResearchService] = None
@@ -827,6 +830,20 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
     def observability_purge() -> Dict[str, Any]:
         result = C.scheduler.purge_logs_once()
         return {"status": "ok", **result}
+
+    @app.get("/observability/metabase/status")
+    def observability_metabase_status() -> Dict[str, Any]:
+        """Live Metabase session health (browser-cookie based -- there is no
+        token to programmatically refresh; this makes a stale session visible
+        immediately instead of surfacing only as a failed query mid-demo)."""
+        from .execution.browser_session import BrowserSessionExecutor
+        ex = C.executor
+        if not isinstance(ex, BrowserSessionExecutor):
+            return {"mode": "offline", "session_state": "n/a",
+                    "detail": "ANALYTICS_MB_LIVE is not set -- running against the offline demo warehouse."}
+        health = ex.health_check()
+        return {"mode": "live", "host": ex.base_url, "database_id": ex.config.database_id,
+                **health}
 
     @app.post("/observability/junior/run")
     def observability_junior_run(tenant_id: str = "") -> Dict[str, Any]:

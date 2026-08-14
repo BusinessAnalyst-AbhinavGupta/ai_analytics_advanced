@@ -165,57 +165,43 @@ class StakeholderService:
 
         has_nodes = bool(query_nodes or defn_nodes)
         if has_nodes and self._llm_live(llm):
-            sql, toks = self._synthesize_sql(llm, question, query_nodes, defn_nodes)
-            if sql:
-                # Synthesized SQL is LLM-authored and un-reviewed, unlike a verbatim
-                # approved query -- it must clear the same read-only/single-statement/
-                # allow-listed-table gate the structured pipeline applies to every
-                # query it runs, not skip it.
-                sources = self.tenants.list_datasources(tenant_id)
-                allowed_tables = [t for s in sources for t in s.get("tables", [])] or None
-                decision = QueryPolicy(self.settings.policy).validate(
-                    sql, allowed_tables=allowed_tables, dialect=self.settings.source_dialect)
-                if decision.denied:
-                    logger.warning("synthesized SQL rejected by policy for tenant %s: %s",
-                                   tenant_id, decision.reasons)
-                sql = decision.approved_sql if not decision.denied else ""
-            if sql:
-                ec = ExecutionContext(tenant_id=tenant_id, question=question, dialect="athena")
-                exec_res = self.executor.execute(sql, ec)
-                if exec_res.ok:
-                    preview = []
-                    if exec_res.data is not None:
-                        try:
-                            preview = exec_res.data.head(3).to_dict(orient="records")
-                        except Exception:  # noqa: BLE001 - non-DataFrame result
-                            preview = list(exec_res.data)[:3]
-                    data_context = {"rows": preview}
-                    answer, syn_toks, chart_config = self._synthesize(llm, question, category, data_context)
-                    t_in = toks[0] + syn_toks[0]
-                    t_out = toks[1] + syn_toks[1]
+            sql, exec_res, toks = self._synthesize_and_execute_sql(
+                llm, tenant_id, question, query_nodes, defn_nodes)
+            if exec_res is not None and exec_res.ok:
+                preview = []
+                if exec_res.data is not None:
+                    try:
+                        preview = exec_res.data.head(3).to_dict(orient="records")
+                    except Exception:  # noqa: BLE001 - non-DataFrame result
+                        preview = list(exec_res.data)[:3]
+                data_context = {"rows": preview}
+                answer, syn_toks, chart_config = self._synthesize(llm, question, category, data_context)
+                t_in = toks[0] + syn_toks[0]
+                t_out = toks[1] + syn_toks[1]
 
-                    citations = [{
-                        "node_id": n.id,
-                        "title": n.title,
-                        "evidence_ref": n.evidence_ref,
-                        "freshness": n.confidence.get("freshness", 0.0),
-                    } for n in (query_nodes + defn_nodes)]
+                citations = [{
+                    "node_id": n.id,
+                    "title": n.title,
+                    "evidence_ref": n.evidence_ref,
+                    "freshness": n.confidence.get("freshness", 0.0),
+                } for n in (query_nodes + defn_nodes)]
 
-                    out = self._record(tenant_id, question, user_id, category, trace, answer,
-                                       AnswerMode.ADAPTED_APPROVED_QUERY, "ANSWERED", False,
-                                       [n.id for n in (query_nodes + defn_nodes)],
-                                       citations=citations,
-                                       facts=["synthesized custom query based on approved knowledge"],
-                                       caveats=["dynamically generated SQL"],
-                                       tokens_in=t_in, tokens_out=t_out, queries_run=[sql])
-                    out["chart_config"] = chart_config
-                    out["chart_data"] = preview
-                    self.obs.event(tenant_id=tenant_id, trace_id=trace, stage="stakeholder.answer",
-                                   actor="stakeholder", resource=out["answer_id"], status="OK",
-                                   meta={"category": category, "mode": AnswerMode.ADAPTED_APPROVED_QUERY.value})
-                    return out
-                # Synthesized SQL failed validation/execution — fall through to the
-                # verbatim-reuse path below rather than surfacing a raw SQL error.
+                out = self._record(tenant_id, question, user_id, category, trace, answer,
+                                   AnswerMode.ADAPTED_APPROVED_QUERY, "ANSWERED", False,
+                                   [n.id for n in (query_nodes + defn_nodes)],
+                                   citations=citations,
+                                   facts=["synthesized custom query based on approved knowledge"],
+                                   caveats=["dynamically generated SQL"],
+                                   tokens_in=t_in, tokens_out=t_out, queries_run=[sql])
+                out["chart_config"] = chart_config
+                out["chart_data"] = preview
+                self.obs.event(tenant_id=tenant_id, trace_id=trace, stage="stakeholder.answer",
+                               actor="stakeholder", resource=out["answer_id"], status="OK",
+                               meta={"category": category, "mode": AnswerMode.ADAPTED_APPROVED_QUERY.value})
+                return out
+            # Every synthesis/repair attempt failed validation or execution —
+            # fall through to the verbatim-reuse path below rather than
+            # surfacing a raw SQL error.
 
         if query_nodes:
             all_details = []
@@ -369,20 +355,37 @@ class StakeholderService:
         return getattr(client, "name", "null") != "null"
 
     def _synthesize_sql(self, llm: Any, question: str, query_nodes: List[Any],
-                        defn_nodes: List[Any]) -> Tuple[str, Tuple[int, int]]:
+                        defn_nodes: List[Any], prior_sql: str = "",
+                        prior_error: str = "") -> Tuple[str, Tuple[int, int]]:
         """Let the analyst write ad-hoc SQL from approved context, instead of only
-        reusing an approved query verbatim. Independent of the retrieval backend."""
+        reusing an approved query verbatim. Independent of the retrieval backend.
+
+        When `prior_sql`/`prior_error` are set (a previous attempt was rejected by
+        policy or failed execution), the prompt asks for a corrected query instead
+        of a fresh one -- see _synthesize_and_execute_sql for the retry loop.
+        """
         prompt = f"Question: {question}\n\nContext:\n"
         for d in defn_nodes:
             prompt += f"Definition - {d.title}: {d.summary}\n"
         for q in query_nodes:
             prompt += f"Example Query - {q.title}:\n{q.payload.get('sql', '')}\n"
+        if prior_sql:
+            prompt += (
+                f"\nYour previous attempt was NOT valid SQL, or failed to execute:\n"
+                f"{prior_sql}\n\nError:\n{prior_error}\n\n"
+                "Write a corrected query that fixes this specific problem."
+            )
         dialect = (self.settings and self.settings.source_dialect) or "athena"
         sys_prompt = (
             f"You are an expert SQL analyst. Write a highly accurate SQL query in {dialect.upper()} "
             "dialect to answer the user's question, using the provided Definitions and Example "
-            "Queries as context. Return ONLY the SQL query in a ```sql block. If the context is "
-            "completely insufficient, output NOTHING."
+            "Queries as context. The Example Queries were written for Metabase's UI and may "
+            "contain placeholders like {{Date}}, {{osname}}, or {{category}} -- these are NOT "
+            "valid SQL and will fail if copied as-is. Your query is executed directly with no "
+            "parameter substitution, so replace every such placeholder with a concrete literal "
+            "condition (e.g. a real recent date range, or drop the filter if the question doesn't "
+            "need it) and never emit {{...}} syntax. Return ONLY the SQL query in a ```sql block. "
+            "If the context is completely insufficient, output NOTHING."
         )
         try:
             res = llm.generate(prompt=prompt, system_prompt=sys_prompt, temperature=0.0)
@@ -400,6 +403,51 @@ class StakeholderService:
             logger.warning("SQL synthesis failed for question %r: %s", question, exc,
                            exc_info=True)
             return "", (0, 0)
+
+    def _synthesize_and_execute_sql(self, llm: Any, tenant_id: str, question: str,
+                                    query_nodes: List[Any], defn_nodes: List[Any],
+                                    max_attempts: int = 3) -> Tuple[str, Any, Tuple[int, int]]:
+        """Synthesize SQL and run it, retrying with the failure fed back to the LLM
+        when policy rejects the query or execution fails -- e.g. a leftover
+        {{Date}}-style Metabase placeholder, a typo'd column, wrong dialect syntax.
+        Stops at the first successful execution, or after `max_attempts`.
+
+        Returns (sql, exec_result_or_None, total_tokens). exec_result is None only
+        if every attempt failed -- the caller falls back to verbatim query reuse.
+        """
+        policy = QueryPolicy(self.settings.policy)
+        sources = self.tenants.list_datasources(tenant_id)
+        allowed_tables = [t for s in sources for t in s.get("tables", [])] or None
+        dialect = self.settings.source_dialect
+
+        prior_sql, prior_error = "", ""
+        t_in_total, t_out_total = 0, 0
+        for attempt in range(1, max_attempts + 1):
+            sql, (t_in, t_out) = self._synthesize_sql(
+                llm, question, query_nodes, defn_nodes, prior_sql=prior_sql, prior_error=prior_error)
+            t_in_total += t_in
+            t_out_total += t_out
+            if not sql:
+                break  # LLM declined (context insufficient) -- retrying won't help
+
+            decision = policy.validate(sql, allowed_tables=allowed_tables, dialect=dialect)
+            if decision.denied:
+                logger.warning("synthesized SQL rejected by policy for tenant %s "
+                               "(attempt %d/%d): %s", tenant_id, attempt, max_attempts,
+                               decision.reasons)
+                prior_sql, prior_error = sql, "; ".join(decision.reasons)
+                continue
+
+            ec = ExecutionContext(tenant_id=tenant_id, question=question, dialect="athena")
+            exec_res = self.executor.execute(decision.approved_sql, ec)
+            if exec_res.ok:
+                return decision.approved_sql, exec_res, (t_in_total, t_out_total)
+
+            logger.warning("synthesized SQL execution failed for tenant %s "
+                           "(attempt %d/%d): %s", tenant_id, attempt, max_attempts, exec_res.error)
+            prior_sql, prior_error = decision.approved_sql, exec_res.error
+
+        return "", None, (t_in_total, t_out_total)
 
     def _synthesize(self, llm: Any, question: str, category: str, data: Optional[Dict[str, Any]] = None) -> Tuple[str, Tuple[int, int], Optional[Dict[str, Any]]]:
         try:

@@ -40,6 +40,19 @@ class TestPolicy(unittest.TestCase):
         d = self.policy.validate("SELECT * FROM shirt", allowed_tables=["public.shirt"])
         self.assertTrue(d.allowed, d.reasons)
 
+    def test_blocks_unresolved_template_placeholder(self):
+        # {{Date}}-style syntax is a Metabase UI convention, not valid SQL --
+        # LLM-synthesized queries sometimes copy it from example context.
+        d = self.policy.validate("SELECT * FROM shirt WHERE {{Date}} AND color = 'red'")
+        self.assertFalse(d.allowed)
+        self.assertTrue(any("{{Date}}" in r for r in d.reasons), d.reasons)
+
+    def test_allows_literal_curly_braces_outside_template_syntax(self):
+        # Sanity check the placeholder regex isn't so broad it flags ordinary
+        # SQL that happens to contain braces (e.g. a JSON literal).
+        d = self.policy.validate("SELECT * FROM shirt WHERE meta = '{}' ")
+        self.assertTrue(d.allowed, d.reasons)
+
 
 if __name__ == "__main__":
     unittest.main()
