@@ -729,6 +729,10 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
     def search_knowledge(tenant_id: str, q: str = "", kind: Optional[str] = None,
                          usable_only: bool = True, limit: int = 20) -> List[Dict[str, Any]]:
         tenant_or_404(tenant_id)
+        # Clamp at the API boundary: `limit` is caller-controlled and this route is
+        # unauthenticated by default, while brain.search's own pre-filter cap
+        # (`max(limit * 25, 500)`) amplifies it 25x before any chunking happens.
+        limit = min(limit, 200)
         brain = C.pipeline.brain(tenant_id)
         k = NodeKind(kind) if kind else None
         return [n.to_dict() for n in brain.search(q, kind=k, usable_only=usable_only, limit=limit)]

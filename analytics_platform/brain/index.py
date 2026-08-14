@@ -201,6 +201,17 @@ class BrainIndex:
                            exc_info=True)
             return None
         if not rows:
+            if self.embedding_available and candidate_ids:
+                # Embeddings are configured and working, but this tenant has no
+                # rows under the model we're querying for — either the vectors
+                # were written under a different embedding_model, or this tenant
+                # was never backfilled. The dense leg silently returning [] would
+                # otherwise be indistinguishable from "embeddings are off".
+                logger.warning(
+                    "no vectors found for tenant %s under model %r; the dense "
+                    "recall leg is returning no results for this tenant. Run "
+                    "reindex_tenant() (or the `reindex` CLI command) to backfill",
+                    tenant_id, self.embedder.model_name)
             return None
 
         wanted = set(candidate_ids) if candidate_ids else None

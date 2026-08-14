@@ -67,6 +67,26 @@ class RankNodesTest(unittest.TestCase):
     def test_empty_input_yields_empty(self):
         self.assertEqual(rank_nodes({}, {}), [])
 
+    def test_confidence_never_overrides_real_rrf_relevance_gap(self):
+        # Regression test for the whole-branch review finding: RRF's own
+        # dynamic range is tiny (adjacent-rank gap ~= 1/(k+r) - 1/(k+r+1)), and
+        # confidence_boost's range ([1.0, 1.3]) is wide enough to swamp it if
+        # multiplied straight in. A synthetic {"a": 1.0, "b": 0.5} fixture (a
+        # 2:1 ratio) can never occur from real rrf_fuse() output and so cannot
+        # catch that bug -- this test feeds rank_nodes real fused scores from
+        # rrf_fuse() instead, on a single lexical leg of 12 nodes, mirroring
+        # the hand-verified scenario in the review findings.
+        node_ids = [f"n{i}" for i in range(1, 13)]
+        fused = rrf_fuse([node_ids])  # n1 is the single leg's true top match.
+
+        confidence = {"n1": {"review": 0.0, "freshness": 1.0}}  # boost 1.15
+        for node_id in node_ids[1:]:
+            confidence[node_id] = {"review": 1.0, "freshness": 1.0}  # boost 1.3
+
+        ranked = rank_nodes(fused, confidence)
+
+        self.assertEqual(ranked[0], "n1")
+
 
 if __name__ == "__main__":
     unittest.main()

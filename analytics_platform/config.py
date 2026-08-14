@@ -99,6 +99,12 @@ class Settings:
             llm_model=os.environ.get("ANALYTICS_LLM_MODEL", "deepseek/deepseek-v4-flash-0731"),
             llm_api_key=os.environ.get("ANALYTICS_LLM_API_KEY", ""),
             ollama_base_url=os.environ.get("ANALYTICS_OLLAMA_URL", "http://localhost:11434"),
+            embedding_enabled=os.environ.get("ANALYTICS_EMBEDDING_ENABLED", "1") != "0",
+            embedding_model=os.environ.get(
+                "ANALYTICS_EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5"),
+            embedding_query_prefix=os.environ.get(
+                "ANALYTICS_EMBEDDING_QUERY_PREFIX",
+                "Represent this sentence for searching relevant passages: "),
             metabase_live=os.environ.get("ANALYTICS_MB_LIVE") == "1",
             metabase_base_url=os.environ.get("ANALYTICS_MB_HOST", ""),
             metabase_database_id=os.environ.get("ANALYTICS_MB_DATABASE_ID", ""),

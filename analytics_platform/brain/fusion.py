@@ -43,10 +43,17 @@ def confidence_boost(confidence: Dict[str, float], weight: float = 0.3) -> float
 def rank_nodes(fused: Dict[str, float],
                confidence_by_id: Dict[str, Dict[str, float]],
                weight: float = 0.3) -> List[str]:
-    """Final ordering: fused relevance scaled by a bounded confidence boost."""
-    def score(node_id: str) -> float:
-        return fused[node_id] * confidence_boost(
-            confidence_by_id.get(node_id, {}), weight)
+    """Final ordering: fused relevance first, confidence only breaks ties.
+
+    RRF's own dynamic range and the confidence multiplier's range overlap, so
+    multiplying them together (the previous implementation) let confidence
+    outrank a clearly more relevant match — exactly the outcome this module's
+    docstring says must never happen. Confidence must instead be a true
+    secondary sort key: it can only decide order between nodes whose fused
+    relevance score is already equal.
+    """
+    def confidence(node_id: str) -> float:
+        return confidence_boost(confidence_by_id.get(node_id, {}), weight)
 
     # Secondary sort on id keeps the order deterministic for equal scores.
-    return sorted(fused, key=lambda n: (-score(n), n))
+    return sorted(fused, key=lambda n: (-fused[n], -confidence(n), n))

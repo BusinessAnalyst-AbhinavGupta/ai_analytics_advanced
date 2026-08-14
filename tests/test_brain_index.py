@@ -237,6 +237,50 @@ class VectorSearchDegradationTest(unittest.TestCase):
         self.assertFalse(self.index.embedding_available)
 
 
+class _FakeAvailableEmbedder:
+    """An embedder that reports `available=True` but never actually wrote any
+    vectors under this model name -- the "wrong model / never backfilled"
+    scenario from the whole-branch review."""
+
+    available = True
+    model_name = "some/other-model"
+    dim = 3
+
+    def encode_documents(self, texts):
+        return None
+
+    def encode_query(self, text):
+        return [0.1, 0.2, 0.3]
+
+
+class VectorSearchMissingModelTest(unittest.TestCase):
+    """Regression: dense leg returning [] because no rows match `model` must
+    log a WARNING, not fail silently -- "degrade loudly" (see index.py
+    `_load_vectors`)."""
+
+    def setUp(self):
+        self.ctx = make_ctx()
+        self.index = BrainIndex(self.ctx.store, embedder=_FakeAvailableEmbedder())
+
+    def tearDown(self):
+        self.ctx.close()
+
+    def test_warns_when_embeddings_available_but_no_vectors_for_this_model(self):
+        with self.assertLogs("analytics_platform.brain.index", level="WARNING") as cm:
+            hits = self.index.vector_search("attrition", "t1", ["kn_1"], 5)
+        self.assertEqual(hits, [])
+        self.assertTrue(
+            any("t1" in msg and "some/other-model" in msg for msg in cm.output),
+            cm.output)
+
+    def test_no_warning_when_candidate_set_is_empty(self):
+        # An empty candidate set means there was nothing to search in the
+        # first place -- not a missing-backfill situation, so no warning.
+        with self.assertRaises(AssertionError):
+            with self.assertLogs("analytics_platform.brain.index", level="WARNING"):
+                self.index.vector_search("attrition", "t1", [], 5)
+
+
 class ReindexTest(unittest.TestCase):
     def setUp(self):
         self.ctx = make_ctx()
