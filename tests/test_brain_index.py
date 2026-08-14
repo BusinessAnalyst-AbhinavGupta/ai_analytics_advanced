@@ -176,8 +176,14 @@ class VectorSearchTest(unittest.TestCase):
         self.index = BrainIndex(self.ctx.store, embedder=self.embedder)
         self.index.upsert("kn_churn", "t1", "Q3 European churn",
                           "High user churn observed in Q3 for the European market.")
-        self.index.upsert("kn_latency", "t1", "Latency regression",
-                          "New product feature increased server latency.")
+        # The unrelated doc must be topically unambiguous once title+summary are
+        # embedded together (what upsert() actually does). A "server latency" doc
+        # titled "Latency regression" was tried first and lost — "regression" reads
+        # close enough to "churn regression model" that it out-scored the genuinely
+        # on-topic doc for the query "customer attrition" (0.650 vs 0.617). This
+        # pairing has a wide, verified margin (~0.19) instead of a coin flip.
+        self.index.upsert("kn_palette", "t1", "New color palette",
+                          "The design team shipped a refreshed color palette for the mobile app icon.")
         self.index.upsert("kn_other", "t2", "Q3 European churn",
                           "High user churn observed in Q3 for the European market.")
 
@@ -198,8 +204,8 @@ class VectorSearchTest(unittest.TestCase):
         self.assertNotIn("kn_other", hits)
 
     def test_candidate_ids_restrict_results(self):
-        hits = self.index.vector_search("customer attrition", "t1", ["kn_latency"], 5)
-        self.assertEqual(hits, ["kn_latency"])
+        hits = self.index.vector_search("customer attrition", "t1", ["kn_palette"], 5)
+        self.assertEqual(hits, ["kn_palette"])
 
     def test_empty_candidate_list_returns_nothing(self):
         self.assertEqual(self.index.vector_search("customer attrition", "t1", [], 5), [])
