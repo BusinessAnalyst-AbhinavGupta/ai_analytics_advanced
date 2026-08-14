@@ -6,14 +6,15 @@ hard filter for retrieval; confidence only ranks.
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional
 
 from ..database import Store, dump_json, load_json
 from ..domain import (KnowledgeNode, NodeKind, ReviewStatus, new_id, now_iso)
-try:
-    from .vector_store import BrainVectorStore
-except ImportError:
-    BrainVectorStore = None
+from .fusion import rank_nodes, rrf_fuse
+from .index import BrainIndex
+
+logger = logging.getLogger(__name__)
 
 
 VALID_TRANSITIONS: Dict[ReviewStatus, List[ReviewStatus]] = {
@@ -34,27 +35,17 @@ class BrainConflict(Exception):
 
 
 class CompanyBrain:
-    def __init__(self, store: Store, tenant_id: str, vector_store: Optional['BrainVectorStore'] = None):
+    def __init__(self, store: Store, tenant_id: str,
+                 index: Optional[BrainIndex] = None):
         self.store = store
         self.tenant_id = tenant_id
-        self.vector_store = vector_store
+        self.index = index
 
-    def _sync_vector(self, node: KnowledgeNode) -> None:
-        if not self.vector_store:
+    def _sync_index(self, node: KnowledgeNode) -> None:
+        """Keep both recall legs in step with the row. Same DB, same connection."""
+        if self.index is None:
             return
-        text = f"{node.title}\n{node.summary}"
-        if node.payload and node.payload.get("sql"):
-            text += f"\nSQL: {node.payload['sql']}"
-            
-        metadata = {
-            "tenant_id": node.tenant_id,
-            "kind": node.kind.value,
-            "status": node.status.value,
-        }
-        try:
-            self.vector_store.upsert_node(node.id, text, metadata)
-        except Exception:
-            pass
+        self.index.upsert(node.id, node.tenant_id, node.title, node.summary)
 
     # -- write ---------------------------------------------------------------
     def add_node(self, node: KnowledgeNode) -> KnowledgeNode:
@@ -67,7 +58,7 @@ class CompanyBrain:
              node.title, node.summary, dump_json(node.payload), dump_json(node.confidence),
              node.evidence_ref, node.source_ref, node.created_at, node.updated_at,
              node.created_by, node.reviewed_by, node.review_notes, node.supersedes))
-        self._sync_vector(node)
+        self._sync_index(node)
         return node
 
     def create(self, kind: NodeKind, title: str, payload: Optional[Dict[str, Any]] = None,
@@ -112,7 +103,7 @@ class CompanyBrain:
             (to.value, now_iso(), by, notes, node_id, self.tenant_id))
         node = self.get(node_id)
         if node:
-            self._sync_vector(node)
+            self._sync_index(node)
         return node
 
     # convenience transitions
@@ -150,7 +141,7 @@ class CompanyBrain:
             (value, now_iso(), node_id, self.tenant_id))
         node = self.get(node_id)
         if node:
-            self._sync_vector(node)
+            self._sync_index(node)
         return node
 
     def _set_confidence(self, node_id: str, conf: Dict[str, float]) -> None:
@@ -159,47 +150,62 @@ class CompanyBrain:
             (dump_json(conf), now_iso(), node_id, self.tenant_id))
 
     # -- read ---------------------------------------------------------------
-    def search(self, query: str = "", kind: Optional[NodeKind] = None,
-               usable_only: bool = True, limit: int = 20) -> List[KnowledgeNode]:
-        
-        vector_ids = []
-        if query and self.vector_store:
-            filters = {"tenant_id": self.tenant_id}
-            if kind is not None:
-                filters["kind"] = kind.value if hasattr(kind, 'value') else kind
-            if usable_only:
-                filters["status"] = {"$in": ["APPROVED", "APPROVED_WITH_CAVEATS"]}
-            try:
-                vector_ids = self.vector_store.search_similar(query, limit=limit * 2, metadata_filters=filters)
-            except Exception:
-                pass
+    _USABLE_STATUSES = (ReviewStatus.APPROVED.value,
+                        ReviewStatus.APPROVED_WITH_CAVEATS.value)
 
+    def _candidate_rows(self, kind: Optional[NodeKind], usable_only: bool,
+                        cap: int) -> List[Any]:
+        """The authorisation boundary: tenant + status + kind, decided in SQL."""
         sql = "SELECT * FROM knowledge_nodes WHERE tenant_id=?"
         params: List[Any] = [self.tenant_id]
         if usable_only:
-            sql += " AND status IN ('APPROVED','APPROVED_WITH_CAVEATS')"
+            placeholders = ",".join("?" for _ in self._USABLE_STATUSES)
+            sql += f" AND status IN ({placeholders})"
+            params.extend(self._USABLE_STATUSES)
         if kind is not None:
             sql += " AND kind=?"
-            params.append(kind.value if hasattr(kind, 'value') else kind)
-            
-        if vector_ids:
-            placeholders = ",".join("?" for _ in vector_ids)
-            sql += f" AND (id IN ({placeholders}) OR title LIKE ? OR summary LIKE ?)"
-            params.extend(vector_ids)
-            like = f"%{query}%"
-            params += [like, like]
-        elif query:
-            sql += " AND (title LIKE ? OR summary LIKE ?)"
-            like = f"%{query}%"
-            params += [like, like]
-            
+            params.append(kind.value if hasattr(kind, "value") else kind)
         sql += " ORDER BY updated_at DESC LIMIT ?"
-        params.append(limit)
-        
-        nodes = [self._row_to_node(r) for r in self.store.query_all(sql, tuple(params))]
-        if vector_ids:
-            nodes.sort(key=lambda n: vector_ids.index(n.id) if n.id in vector_ids else 9999)
-        return nodes
+        params.append(cap)
+        return self.store.query_all(sql, tuple(params))
+
+    def search(self, query: str = "", kind: Optional[NodeKind] = None,
+               usable_only: bool = True, limit: int = 20) -> List[KnowledgeNode]:
+        """Hybrid retrieval: SQL pre-filter, BM25 + dense recall, RRF, rerank.
+
+        With no query, this is "most recently updated usable nodes". With a query,
+        both recall legs run over the pre-filtered candidate set and are fused by
+        rank. A node that neither leg surfaces is not returned — relevance is a
+        real filter, not a sort.
+        """
+        # Pre-filter wide enough that recall is not truncated before ranking.
+        rows = self._candidate_rows(kind, usable_only, cap=max(limit * 25, 500))
+        nodes = [self._row_to_node(r) for r in rows]
+        if not query or not nodes:
+            return nodes[:limit]
+
+        by_id = {n.id: n for n in nodes}
+        candidate_ids = list(by_id)
+
+        if self.index is None:
+            logger.debug("no BrainIndex on tenant %s; returning recency order",
+                         self.tenant_id)
+            return nodes[:limit]
+
+        recall = max(limit * 4, 40)
+        lexical = self.index.lexical_search(query, self.tenant_id, candidate_ids, recall)
+        dense = self.index.vector_search(query, self.tenant_id, candidate_ids, recall)
+
+        if not lexical and not dense:
+            if not self.index.embedding_available:
+                logger.info("no lexical hits for %r on tenant %s and embeddings are "
+                            "unavailable", query, self.tenant_id)
+            return []
+
+        fused = rrf_fuse([lexical, dense])
+        confidence_by_id = {n.id: n.confidence for n in nodes}
+        ordered = rank_nodes(fused, confidence_by_id)
+        return [by_id[i] for i in ordered if i in by_id][:limit]
 
     def usable_queries(self, limit: int = 200) -> List[KnowledgeNode]:
         """All QUERY nodes whose status is usable (approved), newest first.
