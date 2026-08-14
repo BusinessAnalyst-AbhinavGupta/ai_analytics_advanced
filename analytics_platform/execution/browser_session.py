@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import threading
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional
 
@@ -150,6 +151,13 @@ class BrowserSessionExecutor(QueryExecutor):
         self._timeout_s = timeout_s
         self._runner = runner or make_osascript_runner(
             host=self._metabase_host_fragment(), timeout_s=timeout_s)
+        # window.__mb (Chrome-tab-side) is a single shared stash for every
+        # roundtrip -- session_status() and execute() both use it. This
+        # instance is a process-wide singleton reused across concurrent HTTP
+        # requests (FastAPI runs sync handlers in a threadpool), so two
+        # roundtrips overlapping resets/reads of the SAME global would corrupt
+        # each other's result. Serialize all of them through one lock.
+        self._roundtrip_lock = threading.Lock()
 
     @classmethod
     def from_env(cls, runner: Optional[Runner] = None) -> "BrowserSessionExecutor":
@@ -193,18 +201,24 @@ class BrowserSessionExecutor(QueryExecutor):
 
     def _run_roundtrip(self, kick_js: str, timeout_s: float) -> str:
         """Kick async JS that stashes results in `window.__mb`, then poll the global
-        synchronously (Chrome's `execute javascript` never awaits promises)."""
+        synchronously (Chrome's `execute javascript` never awaits promises).
+
+        Locked: window.__mb is one shared slot in the browser tab, so a second
+        roundtrip's RESET_JS would otherwise wipe out a first roundtrip still
+        polling for its own result.
+        """
         import time as _time
-        self._run(RESET_JS)
-        self._run(kick_js)
-        deadline = _time.monotonic() + max(timeout_s, 1.0)
-        last = ""
-        while _time.monotonic() < deadline:
-            out = self._run(READ_STATE_JS) or ""
-            if out:
-                last = out
-                break
-            _time.sleep(0.1)
+        with self._roundtrip_lock:
+            self._run(RESET_JS)
+            self._run(kick_js)
+            deadline = _time.monotonic() + max(timeout_s, 1.0)
+            last = ""
+            while _time.monotonic() < deadline:
+                out = self._run(READ_STATE_JS) or ""
+                if out:
+                    last = out
+                    break
+                _time.sleep(0.1)
         return last
 
     # -- session gate ---------------------------------------------------------

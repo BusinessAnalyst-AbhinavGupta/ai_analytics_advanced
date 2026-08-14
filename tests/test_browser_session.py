@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import unittest
 
 from analytics_platform.config import Settings
@@ -109,6 +110,58 @@ class TestBrowserSession(unittest.TestCase):
                                                        exec_payload(rows=rows, cols=["x"])))
         r = ex.execute("SELECT 1", ExecutionContext(tenant_id="t"))
         self.assertEqual(r.row_count, 10)
+
+    def test_concurrent_roundtrips_are_serialized(self):
+        """window.__mb is one shared slot in the real browser tab -- e.g. a
+        background session-health poll and a real query, or two concurrent
+        requests, could otherwise have one roundtrip's RESET_JS wipe out
+        another's in-flight kick before it polls its own result.
+
+        Directly proves mutual exclusion rather than hoping a data race
+        manifests under timing luck: tracks how many roundtrips are ever
+        simultaneously between "kick" and publishing their result, across
+        several concurrent execute() calls. That count must never exceed 1.
+        """
+        import threading
+        import time as _time
+
+        counter_lock = threading.Lock()  # guards the counter itself, not the
+                                         # executor's lock under test
+        state = {"payload": "", "ready": False, "in_flight": 0, "max_seen": 0}
+
+        def runner(js: str) -> str:
+            if "'reset'" in js:
+                state["payload"], state["ready"] = "", False
+                return "reset"
+            if "__mb.ready ?" in js:
+                return state["payload"] if state["ready"] else ""
+            # A kick (session probe or query execute) -- represents work in
+            # flight in the tab. Hold this window open with a sleep so any
+            # unserialized second roundtrip's kick has a chance to overlap.
+            with counter_lock:
+                state["in_flight"] += 1
+                state["max_seen"] = max(state["max_seen"], state["in_flight"])
+            _time.sleep(0.02)
+            with counter_lock:
+                state["in_flight"] -= 1
+            payload = probe_payload() if "location.hostname" in js else exec_payload(rows=[[1]], cols=["n"])
+            state["payload"], state["ready"] = payload, True
+            return "kick"
+
+        ex = BrowserSessionExecutor(database_id=1, expected_host="metabase.acme", runner=runner)
+
+        def run_one() -> None:
+            ex.execute("SELECT 1", ExecutionContext(tenant_id="t"))
+
+        threads = [threading.Thread(target=run_one) for _ in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(state["max_seen"], 1,
+                         f"{state['max_seen']} roundtrips were in flight at the same "
+                         "time -- window.__mb access is not actually serialized")
 
 
 class TestBrowserFromEnv(unittest.TestCase):
