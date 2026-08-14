@@ -89,6 +89,17 @@ class BrainIndex:
         except Exception as exc:  # noqa: BLE001
             logger.warning("index delete failed for %s: %s", node_id, exc, exc_info=True)
 
+    def reindex_tenant(self, tenant_id: str, batch: int = 256) -> int:
+        """Rebuild both legs for one tenant. Safe to re-run; returns node count."""
+        rows = self.store.query_all(
+            "SELECT id, title, summary FROM knowledge_nodes WHERE tenant_id = ?",
+            (tenant_id,))
+        for row in rows:
+            self.upsert(row["id"], tenant_id, row["title"] or "", row["summary"] or "")
+        logger.info("reindexed %d node(s) for tenant %s (embeddings=%s)",
+                    len(rows), tenant_id, self.embedding_available)
+        return len(rows)
+
     # -- read ----------------------------------------------------------------
     def lexical_search(self, query: str, tenant_id: str,
                        candidate_ids: Optional[Sequence[str]] = None,

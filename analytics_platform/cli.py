@@ -12,7 +12,7 @@ import logging
 import os
 import sqlite3
 import sys
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .api import bootstrap_demo, make_context
 
@@ -418,6 +418,29 @@ def _cmd_adopt_db(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_reindex(args) -> int:
+    from .brain.embedding import get_embedder
+    from .brain.index import BrainIndex
+    from .config import Settings
+    from .stores import TenantStoreProvider
+
+    settings = Settings.from_env()
+    stores = TenantStoreProvider(
+        control_db_path=settings.resolve_control_db_path(),
+        tenants_root=settings.resolve_tenants_root())
+    try:
+        # Reindexing a tenant means opening that tenant's own database.
+        store = stores.for_tenant(args.tenant)
+        index = BrainIndex(store, embedder=get_embedder(settings))
+        if not index.embedding_available:
+            print("warning: embeddings unavailable; rebuilding the lexical leg only")
+        total = index.reindex_tenant(args.tenant)
+        print(f"reindexed {total} node(s) for tenant {args.tenant} ({store.db_path})")
+    finally:
+        stores.close_all()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="analytics-platform")
     sub = p.add_subparsers(dest="command", required=True)
@@ -473,6 +496,9 @@ def build_parser() -> argparse.ArgumentParser:
                          help="adopt even though the source holds rows with a "
                               "NULL/empty tenant_id; those rows are NOT copied")
     p_adopt.set_defaults(func=_cmd_adopt_db)
+    p_reindex = sub.add_parser("reindex", help="rebuild Brain search indexes for a tenant")
+    p_reindex.add_argument("--tenant", required=True)
+    p_reindex.set_defaults(func=_cmd_reindex)
     return p
 
 

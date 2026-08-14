@@ -126,7 +126,6 @@ websockets==16.1.1
 widgetsnbextension==4.0.15
 fastapi==0.141.1
 
-# Vector DB and Embeddings
-chromadb>=0.4.24
+# Embeddings for Brain hybrid retrieval (vectors live in SQLite; no vector DB)
 sentence-transformers>=2.5.0
 

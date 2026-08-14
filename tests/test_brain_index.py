@@ -237,5 +237,45 @@ class VectorSearchDegradationTest(unittest.TestCase):
         self.assertFalse(self.index.embedding_available)
 
 
+class ReindexTest(unittest.TestCase):
+    def setUp(self):
+        self.ctx = make_ctx()
+        self.index = BrainIndex(self.ctx.store, embedder=NullEmbedder("test"))
+        # Nodes written before the index existed: rows with no FTS entries.
+        for i, (title, summary) in enumerate([
+                ("Checkout conversion", "Sessions reaching payment"),
+                ("Refund rate", "Share of orders refunded")], start=1):
+            self.ctx.store.execute(
+                "INSERT INTO knowledge_nodes (id,tenant_id,kind,status,version,title,"
+                "summary,payload,confidence,evidence_ref,source_ref,created_at,"
+                "updated_at,created_by,reviewed_by,review_notes,supersedes) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (f"kn_{i}", "t1", "METRIC", "APPROVED", 1, title, summary,
+                 "{}", "{}", "", "", "2026-01-01", "2026-01-01", "seed", "", "", ""))
+
+    def tearDown(self):
+        self.ctx.close()
+
+    def test_nodes_are_invisible_before_reindex(self):
+        self.assertEqual(self.index.lexical_search("conversion", "t1", None, 10), [])
+
+    def test_reindex_returns_the_node_count(self):
+        self.assertEqual(self.index.reindex_tenant("t1"), 2)
+
+    def test_nodes_are_searchable_after_reindex(self):
+        self.index.reindex_tenant("t1")
+        self.assertEqual(self.index.lexical_search("conversion", "t1", None, 10), ["kn_1"])
+
+    def test_reindex_is_idempotent(self):
+        self.index.reindex_tenant("t1")
+        self.index.reindex_tenant("t1")
+        rows = self.ctx.store.query_all(
+            "SELECT node_id FROM knowledge_fts WHERE node_id = ?", ("kn_1",))
+        self.assertEqual(len(rows), 1)
+
+    def test_reindex_does_not_touch_other_tenants(self):
+        self.assertEqual(self.index.reindex_tenant("t2"), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
