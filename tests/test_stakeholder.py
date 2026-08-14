@@ -33,6 +33,16 @@ class TestStakeholder(unittest.TestCase):
         self.assertEqual(res["citations"][0]["title"], "monthly retail orders")
         self.assertIn("monthly retail orders", res["answer"])
 
+    def test_answer_creates_and_reuses_conversation(self):
+        res1 = self.ctx.stakeholder.answer(self.tid, "how many retail orders per month")
+        cid = res1["conversation_id"]
+        self.assertTrue(cid)
+        res2 = self.ctx.stakeholder.answer(self.tid, "and last month specifically?",
+                                           conversation_id=cid)
+        self.assertEqual(res2["conversation_id"], cid)
+        conv = self.ctx.stakeholder.get_conversation(self.tid, cid)
+        self.assertEqual(len(conv["messages"]), 2)
+
     def test_reuse_resolves_metabase_template_placeholder(self):
         # A stored query authored in Metabase's native editor can carry a
         # {{Date}}-style Field Filter tag -- valid inside Metabase's own

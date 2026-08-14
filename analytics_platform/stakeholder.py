@@ -230,8 +230,10 @@ class StakeholderService:
                 "sql": sql, "placeholders_resolved": placeholders}
 
     # -- answer ------------------------------------------------------------
-    def answer(self, tenant_id: str, question: str, user_id: str = "") -> Dict[str, Any]:
+    def answer(self, tenant_id: str, question: str, user_id: str = "",
+               conversation_id: str = "") -> Dict[str, Any]:
         self.tenants.require_tenant(tenant_id)
+        conversation_id = self._ensure_conversation(tenant_id, conversation_id, question)
         trace = new_trace()
         category = self.classify(question)
 
@@ -240,7 +242,8 @@ class StakeholderService:
             answer = "AI Stakeholder analyst is disabled for this tenant."
             out = self._record(tenant_id, question, user_id, category, trace, answer,
                                AnswerMode.CANNOT_ANSWER, "CANNOT_ANSWER", False, [],
-                               caveats=["stakeholder analyst AI disabled in tenant configuration"])
+                               caveats=["stakeholder analyst AI disabled in tenant configuration"],
+                               conversation_id=conversation_id)
             self.obs.event(tenant_id=tenant_id, trace_id=trace, stage="stakeholder.answer",
                            actor="stakeholder", resource=out["answer_id"], status="DISABLED",
                            meta={"category": category, "mode": AnswerMode.CANNOT_ANSWER.value})
@@ -257,7 +260,8 @@ class StakeholderService:
             out = self._record(tenant_id, question, user_id, category, trace, "",
                                AnswerMode.REQUIRES_SENIOR_REVIEW, "ESCALATED", True,
                                source_ids, caveats=["high-risk question matched escalation rules"],
-                               queries_run=[n.payload.get("sql", "") for n in query_nodes])
+                               queries_run=[n.payload.get("sql", "") for n in query_nodes],
+                               conversation_id=conversation_id)
             self.obs.event(tenant_id=tenant_id, trace_id=trace, stage="stakeholder.escalate",
                            actor="stakeholder", resource=out["answer_id"], status="OK",
                            meta={"category": category})
@@ -292,7 +296,8 @@ class StakeholderService:
                                    citations=citations,
                                    facts=["synthesized custom query based on approved knowledge"],
                                    caveats=["dynamically generated SQL"],
-                                   tokens_in=t_in, tokens_out=t_out, queries_run=[sql])
+                                   tokens_in=t_in, tokens_out=t_out, queries_run=[sql],
+                                   conversation_id=conversation_id)
                 out["chart_config"] = chart_config
                 out["chart_data"] = preview
                 self.obs.event(tenant_id=tenant_id, trace_id=trace, stage="stakeholder.answer",
@@ -348,7 +353,8 @@ class StakeholderService:
                 out = self._record(tenant_id, question, user_id, category, trace, answer, mode,
                                    "ANSWERED", False, [n.id for n in query_nodes],
                                    citations, facts=facts, caveats=caveats,
-                                   tokens_in=t_in, tokens_out=t_out, queries_run=queries_run)
+                                   tokens_in=t_in, tokens_out=t_out, queries_run=queries_run,
+                                   conversation_id=conversation_id)
                 out["_detail"] = all_details
                 out["chart_config"] = chart_config
                 out["chart_data"] = all_details[0].get("preview", []) if all_details else []
@@ -389,7 +395,8 @@ class StakeholderService:
                                [n.id for n in defn_nodes],
                                citations,
                                facts=facts,
-                               caveats=["from approved definitions at review time"])
+                               caveats=["from approved definitions at review time"],
+                               conversation_id=conversation_id)
             self.obs.event(tenant_id=tenant_id, trace_id=trace, stage="stakeholder.answer",
                            actor="stakeholder", resource=out["answer_id"], status="OK",
                            meta={"category": category, "mode": AnswerMode.DIRECT_FROM_APPROVED_KNOWLEDGE.value})
@@ -410,7 +417,8 @@ class StakeholderService:
                     if needs_clarif:
                         out = self._record(tenant_id, question, user_id, category, trace, clarif_q,
                                            AnswerMode.NEEDS_CLARIFICATION, "NEEDS_CLARIFICATION", False, [],
-                                           caveats=["missing required parameters for skill: " + skill.meta.name])
+                                           caveats=["missing required parameters for skill: " + skill.meta.name],
+                                           conversation_id=conversation_id)
                         self.obs.event(tenant_id=tenant_id, trace_id=trace, stage="stakeholder.answer",
                                        actor="stakeholder", resource=out["answer_id"], status="OK",
                                        meta={"category": category, "mode": out["answer_mode"]})
@@ -423,7 +431,8 @@ class StakeholderService:
                         out = self._record(tenant_id, question, user_id, category, trace, "Skill execution failed: " + exec_res.error,
                                            AnswerMode.CANNOT_ANSWER, "CANNOT_ANSWER", False, [],
                                            queries_run=exec_res.queries_run,
-                                           caveats=["skill execution error"])
+                                           caveats=["skill execution error"],
+                                           conversation_id=conversation_id)
                         self.obs.event(tenant_id=tenant_id, trace_id=trace, stage="stakeholder.answer",
                                        actor="stakeholder", resource=out["answer_id"], status="ERROR",
                                        meta={"category": category, "mode": out["answer_mode"]})
@@ -437,7 +446,8 @@ class StakeholderService:
                                        AnswerMode.SKILL_EXECUTED_ANALYSIS, "ANSWERED", False, [],
                                        queries_run=exec_res.queries_run,
                                        caveats=["used specialized skill: " + skill.meta.name],
-                                       tokens_in=toks[0], tokens_out=toks[1])
+                                       tokens_in=toks[0], tokens_out=toks[1],
+                                       conversation_id=conversation_id)
                     out["chart_config"] = chart_config
                     out["chart_data"] = exec_res.data_previews[-1]["preview"] if exec_res.data_previews else []
                     self.obs.event(tenant_id=tenant_id, trace_id=trace, stage="stakeholder.answer",
@@ -460,7 +470,8 @@ class StakeholderService:
             out = self._record(tenant_id, question, user_id, category, trace, answer,
                                AnswerMode.NEW_LOW_RISK_ANALYSIS, "ANSWERED", False, [],
                                caveats=["no approved knowledge in the Brain; generated answer"],
-                               tokens_in=toks[0], tokens_out=toks[1])
+                               tokens_in=toks[0], tokens_out=toks[1],
+                               conversation_id=conversation_id)
             out["chart_config"] = chart_config
             out["chart_data"] = []
         else:
@@ -468,7 +479,8 @@ class StakeholderService:
                       "Rephrase, or ask the senior analyst.")
             out = self._record(tenant_id, question, user_id, category, trace, answer,
                                AnswerMode.CANNOT_ANSWER, "CANNOT_ANSWER", False, [],
-                               caveats=["no approved knowledge matched"])
+                               caveats=["no approved knowledge matched"],
+                               conversation_id=conversation_id)
         self.obs.event(tenant_id=tenant_id, trace_id=trace, stage="stakeholder.answer",
                        actor="stakeholder", resource=out["answer_id"], status="OK",
                        meta={"category": category, "mode": out["answer_mode"]})
@@ -620,7 +632,8 @@ class StakeholderService:
                 facts: Optional[List[str]] = None,
                 caveats: Optional[List[str]] = None,
                 tokens_in: int = 0, tokens_out: int = 0,
-                queries_run: Optional[List[str]] = None) -> Dict[str, Any]:
+                queries_run: Optional[List[str]] = None,
+                conversation_id: str = "") -> Dict[str, Any]:
         answer_id = new_id("ans")
         cost = round((tokens_in / 1000.0) * self.cost_per_1k_input
                      + (tokens_out / 1000.0) * self.cost_per_1k_output, 6)
@@ -630,16 +643,19 @@ class StakeholderService:
         self.stores.for_tenant(tenant_id).execute(
             "INSERT INTO stakeholder_answers (id,tenant_id,question,user_id,category,answer,"
             "answer_mode,status,trace_id,created_at,source_node_ids,citations,facts,caveats,"
-            "freshness,tokens_in,tokens_out,cost,escalated,queries_run) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "freshness,tokens_in,tokens_out,cost,escalated,queries_run,conversation_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (answer_id, tenant_id, question, user_id, category, answer, mode.value, status,
              trace, now_iso(), dump_json(source_ids), dump_json(citations or []),
              dump_json(facts or []), dump_json(caveats or []), freshness,
-             tokens_in, tokens_out, cost, int(escalated), dump_json(queries_run or [])))
+             tokens_in, tokens_out, cost, int(escalated), dump_json(queries_run or []),
+             conversation_id))
         return {"answer_id": answer_id, "tenant_id": tenant_id, "question": question,
                 "category": category, "answer": answer, "answer_mode": mode.value,
                 "status": status, "escalated": escalated, "citations": citations or [],
                 "caveats": caveats or [], "facts": facts or [], "freshness": freshness,
-                "cost": cost, "trace_id": trace, "queries_run": queries_run or []}
+                "cost": cost, "trace_id": trace, "queries_run": queries_run or [],
+                "conversation_id": conversation_id}
 
     # -- feedback + quality -------------------------------------------------
     def record_feedback(self, tenant_id: str, answer_id: str, user_id: str,
