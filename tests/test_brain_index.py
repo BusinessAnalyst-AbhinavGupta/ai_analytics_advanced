@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 from analytics_platform.brain.embedding import NullEmbedder
 from analytics_platform.brain.index import BrainIndex
@@ -99,6 +100,66 @@ class LexicalSearchTest(unittest.TestCase):
         self.index.upsert("kn_4", "t1", "Conversion", "conversion conversion conversion")
         hits = self.index.lexical_search("conversion", "t1", None, 10)
         self.assertEqual(hits[0], "kn_4")
+
+
+class ChunkedLexicalSearchTest(unittest.TestCase):
+    """Regression for candidate sets larger than SQLite's ~900-param limit.
+
+    Patches `_MAX_SQL_PARAMS` down to 2 so a 5-id candidate set forces
+    `lexical_search` to issue 3 chunked MATCH queries and merge the results,
+    instead of dropping the SQL restriction and silently ranking the whole
+    tenant (the bug being fixed here).
+    """
+
+    def setUp(self):
+        self.ctx = make_ctx()
+        self.index = BrainIndex(self.ctx.store, embedder=NullEmbedder("test"))
+        # Increasing term frequency of "conversion" produces a strict, known
+        # bm25 ranking: kn_5 best match, kn_1 worst.
+        for i in range(1, 6):
+            self.index.upsert(
+                f"kn_{i}", "t1", f"Node {i}", " ".join(["conversion"] * i))
+        # A node outside the candidate set that would win tenant-wide ranking
+        # if the restriction were ever dropped instead of chunked.
+        self.index.upsert(
+            "kn_decoy", "t1", "Decoy", " ".join(["conversion"] * 50))
+
+    def tearDown(self):
+        self.ctx.close()
+
+    def test_chunking_matches_unchunked_result_exactly(self):
+        candidate_ids = ["kn_1", "kn_2", "kn_3", "kn_4", "kn_5"]
+
+        # Ground truth: default _MAX_SQL_PARAMS (900) means all 5 ids fit in
+        # one query, so this is the real, unchunked answer.
+        expected = self.index.lexical_search("conversion", "t1", candidate_ids, 3)
+        self.assertEqual(expected, ["kn_5", "kn_4", "kn_3"])
+        self.assertNotIn("kn_decoy", expected)
+
+        # Force 3 chunks of at most 2 ids each: [kn_1,kn_2], [kn_3,kn_4], [kn_5].
+        with mock.patch("analytics_platform.brain.index._MAX_SQL_PARAMS", 2):
+            chunked = self.index.lexical_search("conversion", "t1", candidate_ids, 3)
+
+        self.assertEqual(chunked, expected)
+        self.assertNotIn("kn_decoy", chunked)
+
+    def test_chunking_respects_full_candidate_set_not_just_first_chunk(self):
+        # All 5 candidates, but ask for everything back (limit=10) so a
+        # regression that only queried the first chunk would be caught by a
+        # shorter, wrong result rather than just a reordering.
+        candidate_ids = ["kn_1", "kn_2", "kn_3", "kn_4", "kn_5"]
+        with mock.patch("analytics_platform.brain.index._MAX_SQL_PARAMS", 2):
+            chunked = self.index.lexical_search("conversion", "t1", candidate_ids, 10)
+        self.assertEqual(chunked, ["kn_5", "kn_4", "kn_3", "kn_2", "kn_1"])
+
+    def test_candidate_ids_none_is_unaffected_by_chunking(self):
+        # candidate_ids=None must always take the single-chunk path,
+        # regardless of how small _MAX_SQL_PARAMS is patched to.
+        with mock.patch("analytics_platform.brain.index._MAX_SQL_PARAMS", 2):
+            hits = self.index.lexical_search("conversion", "t1", None, 10)
+        self.assertEqual(hits[0], "kn_decoy")
+        self.assertIn("kn_5", hits)
+        self.assertIn("kn_1", hits)
 
 
 if __name__ == "__main__":

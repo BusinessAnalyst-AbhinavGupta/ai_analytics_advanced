@@ -13,7 +13,7 @@ source of truth, never of an index's metadata filter.
 from __future__ import annotations
 
 import logging
-from typing import List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -93,19 +93,51 @@ class BrainIndex:
     def lexical_search(self, query: str, tenant_id: str,
                        candidate_ids: Optional[Sequence[str]] = None,
                        limit: int = 40) -> List[str]:
-        """Node ids ranked by bm25, best first. [] when nothing is searchable."""
+        """Node ids ranked by bm25, best first. [] when nothing is searchable.
+
+        `ORDER BY ... LIMIT` runs inside SQL, before any Python code sees a row —
+        unlike the vector leg (Task 5), which loads every row and can safely
+        re-filter in Python afterwards. That means a candidate set larger than
+        SQLite's ~900-parameter limit cannot simply drop the restriction: doing so
+        would rank the whole tenant and return the global top-`limit`, which may
+        share nothing with the candidate set the caller actually asked about. So
+        this leg chunks instead — one MATCH query per <=900-id slice, merging by
+        each node's best (most negative) bm25 score across chunks, then re-sorting
+        and truncating once at the end.
+        """
         if candidate_ids is not None and len(candidate_ids) == 0:
             return []
         match = to_fts_query(query)
         if not match:
             return []
 
+        chunks: List[Optional[Sequence[str]]]
+        if candidate_ids is None:
+            chunks = [None]
+        else:
+            ids = list(candidate_ids)
+            chunks = [ids[i:i + _MAX_SQL_PARAMS] for i in range(0, len(ids), _MAX_SQL_PARAMS)]
+
+        best: Dict[str, float] = {}
+        for chunk in chunks:
+            for node_id, score in self._lexical_search_chunk(match, tenant_id, chunk, limit):
+                if node_id not in best or score < best[node_id]:
+                    best[node_id] = score
+
+        # bm25() is more negative for better matches, so ascending is best-first.
+        ordered = sorted(best, key=lambda n: best[n])
+        return ordered[:limit]
+
+    def _lexical_search_chunk(self, match: str, tenant_id: str,
+                              candidate_ids: Optional[Sequence[str]],
+                              limit: int) -> List[Tuple[str, float]]:
+        """One MATCH query, restricted to at most _MAX_SQL_PARAMS candidate ids."""
         sql = ("SELECT node_id, bm25(knowledge_fts) AS score FROM knowledge_fts "
                "WHERE knowledge_fts MATCH ? AND tenant_id = ?")
         params: List[object] = [match, tenant_id]
-        restrict = self._restrict_clause(candidate_ids, params)
-        sql += restrict
-        # bm25() is more negative for better matches, so ascending is best-first.
+        if candidate_ids is not None:
+            sql += f" AND node_id IN ({','.join('?' for _ in candidate_ids)})"
+            params.extend(candidate_ids)
         sql += " ORDER BY score ASC LIMIT ?"
         params.append(limit)
 
@@ -115,7 +147,7 @@ class BrainIndex:
             logger.warning("lexical search failed for tenant %s: %s", tenant_id, exc,
                            exc_info=True)
             return []
-        return [r["node_id"] for r in rows]
+        return [(r["node_id"], r["score"]) for r in rows]
 
     @staticmethod
     def _restrict_clause(candidate_ids: Optional[Sequence[str]],
