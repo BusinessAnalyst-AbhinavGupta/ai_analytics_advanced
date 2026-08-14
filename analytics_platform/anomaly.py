@@ -2,14 +2,19 @@
 from typing import Any, Dict, List, Optional
 
 from .domain import new_id, now_iso
+from .brain.embedding import Embedder
+from .brain.index import BrainIndex
 from .brain.store import CompanyBrain
 from .stores import TenantStoreProvider
 
 class AnomalyService:
-    def __init__(self, stores: TenantStoreProvider, tenants):
+    def __init__(self, stores: TenantStoreProvider, tenants, embedder: Optional[Embedder] = None):
         self.stores = stores
         self.tenants = tenants
-        self.brain = lambda t: CompanyBrain(stores.for_tenant(t), t)
+        self.embedder = embedder
+        self.brain = lambda t: CompanyBrain(
+            stores.for_tenant(t), t,
+            index=BrainIndex(stores.for_tenant(t), embedder=self.embedder))
 
     def list_kpis(self, tenant_id: str) -> List[Dict[str, Any]]:
         rows = self.stores.for_tenant(tenant_id).query_all(

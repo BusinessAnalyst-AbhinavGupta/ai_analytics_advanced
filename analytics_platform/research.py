@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from .brain.embedding import Embedder
+from .brain.index import BrainIndex
 from .brain.store import CompanyBrain
 from .database import Store, dump_json, load_json
 from .domain import NodeKind, ReviewStatus, new_id, now_iso
@@ -39,10 +41,17 @@ DEFAULT_SOURCES = [
 
 class ResearchService:
     def __init__(self, stores: TenantStoreProvider, observability: Optional[Observability] = None,
-                 sources: Optional[List[Dict[str, Any]]] = None):
+                 sources: Optional[List[Dict[str, Any]]] = None,
+                 embedder: Optional[Embedder] = None):
         self.stores = stores
         self.obs = observability or Observability(stores)
         self.default_sources = sources or DEFAULT_SOURCES
+        self.embedder = embedder
+
+    def brain(self, tenant_id: str) -> CompanyBrain:
+        store = self.stores.for_tenant(tenant_id)
+        return CompanyBrain(store, tenant_id,
+                            index=BrainIndex(store, embedder=self.embedder))
 
     # -- sources (allow/block) --------------------------------------------- #
     def seed_sources(self, tenant_id: str) -> List[Dict[str, Any]]:
@@ -146,7 +155,7 @@ class ResearchService:
             return None
         claims = load_json(row["claims"], [])
         claim = claims[0] if claims else {}
-        brain = CompanyBrain(store, tenant_id)
+        brain = self.brain(tenant_id)
         node = brain.create(
             NodeKind.EXTERNAL,
             title=claim.get("title") or row["title"] or ("External claim: " + row["query"]),

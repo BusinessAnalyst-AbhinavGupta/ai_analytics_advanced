@@ -40,6 +40,10 @@ class TestBrain(unittest.TestCase):
         n = brain_a.create(NodeKind.METRIC, "churn", summary="secret churn metric")
         brain_a.submit(n.id, by="junior")
         brain_a.approve(n.id, by="senior")
+        # Positive case first: the node DOES exist and DOES match for its own
+        # tenant, so the negative case below actually proves isolation instead
+        # of passing vacuously because nothing ever matches anywhere.
+        self.assertIn(n.id, [x.id for x in brain_a.search("churn")])
         brain_b = self.ctx.pipeline.brain(tid_b)
         self.assertEqual(brain_b.search("churn"), [])
         self.assertEqual(brain_b.get(n.id), None)
@@ -59,6 +63,10 @@ class TestBrain(unittest.TestCase):
         n = brain.create(NodeKind.BUSINESS_RULE, "rule")
         brain.submit(n.id)
         brain.approve(n.id)
+        # Positive case first: while APPROVED the node is findable, so the
+        # empty result after staling proves the STALE filter actually did
+        # something instead of passing vacuously with no index anywhere.
+        self.assertIn(n.id, [x.id for x in brain.search("rule")])
         brain.mark_stale(n.id)
         self.assertEqual(brain.get(n.id).status, ReviewStatus.STALE)
         self.assertEqual(brain.search("rule"), [])

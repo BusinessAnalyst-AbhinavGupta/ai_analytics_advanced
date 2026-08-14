@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 
+from .brain.embedding import Embedder
+from .brain.index import BrainIndex
 from .brain.store import CompanyBrain
 from .config import Settings
 from .database import Store, dump_json
@@ -45,7 +47,8 @@ class StakeholderService:
                  observability: Optional[Observability] = None,
                  cost_per_1k_input: float = 0.30,
                  cost_per_1k_output: float = 1.20,
-                 settings: Optional[Settings] = None):
+                 settings: Optional[Settings] = None,
+                 embedder: Optional[Embedder] = None):
         from .execution.sampler import SamplerExecutor
         self.stores = stores
         self.tenants = tenants or TenantService(stores)
@@ -54,12 +57,17 @@ class StakeholderService:
         self.settings = settings or Settings()
         self.cost_per_1k_input = cost_per_1k_input
         self.cost_per_1k_output = cost_per_1k_output
+        self.embedder = embedder
         self.skill_registry = SkillRegistry()
         self.skill_registry.load_skills()
         self.skill_engine = SkillEngine()
 
     def brain(self, tenant_id: str) -> CompanyBrain:
-        return CompanyBrain(self.stores.for_tenant(tenant_id), tenant_id)
+        # The index is bound to one tenant's database, so it is built where that
+        # store is resolved. The embedder is the expensive part and is shared.
+        store = self.stores.for_tenant(tenant_id)
+        return CompanyBrain(store, tenant_id,
+                            index=BrainIndex(store, embedder=self.embedder))
 
     def classify(self, question: str) -> str:
         q = question.lower()

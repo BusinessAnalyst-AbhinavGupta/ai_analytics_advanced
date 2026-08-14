@@ -442,9 +442,13 @@ class SentenceTransformerEmbedderTest(unittest.TestCase):
         self.assertEqual(vec.shape, (self.emb.dim,))
 
     def test_semantics_beat_keywords(self):
+        # The unrelated doc must be topically unambiguous. An earlier draft used a
+        # "server latency" doc, which scored within 0.0015 of the correct answer —
+        # "regression" apparently reads close to "churn regression model" to this
+        # model, a near coin-flip margin, not a robust semantic-match assertion.
         docs = self.emb.encode_documents([
             "High user churn observed in Q3 for the European market.",
-            "New product feature increased server latency.",
+            "The design team shipped a refreshed color palette for the mobile app icon.",
         ])
         q = self.emb.encode_query("customer attrition")
         sims = docs @ q
@@ -738,7 +742,7 @@ source of truth, never of an index's metadata filter.
 from __future__ import annotations
 
 import logging
-from typing import List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -818,19 +822,51 @@ class BrainIndex:
     def lexical_search(self, query: str, tenant_id: str,
                        candidate_ids: Optional[Sequence[str]] = None,
                        limit: int = 40) -> List[str]:
-        """Node ids ranked by bm25, best first. [] when nothing is searchable."""
+        """Node ids ranked by bm25, best first. [] when nothing is searchable.
+
+        `ORDER BY ... LIMIT` runs inside SQL, before any Python code sees a row —
+        unlike the vector leg (Task 5), which loads every row and can safely
+        re-filter in Python afterwards. That means a candidate set larger than
+        SQLite's ~900-parameter limit cannot simply drop the restriction: doing so
+        would rank the whole tenant and return the global top-`limit`, which may
+        share nothing with the candidate set the caller actually asked about. So
+        this leg chunks instead — one MATCH query per <=900-id slice, merging by
+        each node's best (most negative) bm25 score across chunks, then re-sorting
+        and truncating once at the end.
+        """
         if candidate_ids is not None and len(candidate_ids) == 0:
             return []
         match = to_fts_query(query)
         if not match:
             return []
 
+        chunks: List[Optional[Sequence[str]]]
+        if candidate_ids is None:
+            chunks = [None]
+        else:
+            ids = list(candidate_ids)
+            chunks = [ids[i:i + _MAX_SQL_PARAMS] for i in range(0, len(ids), _MAX_SQL_PARAMS)]
+
+        best: Dict[str, float] = {}
+        for chunk in chunks:
+            for node_id, score in self._lexical_search_chunk(match, tenant_id, chunk, limit):
+                if node_id not in best or score < best[node_id]:
+                    best[node_id] = score
+
+        # bm25() is more negative for better matches, so ascending is best-first.
+        ordered = sorted(best, key=lambda n: best[n])
+        return ordered[:limit]
+
+    def _lexical_search_chunk(self, match: str, tenant_id: str,
+                              candidate_ids: Optional[Sequence[str]],
+                              limit: int) -> List[Tuple[str, float]]:
+        """One MATCH query, restricted to at most _MAX_SQL_PARAMS candidate ids."""
         sql = ("SELECT node_id, bm25(knowledge_fts) AS score FROM knowledge_fts "
                "WHERE knowledge_fts MATCH ? AND tenant_id = ?")
         params: List[object] = [match, tenant_id]
-        restrict = self._restrict_clause(candidate_ids, params)
-        sql += restrict
-        # bm25() is more negative for better matches, so ascending is best-first.
+        if candidate_ids is not None:
+            sql += f" AND node_id IN ({','.join('?' for _ in candidate_ids)})"
+            params.extend(candidate_ids)
         sql += " ORDER BY score ASC LIMIT ?"
         params.append(limit)
 
@@ -840,22 +876,10 @@ class BrainIndex:
             logger.warning("lexical search failed for tenant %s: %s", tenant_id, exc,
                            exc_info=True)
             return []
-        return [r["node_id"] for r in rows]
-
-    @staticmethod
-    def _restrict_clause(candidate_ids: Optional[Sequence[str]],
-                         params: List[object]) -> str:
-        """AND node_id IN (...) when a candidate set was supplied and fits."""
-        if not candidate_ids:
-            return ""
-        ids = list(candidate_ids)
-        if len(ids) > _MAX_SQL_PARAMS:
-            # Too many to bind; the caller's set is broad enough that filtering
-            # afterwards is equivalent and cheaper than chunking.
-            return ""
-        params.extend(ids)
-        return f" AND node_id IN ({','.join('?' for _ in ids)})"
+        return [(r["node_id"], r["score"]) for r in rows]
 ```
+
+`_restrict_clause` (used by Task 5's `_load_vectors`, not by `lexical_search` above) keeps its original "drop the restriction above `_MAX_SQL_PARAMS`" behavior — that is safe there specifically because `_load_vectors` re-filters every returned row against `candidate_ids` in Python (see its `wanted` check) regardless of whether SQL applied the restriction, and it never applies a `LIMIT` before that Python-side filter runs. The lexical leg has no such downstream filter, which is exactly why it needed the chunking fix instead.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -902,8 +926,14 @@ class VectorSearchTest(unittest.TestCase):
         self.index = BrainIndex(self.ctx.store, embedder=self.embedder)
         self.index.upsert("kn_churn", "t1", "Q3 European churn",
                           "High user churn observed in Q3 for the European market.")
-        self.index.upsert("kn_latency", "t1", "Latency regression",
-                          "New product feature increased server latency.")
+        # The unrelated doc must be topically unambiguous once title+summary are
+        # embedded together (what upsert() actually does). A "server latency" doc
+        # titled "Latency regression" was tried first and lost — "regression" reads
+        # close enough to "churn regression model" that it out-scored the genuinely
+        # on-topic doc for the query "customer attrition" (0.650 vs 0.617). This
+        # pairing has a wide, verified margin (~0.19) instead of a coin flip.
+        self.index.upsert("kn_palette", "t1", "New color palette",
+                          "The design team shipped a refreshed color palette for the mobile app icon.")
         self.index.upsert("kn_other", "t2", "Q3 European churn",
                           "High user churn observed in Q3 for the European market.")
 
@@ -924,8 +954,8 @@ class VectorSearchTest(unittest.TestCase):
         self.assertNotIn("kn_other", hits)
 
     def test_candidate_ids_restrict_results(self):
-        hits = self.index.vector_search("customer attrition", "t1", ["kn_latency"], 5)
-        self.assertEqual(hits, ["kn_latency"])
+        hits = self.index.vector_search("customer attrition", "t1", ["kn_palette"], 5)
+        self.assertEqual(hits, ["kn_palette"])
 
     def test_empty_candidate_list_returns_nothing(self):
         self.assertEqual(self.index.vector_search("customer attrition", "t1", [], 5), [])
@@ -1315,10 +1345,23 @@ class SearchTest(unittest.TestCase):
         hits = self.brain.search("conversion", kind=NodeKind.QUERY)
         self.assertTrue(all(hasattr(n, "id") and hasattr(n, "title") for n in hits))
 
-    def test_search_without_an_index_still_works(self):
-        """No index injected -> lexical-free fallback must not raise."""
+    def test_search_without_an_index_returns_nothing_for_a_real_query(self):
+        """No index -> [] for a query, never unrelated nodes presented as matches.
+
+        `self.approved` genuinely exists in this tenant's table and would match —
+        proving this isn't just "empty database, nothing to find." An indexless
+        brain that returned it (or any other recent node) here would be answering
+        a real question with unrelated content, which is worse than the original
+        bug this plan fixes (that one at least returned nothing).
+        """
         bare = CompanyBrain(self.ctx.store, "t1")
-        self.assertIsInstance(bare.search("conversion", kind=NodeKind.QUERY), list)
+        self.assertEqual(bare.search("checkout conversion rate", kind=NodeKind.QUERY), [])
+
+    def test_search_without_an_index_and_no_query_still_browses_recent_nodes(self):
+        """No query is a browsing request, not a relevance claim -- unaffected."""
+        bare = CompanyBrain(self.ctx.store, "t1")
+        hits = bare.search("", kind=NodeKind.QUERY)
+        self.assertIn(self.approved.id, [n.id for n in hits])
 
 
 class IndexSyncTest(unittest.TestCase):
@@ -1423,30 +1466,46 @@ Replace `search` (lines 162-202) with:
             params.append(kind.value if hasattr(kind, "value") else kind)
         sql += " ORDER BY updated_at DESC LIMIT ?"
         params.append(cap)
-        return self.store.query_all(sql, tuple(params))
+        rows = self.store.query_all(sql, tuple(params))
+        if len(rows) == cap:
+            # The pre-filter hit its own cap: some usable nodes older than the
+            # cap-th are invisible to this call. A curated Brain is thousands of
+            # nodes at most (see brain/index.py's brute-force design rationale),
+            # so this should be rare — if it isn't, that's worth knowing.
+            logger.warning("candidate pre-filter capped at %d rows for tenant %s "
+                           "(kind=%s); older usable nodes are not searchable this call",
+                           cap, self.tenant_id, kind)
+        return rows
 
     def search(self, query: str = "", kind: Optional[NodeKind] = None,
                usable_only: bool = True, limit: int = 20) -> List[KnowledgeNode]:
         """Hybrid retrieval: SQL pre-filter, BM25 + dense recall, RRF, rerank.
 
-        With no query, this is "most recently updated usable nodes". With a query,
-        both recall legs run over the pre-filtered candidate set and are fused by
-        rank. A node that neither leg surfaces is not returned — relevance is a
-        real filter, not a sort.
+        With no query, this is "most recently updated usable nodes" — a browsing
+        mode, not a relevance claim. With a query, relevance is a real filter: both
+        recall legs run over the pre-filtered candidate set and are fused by rank,
+        and a node neither leg surfaces is not returned. This holds even with no
+        index configured — returning recency-ordered nodes for a real question
+        would be answering with content nobody asked about, presented as if it
+        were a match. That is worse than returning nothing, which is what an
+        unindexed brain does instead until Task 8 gives every consumer an index.
         """
         # Pre-filter wide enough that recall is not truncated before ranking.
         rows = self._candidate_rows(kind, usable_only, cap=max(limit * 25, 500))
         nodes = [self._row_to_node(r) for r in rows]
-        if not query or not nodes:
+        if not query:
             return nodes[:limit]
+        if not nodes:
+            return []
 
         by_id = {n.id: n for n in nodes}
         candidate_ids = list(by_id)
 
         if self.index is None:
-            logger.debug("no BrainIndex on tenant %s; returning recency order",
-                         self.tenant_id)
-            return nodes[:limit]
+            logger.warning("search(%r) on tenant %s has no BrainIndex — returning no "
+                           "results rather than unrelated recent nodes; this tenant's "
+                           "brain needs an index (see Task 8)", query, self.tenant_id)
+            return []
 
         recall = max(limit * 4, 40)
         lexical = self.index.lexical_search(query, self.tenant_id, candidate_ids, recall)
@@ -1467,7 +1526,7 @@ Replace `search` (lines 162-202) with:
 - [ ] **Step 5: Run test to verify it passes**
 
 Run: `.venv/bin/python -m pytest tests/test_brain_retrieval.py -v`
-Expected: 12 passed.
+Expected: 13 passed.
 
 - [ ] **Step 6: Confirm no caller still passes vector_store**
 
@@ -1486,6 +1545,8 @@ git commit -m "feat(brain): hybrid search with SQL prefilter, replacing LIKE fal
 ### Task 8: Inject the index at every construction site
 
 **Why:** A correct `search()` changes nothing if the object that runs it has no index — which is exactly the situation today, where eleven of twelve `CompanyBrain(...)` call sites omit the vector store and the Stakeholder Analyst is one of them. This task makes the index reach every consumer, and adds the regression test that would have caught the original defect.
+
+**Baseline going into this task: 330 passed, 14 failed, 1 skipped.** Task 7's own review caught and fixed a Critical bug — an indexless `search()` was returning unrelated recent nodes as if they matched a real query, rather than honoring its own "relevance is a real filter" contract. The fix (returning `[]` for a query with no index) is correct, but it means every existing test exercising an indexless `CompanyBrain` through a real question now fails loudly instead of accidentally passing on a spurious match. That is the true, complete shape of what this task closes — not the 6 tests a narrower read of the diff would suggest. All 14 failures trace to the same root cause (a `CompanyBrain` built without an index) across two symptoms: 6 raise `TypeError: unexpected keyword argument 'vector_store'` (the one lingering call site at `api.py:296`), and 8 fail on the new, correct `[]`/WARNING behavior (`test_brain.py::test_search_filters_by_usable_status`; `test_stakeholder.py::test_approved_definition_falls_through`, `test_approved_query_chart_synthesis_token_accounting`, `test_feedback_and_quality`, `test_reuse_approved_query_with_citation`, `test_routes`; `test_pipeline_e2e.py::test_approved_query_reuse_runs_and_completes`, `test_telemetry_recorded`). Expected after this task: all 14 resolved, full suite green.
 
 **Files:**
 - Modify: `analytics_platform/api.py:280-300`, `analytics_platform/stakeholder.py:40-61`, `analytics_platform/junior.py:111`, `analytics_platform/junior.py:186`, `analytics_platform/junior_worker.py:307`, `analytics_platform/junior_worker.py:483`, `analytics_platform/onboarding.py:30`, `analytics_platform/research.py:143`, `analytics_platform/triage.py:30`, `analytics_platform/anomaly.py:11`, `analytics_platform/pipeline.py:29-48`
@@ -1644,12 +1705,20 @@ logger = logging.getLogger(__name__)
 - [ ] **Step 5: Run test to verify it passes**
 
 Run: `.venv/bin/python -m pytest tests/test_brain_retrieval.py -v`
-Expected: 16 passed.
+Expected: 17 passed (13 from Task 7 + this step's 4 new `ContextWiringTest` cases).
 
 - [ ] **Step 6: Run the full suite**
 
 Run: `.venv/bin/python -m pytest tests/ -q`
-Expected: no new failures. `tests/test_vector_search.py` may now fail — it is deleted in Task 9. If it does, note it and continue.
+Expected: **all 14 of Task 7's documented failures are now resolved** — 344 passed, 1 skipped, 0 failed (330 + 14). If any of the 14 named failures (see Task 7's "Baseline going into this task" note above) is still failing, that construction site was missed; go back and check it against the Files list above. `tests/test_vector_search.py` may now fail — it is deleted in Task 9. If it does, note it and continue; it is not one of the 14.
+
+- [ ] **Step 6b: Re-verify the two isolation tests that were passing vacuously**
+
+Task 7's review found that `tests/test_brain.py::test_tenant_isolation` and `::test_mark_stale` currently pass **vacuously**: with no index anywhere, `search()` always returns `[]` regardless of tenant, so the isolation assertion (`brain_b.search("churn") == []`) proves nothing about isolation — it would pass even if isolation were broken. Now that every `CompanyBrain` has an index, re-run these two specifically and read what they actually assert:
+
+Run: `.venv/bin/python -m pytest tests/test_brain.py::TestBrain::test_tenant_isolation tests/test_brain.py::TestBrain::test_mark_stale -v`
+
+Confirm `test_tenant_isolation` now has a real positive case to fail against (a node that DOES exist and DOES match for the node's own tenant, alongside the negative case for the other tenant) — if it only ever asserts the negative case, it is still vacuous and should be strengthened here, not left for a future task to rediscover.
 
 - [ ] **Step 7: Commit**
 

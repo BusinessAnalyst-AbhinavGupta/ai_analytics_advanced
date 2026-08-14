@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from .brain.embedding import Embedder
+from .brain.index import BrainIndex
 from .brain.store import CompanyBrain
 from .database import Store
 from .domain import KnowledgeNode, NodeKind, ReviewStatus
@@ -23,12 +25,16 @@ ACTIONABLE = (ReviewStatus.CANDIDATE, ReviewStatus.UNDER_REVIEW,
 
 
 class TriageService:
-    def __init__(self, stores: TenantStoreProvider, observability: Optional[Observability] = None):
+    def __init__(self, stores: TenantStoreProvider, observability: Optional[Observability] = None,
+                 embedder: Optional[Embedder] = None):
         self.stores = stores
         self.obs = observability or Observability(stores)
+        self.embedder = embedder
 
     def brain(self, tenant_id: str) -> CompanyBrain:
-        return CompanyBrain(self.stores.for_tenant(tenant_id), tenant_id)
+        store = self.stores.for_tenant(tenant_id)
+        return CompanyBrain(store, tenant_id,
+                            index=BrainIndex(store, embedder=self.embedder))
 
     # -- reads ---------------------------------------------------------------
     def queue(self, tenant_id: str, *, kind: Optional[NodeKind] = None,

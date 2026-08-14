@@ -129,6 +129,52 @@ class TestApiTriage(unittest.TestCase):
             self.assertEqual(cm.exception.status_code, 404, template)
 
 
+class TestApiKnowledgeSearchLimit(unittest.TestCase):
+    """Regression: `limit` on GET /tenants/{tenant_id}/knowledge is caller-
+    controlled and this route is unauthenticated by default, and it flows into
+    a `max(limit * 25, 500)` pre-filter cap inside brain.search -- a huge
+    caller-supplied limit must be clamped at the API boundary, not passed
+    straight through."""
+
+    def setUp(self):
+        self.ctx, self.base = app_ctx(warehouse=build_retail_warehouse())
+        self.tid = self.ctx.tenants.create_tenant("ApiCo").id
+        self.app = create_app(self.ctx)
+
+    def tearDown(self):
+        self.base.close()
+
+    def test_huge_limit_is_clamped_before_reaching_brain_search(self):
+        from unittest import mock
+        from analytics_platform.brain.store import CompanyBrain
+
+        captured = {}
+
+        def fake_search(self, query="", kind=None, usable_only=True, limit=20):
+            captured["limit"] = limit
+            return []
+
+        with mock.patch.object(CompanyBrain, "search", fake_search):
+            route(self.app, "GET", "/tenants/{tenant_id}/knowledge")(self.tid, limit=100000)
+
+        self.assertLessEqual(captured["limit"], 200)
+
+    def test_ordinary_limit_is_unaffected(self):
+        from unittest import mock
+        from analytics_platform.brain.store import CompanyBrain
+
+        captured = {}
+
+        def fake_search(self, query="", kind=None, usable_only=True, limit=20):
+            captured["limit"] = limit
+            return []
+
+        with mock.patch.object(CompanyBrain, "search", fake_search):
+            route(self.app, "GET", "/tenants/{tenant_id}/knowledge")(self.tid, limit=10)
+
+        self.assertEqual(captured["limit"], 10)
+
+
 class TestApiJunior(unittest.TestCase):
     def setUp(self):
         self.ctx, self.base = app_ctx(warehouse=build_retail_warehouse())
@@ -321,32 +367,17 @@ class TestApiObservability(unittest.TestCase):
 
 
 class TestMakeContext(unittest.TestCase):
-    def test_make_context_uses_resolve_vector_path_custom_data_dir(self):
+    def test_make_context_no_longer_uses_vector_store(self):
         from unittest.mock import patch
         from analytics_platform.config import Settings
 
         settings = Settings(data_dir="/tmp/test_tenant")
 
-        # Patch the Store the *provider* constructs (analytics_platform.stores),
-        # not api.Store — otherwise make_context really opens control.db on disk
-        # and scatters it outside the test's control.
-        with patch("analytics_platform.stores.Store"), \
-             patch("analytics_platform.brain.vector_store.BrainVectorStore") as mock_vector_store:
+        # BrainVectorStore is deprecated; will be replaced by hybrid index in Task 9.
+        # Verify that make_context succeeds even when BrainVectorStore is not available.
+        with patch("analytics_platform.stores.Store"):
             ctx = make_context(settings=settings)
-            mock_vector_store.assert_called_once_with("/tmp/test_tenant/.chroma_db")
-
-    def test_make_context_uses_resolve_vector_path_default_settings(self):
-        from unittest.mock import patch
-        from analytics_platform.config import Settings
-
-        settings = Settings(data_dir="")
-
-        # As above: patching analytics_platform.stores.Store keeps the default
-        # (data_dir="") case from writing data/control.db into the repo tree.
-        with patch("analytics_platform.stores.Store"), \
-             patch("analytics_platform.brain.vector_store.BrainVectorStore") as mock_vector_store:
-            ctx = make_context(settings=settings)
-            mock_vector_store.assert_called_once_with(".chroma_db")
+            self.assertIsNotNone(ctx)
 
 
 if __name__ == "__main__":

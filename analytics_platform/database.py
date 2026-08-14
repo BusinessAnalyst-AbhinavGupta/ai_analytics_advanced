@@ -16,6 +16,8 @@ from typing import Any, Dict, List, Optional
 _LOCK = threading.RLock()
 _LOG = logging.getLogger(__name__)
 
+logger = logging.getLogger(__name__)
+
 CONTROL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS tenants (
     id TEXT PRIMARY KEY, name TEXT, region TEXT, llm_provider TEXT,
@@ -72,6 +74,21 @@ CREATE TABLE IF NOT EXISTS knowledge_nodes (
     confidence TEXT, evidence_ref TEXT, source_ref TEXT,
     created_at TEXT, updated_at TEXT, created_by TEXT, reviewed_by TEXT,
     review_notes TEXT, supersedes TEXT
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
+    node_id UNINDEXED,
+    tenant_id UNINDEXED,
+    title,
+    summary,
+    tokenize = 'porter unicode61'
+);
+CREATE TABLE IF NOT EXISTS knowledge_vectors (
+    node_id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    model TEXT NOT NULL,
+    dim INTEGER NOT NULL,
+    vector BLOB NOT NULL,
+    updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS questions (
     id TEXT PRIMARY KEY, tenant_id TEXT, text TEXT, mode_budget TEXT, created_at TEXT
@@ -143,6 +160,7 @@ CREATE INDEX IF NOT EXISTS idx_cph_tenant ON company_profile_history(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_acfg_tenant ON analyst_configs(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_ach_tenant ON analyst_config_history(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_kpis_tenant ON kpis(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_kv_tenant ON knowledge_vectors(tenant_id);
 """
 
 # The pre-split single-file schema. Retained ONLY so `adopt-db` can open a legacy
@@ -197,9 +215,27 @@ def _migrate(conn: sqlite3.Connection) -> None:
             sa_cols = {row[1] for row in conn.execute("PRAGMA table_info(stakeholder_answers)").fetchall()}
             if "queries_run" not in sa_cols:
                 conn.execute("ALTER TABLE stakeholder_answers ADD COLUMN queries_run TEXT")
+
+        # Brain retrieval: both recall legs must exist or search silently degrades.
+        # Only tenant databases carry them — a control store legitimately has neither,
+        # so key the check off knowledge_nodes rather than asserting unconditionally.
+        is_tenant_db = bool(conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='knowledge_nodes'").fetchone())
+        if is_tenant_db:
+            have = {row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name IN ('knowledge_fts','knowledge_vectors')").fetchall()}
+            missing = {"knowledge_fts", "knowledge_vectors"} - have
+            if missing:
+                raise RuntimeError(
+                    f"Brain retrieval tables missing after schema init: "
+                    f"{sorted(missing)}. SQLite may lack FTS5 support.")
         conn.commit()
-    except Exception:  # noqa: BLE001 - migration must never block startup
-        _LOG.warning("Database migration failed; continuing startup", exc_info=True)
+    except RuntimeError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - column migrations must not block startup
+        _LOG.warning("schema migration step failed: %s", exc, exc_info=True)
 
 
 def dump_json(obj: Any) -> str:
