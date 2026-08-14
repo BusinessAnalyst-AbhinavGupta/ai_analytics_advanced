@@ -21,8 +21,9 @@ from __future__ import annotations
 import json
 import subprocess
 import threading
+import uuid
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
 
@@ -85,48 +86,67 @@ def _shell_quote(js: str) -> str:
 # await promises — an `(async ()=>...)()` return value comes back empty. So, like
 # the proven scripts/download_base_tables.py, we stash async results in a window
 # global (__mb) and read them back with separate synchronous calls.
-PROBE_KICK_JS = (
-    "window.__mb = {payload:null, ready:false};"
-    "(function(){try{(async()=>{try{"
-    "const loc=location.hostname.toLowerCase();"
-    "const isMeta=loc.includes('metabase');"
-    "const isLogin=!!document.querySelector('#login-group')"
-    "||/login/i.test(location.pathname)||document.title.toLowerCase().includes('sign in');"
-    "const isLoggedOut=!!document.body.innerText.includes('Sign in to Metabase');"
-    "window.__mb.payload=JSON.stringify({host:loc,metabase:isMeta,login:isLogin||isLoggedOut,title:document.title});"
-    "}catch(e){window.__mb.payload=JSON.stringify({error:String(e)});}"
-    "window.__mb.ready=true;"
-    "})();return 'kick';}catch(e){window.__mb={payload:JSON.stringify({error:String(e)}),ready:true};return 'kick';}})();"
-)
-# backwards-compat name
-PROBE_JS = PROBE_KICK_JS
-
+#
+# Every kick is tagged with a nonce, stamped into `window.__mbNonce` SYNCHRONOUSLY
+# before any async work starts. A roundtrip whose client-side poll times out
+# doesn't cancel the in-flight browser-side fetch -- it can still resolve later,
+# after a *newer* roundtrip has already reset and reclaimed the shared __mb slot.
+# Without the nonce check, that orphaned completion silently overwrites the
+# newer roundtrip's real result with stale data (found live: two distinct
+# `execute()` calls in a row, the second one came back holding the first
+# query's rows). Each completion handler only writes if `window.__mbNonce`
+# still equals the nonce it captured at kick time -- a stale write's nonce
+# will already have been replaced by the next roundtrip's kick, so it's
+# silently dropped instead of clobbering the current result.
 READ_STATE_JS = "(window.__mb && window.__mb.ready ? window.__mb.payload : '')"
 RESET_JS = "window.__mb = {payload:null, ready:false}; 'reset'"
 
 
-def _build_execute_kick_js(payload: str) -> str:
-    """JS that kicks off the same-origin `/api/dataset` fetch, stashing into __mb.
+def _build_probe_kick_js(nonce: str) -> str:
+    """Session-probe kick, guarded by `nonce` (see module docstring above)."""
+    n = json.dumps(nonce)
+    return (
+        "window.__mb = {payload:null, ready:false}; window.__mbNonce = " + n + ";"
+        "(function(){const myNonce=" + n + ";try{(async()=>{try{"
+        "const loc=location.hostname.toLowerCase();"
+        "const isMeta=loc.includes('metabase');"
+        "const isLogin=!!document.querySelector('#login-group')"
+        "||/login/i.test(location.pathname)||document.title.toLowerCase().includes('sign in');"
+        "const isLoggedOut=!!document.body.innerText.includes('Sign in to Metabase');"
+        "const result=JSON.stringify({host:loc,metabase:isMeta,login:isLogin||isLoggedOut,title:document.title});"
+        "if(window.__mbNonce===myNonce){window.__mb.payload=result;window.__mb.ready=true;}"
+        "}catch(e){if(window.__mbNonce===myNonce){window.__mb.payload=JSON.stringify({error:String(e)});window.__mb.ready=true;}}"
+        "})();return 'kick';}catch(e){window.__mb={payload:JSON.stringify({error:String(e)}),ready:true};return 'kick';}})();"
+    )
+
+
+def _build_execute_kick_js(payload: Any, nonce: Optional[str] = None) -> str:
+    """JS that kicks off the same-origin `/api/dataset` fetch, stashing into
+    __mb, guarded by `nonce` (see module docstring above).
 
     `fetch` requires a string body, so the JSON payload is embedded as a JS
     string literal (`body:"{...}"`), never as a raw object (which fetch would
     send as "[object Object]").
     """
+    if nonce is None:
+        nonce = uuid.uuid4().hex
     body_text = payload if isinstance(payload, str) else json.dumps(payload)
     body_literal = json.dumps(body_text)   # JS string literal containing the JSON
+    n = json.dumps(nonce)
     return (
-        "window.__mb = {payload:null, ready:false};"
-        "(function(){try{(async()=>{try{"
+        "window.__mb = {payload:null, ready:false}; window.__mbNonce = " + n + ";"
+        "(function(){const myNonce=" + n + ";try{(async()=>{try{"
         "const r=await fetch('/api/dataset',{method:'POST',"
         "headers:{'content-type':'application/json'},body:"
         + body_literal +
         "});const j=await r.json();"
-        "if(j.error){window.__mb.payload=JSON.stringify({ok:false,error:j.error||'metabase_error'});}"
+        "let result;"
+        "if(j.error){result=JSON.stringify({ok:false,error:j.error||'metabase_error'});}"
         "else{const cols=(j.data&&j.data.cols||[]).map(c=>c.name);"
         "const rows=(j.data&&j.data.rows||[]).map(r=>r.slice());"
-        "window.__mb.payload=JSON.stringify({ok:true,cols:cols,rows:rows});}"
-        "}catch(e){window.__mb.payload=JSON.stringify({ok:false,error:String(e)});}"
-        "window.__mb.ready=true;"
+        "result=JSON.stringify({ok:true,cols:cols,rows:rows});}"
+        "if(window.__mbNonce===myNonce){window.__mb.payload=result;window.__mb.ready=true;}"
+        "}catch(e){if(window.__mbNonce===myNonce){window.__mb.payload=JSON.stringify({ok:false,error:String(e)});window.__mb.ready=true;}}"
         "})();return 'kick';}catch(e){window.__mb={payload:JSON.stringify({ok:false,error:String(e)}),ready:true};return 'kick';}})();"
     )
 
@@ -224,7 +244,7 @@ class BrowserSessionExecutor(QueryExecutor):
     # -- session gate ---------------------------------------------------------
     def session_status(self, tenant_id: str) -> SessionStatus:
         try:
-            out = self._run_roundtrip(PROBE_KICK_JS, self._timeout_s)
+            out = self._run_roundtrip(_build_probe_kick_js(uuid.uuid4().hex), self._timeout_s)
             info = json.loads(out) if out else {}
         except Exception as e:  # noqa: BLE001
             return SessionStatus(state="unknown", tenant_id=tenant_id, browser_ok=False,
@@ -315,5 +335,5 @@ def make_live_executor(settings: Optional["Settings"] = None) -> BrowserSessionE
 
 __all__ = ["BrowserSessionExecutor", "SessionUnavailable", "BrowserExecutorConfig",
            "osascript_runner", "build_osascript_command", "make_osascript_runner",
-           "PROBE_JS", "PROBE_KICK_JS", "READ_STATE_JS", "RESET_JS",
+           "READ_STATE_JS", "RESET_JS", "_build_probe_kick_js",
            "_build_execute_kick_js", "make_live_executor"]

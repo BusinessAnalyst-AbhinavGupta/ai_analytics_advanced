@@ -163,6 +163,64 @@ class TestBrowserSession(unittest.TestCase):
                          f"{state['max_seen']} roundtrips were in flight at the same "
                          "time -- window.__mb access is not actually serialized")
 
+    def test_stale_late_response_does_not_clobber_a_newer_query(self):
+        """A roundtrip that times out client-side doesn't cancel the browser-side
+        fetch -- it can still resolve later, after a newer roundtrip has already
+        reset and claimed the shared window.__mb slot. Found live: two distinct
+        execute() calls in a row, the second one came back holding the first
+        query's rows. Each kick is nonce-tagged; a completion handler only
+        writes if window.__mbNonce still matches the nonce it captured at kick
+        time, so a late duplicate write from an old roundtrip must be dropped
+        instead of overwriting the current one."""
+        import re
+
+        state = {"mbNonce": None, "payload": "", "ready": False}
+        pending = []  # queued (nonce, response_json) "async" completions
+
+        def extract_nonce(js: str) -> str:
+            m = re.search(r'__mbNonce\s*=\s*"([^"]+)"', js)
+            return m.group(1) if m else ""
+
+        def flush_pending():
+            while pending:
+                n, resp = pending.pop(0)
+                if state["mbNonce"] == n:
+                    state["payload"], state["ready"] = resp, True
+
+        def runner(js: str) -> str:
+            if "'reset'" in js:
+                state["payload"], state["ready"] = "", False
+                return "reset"
+            if "__mb.ready ?" in js:
+                flush_pending()
+                return state["payload"] if state["ready"] else ""
+            nonce = extract_nonce(js)
+            state["mbNonce"] = nonce
+            resp = (probe_payload() if "location.hostname" in js
+                    else exec_payload(rows=[[nonce]], cols=["marker"]))
+            pending.append((nonce, resp))
+            return "kick"
+
+        ex = BrowserSessionExecutor(database_id=1, expected_host="metabase.acme", runner=runner)
+
+        r1 = ex.execute("SELECT 1", ExecutionContext(tenant_id="t"))
+        self.assertTrue(r1.ok)
+        nonce1 = r1.data.iloc[0]["marker"]
+
+        r2 = ex.execute("SELECT 2", ExecutionContext(tenant_id="t"))
+        self.assertTrue(r2.ok)
+        nonce2 = r2.data.iloc[0]["marker"]
+        self.assertNotEqual(nonce1, nonce2)
+
+        # Query 1's fetch resolves a second time (a late/duplicate completion),
+        # arriving only now -- after query 2 has already claimed the slot.
+        pending.append((nonce1, exec_payload(rows=[["STALE"]], cols=["marker"])))
+        flush_pending()
+
+        self.assertEqual(json.loads(state["payload"])["rows"][0][0], nonce2,
+                         "a late write from an earlier, already-superseded "
+                         "roundtrip overwrote the current result")
+
 
 class TestBrowserFromEnv(unittest.TestCase):
     ENV = ("ANALYTICS_MB_LIVE", "ANALYTICS_MB_HOST", "ANALYTICS_MB_DATABASE_ID",
