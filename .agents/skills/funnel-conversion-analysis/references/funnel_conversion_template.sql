@@ -19,15 +19,19 @@ WITH base_events AS (
 )
 
 -- Step 1: Track timestamp of first occurrence of each happy flow node per session
+-- Params: $step_1_page/$step_1_action/$step_1_label, $step_2_page/..., $step_n_page/...
+-- (the skill engine substitutes bare $key tokens; leave a step's *_label empty
+-- string '' when that step has no label filter -- do not use {{...}} syntax,
+-- the engine does not expand it and the query would silently match nothing).
 , step_occurrences AS (
     SELECT
           identifiers_sessionid
         -- Step 1 (Start Point)
-        , MIN(CASE WHEN page_name = '{{STEP_1_PAGE}}' AND action_name = '{{STEP_1_ACTION}}' AND ('{{STEP_1_LABEL}}' = '' OR label_name = '{{STEP_1_LABEL}}') THEN log_time_ms END) AS step_1_time
+        , MIN(CASE WHEN page_name = '$step_1_page' AND action_name = '$step_1_action' AND ('$step_1_label' = '' OR label_name = '$step_1_label') THEN log_time_ms END) AS step_1_time
         -- Step 2
-        , MIN(CASE WHEN page_name = '{{STEP_2_PAGE}}' AND action_name = '{{STEP_2_ACTION}}' AND ('{{STEP_2_LABEL}}' = '' OR label_name = '{{STEP_2_LABEL}}') THEN log_time_ms END) AS step_2_time
+        , MIN(CASE WHEN page_name = '$step_2_page' AND action_name = '$step_2_action' AND ('$step_2_label' = '' OR label_name = '$step_2_label') THEN log_time_ms END) AS step_2_time
         -- Step N (End Point)
-        , MIN(CASE WHEN page_name = '{{STEP_N_PAGE}}' AND action_name = '{{STEP_N_ACTION}}' AND ('{{STEP_N_LABEL}}' = '' OR label_name = '{{STEP_N_LABEL}}') THEN log_time_ms END) AS step_n_time
+        , MIN(CASE WHEN page_name = '$step_n_page' AND action_name = '$step_n_action' AND ('$step_n_label' = '' OR label_name = '$step_n_label') THEN log_time_ms END) AS step_n_time
     FROM base_events
     GROUP BY identifiers_sessionid
 )

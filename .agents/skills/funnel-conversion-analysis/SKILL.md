@@ -74,7 +74,7 @@ Stakeholder Prompt ("Analyze funnel from Landing to Purchase")
    - Extract the ordered canonical path between Start Node and End Node.
 
 #### Phase 3: Funnel Query Execution & Sanity Check
-1. Dynamically populate [`funnel_conversion_template.sql`](references/funnel_conversion_template.sql) with the audited canonical path.
+1. Dynamically populate [`funnel_conversion_template.sql`](references/funnel_conversion_template.sql) with the audited canonical path, one `$step_N_page` / `$step_N_action` / `$step_N_label` triple per step (leave `$step_N_label` as an empty string when that step has no label filter). The skill engine only substitutes bare `$key` tokens — never emit `{{...}}` syntax, it will not be expanded and the query will silently match zero rows instead of failing loudly.
 2. Execute the funnel query via database tools.
 3. **Sanity Check**:
    - Check `step_N_sessions <= step_N-1_sessions` (funnel volume must be non-increasing).

@@ -246,28 +246,37 @@ class StakeholderService:
                 else:
                     answer = f"Reused {len(query_nodes)} approved queries."
                 mode = AnswerMode.REFRESHED_APPROVED_QUERY
-            else:
-                answer = f"Matched {len(query_nodes)} approved queries, but execution failed: {last_err}"
-                mode = AnswerMode.CANNOT_ANSWER
-                caveats.append(str(last_err))
-                
-            chart_config = None
-            t_in, t_out = 0, 0
-            if not any_failed and self._llm_live(llm) and len(all_details) > 0:
-                data_arg = all_details[0].get("preview", [])
-                _, (t_in, t_out), chart_config = self._synthesize(llm, question, category, data_arg)
 
-            out = self._record(tenant_id, question, user_id, category, trace, answer, mode,
-                               "ANSWERED", False, [n.id for n in query_nodes],
-                               citations, facts=facts, caveats=caveats,
-                               tokens_in=t_in, tokens_out=t_out, queries_run=queries_run)
-            out["_detail"] = all_details
-            out["chart_config"] = chart_config
-            out["chart_data"] = all_details[0].get("preview", []) if all_details else []
-            self.obs.event(tenant_id=tenant_id, trace_id=trace, stage="stakeholder.answer",
-                           actor="stakeholder", resource=out["answer_id"], status="OK",
-                           meta={"category": category, "mode": mode.value})
-            return out
+                chart_config = None
+                t_in, t_out = 0, 0
+                if self._llm_live(llm) and len(all_details) > 0:
+                    data_arg = all_details[0].get("preview", [])
+                    _, (t_in, t_out), chart_config = self._synthesize(llm, question, category, data_arg)
+
+                out = self._record(tenant_id, question, user_id, category, trace, answer, mode,
+                                   "ANSWERED", False, [n.id for n in query_nodes],
+                                   citations, facts=facts, caveats=caveats,
+                                   tokens_in=t_in, tokens_out=t_out, queries_run=queries_run)
+                out["_detail"] = all_details
+                out["chart_config"] = chart_config
+                out["chart_data"] = all_details[0].get("preview", []) if all_details else []
+                self.obs.event(tenant_id=tenant_id, trace_id=trace, stage="stakeholder.answer",
+                               actor="stakeholder", resource=out["answer_id"], status="OK",
+                               meta={"category": category, "mode": mode.value})
+                return out
+
+            # Every matched approved query failed to execute. Semantic retrieval
+            # surfaced queries that are topically similar but not actually
+            # applicable to this question (wrong table, stale column, dialect
+            # mismatch, or a transient executor error) -- that is a bad match,
+            # not evidence the question is unanswerable. Don't terminate here:
+            # fall through to definitions / skill-matching / freeform synthesis
+            # below, same as when no approved queries matched at all, so a bad
+            # retrieval hit degrades to a real analysis instead of a denial.
+            logger.warning(
+                "stakeholder.answer: all %d matched approved queries failed to execute "
+                "for tenant %s; falling through past approved-query reuse instead of "
+                "returning CANNOT_ANSWER. last_err=%s", len(query_nodes), tenant_id, last_err)
         if defn_nodes:
             answers = []
             facts = []

@@ -121,6 +121,42 @@ class TestStakeholder(unittest.TestCase):
         self.assertEqual(args[1].model, "anthropic/claude-3-haiku")
 
     @patch("analytics_platform.stakeholder.make_role_client")
+    def test_failed_approved_query_falls_through_to_freeform_instead_of_denial(self, mock_make_role_client):
+        """A question can semantically match an 'approved' query that is actually
+        broken (stale column, wrong table, dialect mismatch) -- that is a bad
+        retrieval hit, not proof the question is unanswerable. answer() must
+        degrade further (skill-match, then freeform synthesis) rather than
+        stopping at CANNOT_ANSWER the moment every matched approved query fails
+        to execute."""
+        self.ctx.pipeline.register_approved_query(
+            self.tid, "SELECT * FROM this_table_does_not_exist", "broken gizmo report",
+            "how many gizmo widgets were dispatched", by="admin")
+
+        intent_resp = MagicMock(text="gizmo widgets", ok=True, tokens_in=0, tokens_out=0)
+        no_sql_resp = MagicMock(text="", tokens_in=0, tokens_out=0)  # SQL synthesis declines
+        skill_null_resp = MagicMock(
+            text='{"skill_name": null, "reasoning": "no specialized skill fits"}',
+            tokens_in=0, tokens_out=0)
+        freeform_resp = MagicMock(
+            text='{"answer": "Fallback synthesized answer after approved query failed."}',
+            tokens_in=40, tokens_out=20)
+
+        mock_llm = MagicMock()
+        mock_llm.name = "mock_gateway"
+        mock_llm.generate.side_effect = [intent_resp, no_sql_resp, skill_null_resp, freeform_resp]
+        mock_make_role_client.return_value = mock_llm
+
+        self.ctx.tenants.set_analyst_config(self.tid, {
+            "stakeholder": {"enabled": True, "provider": "openrouter", "model": "anthropic/claude-3-haiku"}
+        })
+
+        res = self.ctx.stakeholder.answer(self.tid, "how many gizmo widgets were dispatched")
+        self.assertNotEqual(res["answer_mode"], AnswerMode.CANNOT_ANSWER.value)
+        self.assertEqual(res["answer_mode"], AnswerMode.NEW_LOW_RISK_ANALYSIS.value)
+        self.assertEqual(res["status"], "ANSWERED")
+        self.assertEqual(res["answer"], "Fallback synthesized answer after approved query failed.")
+
+    @patch("analytics_platform.stakeholder.make_role_client")
     def test_approved_query_chart_synthesis_token_accounting(self, mock_make_role_client):
         # answer() now makes 3 LLM calls for this path: search-intent extraction,
         # a SQL-synthesis attempt, then chart synthesis. Give each a response shaped
