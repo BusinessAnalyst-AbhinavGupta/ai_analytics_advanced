@@ -217,6 +217,7 @@ class TriageDedupeIn(BaseModel):
 class StakeholderIn(BaseModel):
     question: str
     user_id: str = ""
+    conversation_id: str = ""
 
 
 class FeedbackIn(BaseModel):
@@ -224,6 +225,11 @@ class FeedbackIn(BaseModel):
     user_id: str = ""
     rating: str = "up"          # up | down
     comment: str = ""
+
+
+class ConversationPatchIn(BaseModel):
+    title: Optional[str] = None
+    starred: Optional[bool] = None
 
 
 class ResearchBatchIn(BaseModel):
@@ -1024,7 +1030,38 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
     @app.post("/stakeholder/{tenant_id}/answer")
     def stakeholder_answer(tenant_id: str, body: StakeholderIn) -> Dict[str, Any]:
         tenant_or_404(tenant_id)
-        return C.stakeholder.answer(tenant_id, body.question, user_id=body.user_id)
+        return C.stakeholder.answer(tenant_id, body.question, user_id=body.user_id,
+                                    conversation_id=body.conversation_id)
+
+    @app.get("/stakeholder/{tenant_id}/conversations")
+    def stakeholder_list_conversations(tenant_id: str) -> List[Dict[str, Any]]:
+        tenant_or_404(tenant_id)
+        return C.stakeholder.list_conversations(tenant_id)
+
+    @app.get("/stakeholder/{tenant_id}/conversations/{conversation_id}")
+    def stakeholder_get_conversation(tenant_id: str, conversation_id: str) -> Dict[str, Any]:
+        tenant_or_404(tenant_id)
+        conv = C.stakeholder.get_conversation(tenant_id, conversation_id)
+        if conv is None:
+            raise HTTPException(status_code=404, detail="conversation not found")
+        return conv
+
+    @app.patch("/stakeholder/{tenant_id}/conversations/{conversation_id}")
+    def stakeholder_patch_conversation(tenant_id: str, conversation_id: str,
+                                       body: ConversationPatchIn) -> Dict[str, Any]:
+        tenant_or_404(tenant_id)
+        conv = C.stakeholder.update_conversation(tenant_id, conversation_id,
+                                                 title=body.title, starred=body.starred)
+        if conv is None:
+            raise HTTPException(status_code=404, detail="conversation not found")
+        return conv
+
+    @app.delete("/stakeholder/{tenant_id}/conversations/{conversation_id}")
+    def stakeholder_delete_conversation(tenant_id: str, conversation_id: str) -> Dict[str, Any]:
+        tenant_or_404(tenant_id)
+        if not C.stakeholder.delete_conversation(tenant_id, conversation_id):
+            raise HTTPException(status_code=404, detail="conversation not found")
+        return {"deleted": conversation_id}
 
     @app.post("/stakeholder/{tenant_id}/feedback")
     def stakeholder_feedback(tenant_id: str, body: FeedbackIn) -> Dict[str, Any]:

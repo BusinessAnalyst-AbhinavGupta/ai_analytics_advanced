@@ -4,7 +4,8 @@ from __future__ import annotations
 import unittest
 from unittest.mock import MagicMock, patch
 
-from analytics_platform.api import FeedbackIn, StakeholderIn, create_app
+from fastapi import HTTPException
+from analytics_platform.api import FeedbackIn, StakeholderIn, ConversationPatchIn, create_app
 from analytics_platform.domain import AnswerMode, DataSourceKind, NodeKind
 from analytics_platform.fixtures import WEEKLY_ORDER_SQL, build_retail_warehouse
 from tests.test_api import app_ctx, call
@@ -100,6 +101,39 @@ class TestStakeholder(unittest.TestCase):
         self.assertEqual(fb["rating"], "up")
         q = call(self.app, "GET", "/stakeholder/{tenant_id}/quality", self.tid)
         self.assertEqual(q["feedback_count"], 1)
+
+    def test_answer_route_accepts_and_returns_conversation_id(self):
+        res = call(self.app, "POST", "/stakeholder/{tenant_id}/answer", self.tid,
+                   StakeholderIn(question="how many retail orders per month"))
+        self.assertTrue(res["conversation_id"])
+
+    def test_conversation_routes(self):
+        res = call(self.app, "POST", "/stakeholder/{tenant_id}/answer", self.tid,
+                   StakeholderIn(question="how many retail orders per month"))
+        cid = res["conversation_id"]
+
+        listed = call(self.app, "GET", "/stakeholder/{tenant_id}/conversations", self.tid)
+        self.assertEqual(len(listed), 1)
+        self.assertEqual(listed[0]["id"], cid)
+
+        got = call(self.app, "GET", "/stakeholder/{tenant_id}/conversations/{conversation_id}",
+                   self.tid, cid)
+        self.assertEqual(got["id"], cid)
+        self.assertEqual(len(got["messages"]), 1)
+
+        patched = call(self.app, "PATCH", "/stakeholder/{tenant_id}/conversations/{conversation_id}",
+                       self.tid, cid, ConversationPatchIn(title="Renamed", starred=True))
+        self.assertEqual(patched["title"], "Renamed")
+        self.assertTrue(patched["starred"])
+
+        deleted = call(self.app, "DELETE", "/stakeholder/{tenant_id}/conversations/{conversation_id}",
+                       self.tid, cid)
+        self.assertEqual(deleted["deleted"], cid)
+
+    def test_get_missing_conversation_route_404s(self):
+        with self.assertRaises(HTTPException):
+            call(self.app, "GET", "/stakeholder/{tenant_id}/conversations/{conversation_id}",
+                self.tid, "nope")
 
     def test_disabled_stakeholder_returns_graceful_message(self):
         self.ctx.tenants.set_analyst_config(self.tid, {"stakeholder": {"enabled": False}})
