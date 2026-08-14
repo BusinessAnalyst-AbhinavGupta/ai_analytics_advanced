@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dashboard",
+      "runtimeExecutable": "./run_dashboard.command",
+      "runtimeArgs": [],
+      "port": 3000
+    },
+    {
+      "name": "dashboard-dtdl",
+      "runtimeExecutable": "/Users/abhinav.gupta/Documents/ai_analytics_advanced/run_dashboard_DTDL.command",
+      "runtimeArgs": [],
+      "port": 3000
+    }
+  ]
+}
