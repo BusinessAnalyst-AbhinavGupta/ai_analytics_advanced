@@ -1,5 +1,17 @@
 import { create } from 'zustand';
 
+export type ConversationSummary = {
+  id: string; title: string; starred: boolean;
+  created_at: string; updated_at: string; message_count: number;
+};
+
+export type StakeholderMessage = {
+  answer_id: string; question: string; answer: string; answer_mode: string;
+  status: string; citations: any[]; caveats: string[]; facts: string[];
+  queries_run: string[]; escalated: boolean; cost: number; created_at: string;
+  chart_config?: any; chart_data?: any[]; feedback?: 'up' | 'down';
+};
+
 interface AppState {
   // Global
   tenantId: string;
@@ -8,10 +20,21 @@ interface AppState {
   // Stakeholder Q&A
   stakeholder: {
     question: string;
-    answer: any;
     loading: boolean;
+    conversations: ConversationSummary[];
+    conversationsLoading: boolean;
+    activeConversationId: string;
+    messages: StakeholderMessage[];
   };
   setStakeholder: (data: Partial<AppState['stakeholder']>) => void;
+  fetchConversations: () => Promise<void>;
+  loadConversation: (id: string) => Promise<void>;
+  startNewConversation: () => void;
+  askStakeholder: (text: string) => Promise<void>;
+  renameConversation: (id: string, title: string) => Promise<void>;
+  starConversation: (id: string, starred: boolean) => Promise<void>;
+  deleteConversation: (id: string) => Promise<void>;
+  submitFeedback: (answerId: string, rating: 'up' | 'down') => Promise<void>;
 
   // Junior Activity
   junior: {
@@ -109,8 +132,129 @@ export const useStore = create<AppState>((set) => ({
   tenantId: '',
   setTenantId: (id) => set({ tenantId: id }),
 
-  stakeholder: { question: '', answer: null, loading: false },
+  stakeholder: {
+    question: '', loading: false, conversations: [], conversationsLoading: false,
+    activeConversationId: '', messages: [],
+  },
   setStakeholder: (data) => set((state) => ({ stakeholder: { ...state.stakeholder, ...data } })),
+
+  fetchConversations: async () => {
+    const { tenantId } = useStore.getState();
+    if (!tenantId) return;
+    set((state) => ({ stakeholder: { ...state.stakeholder, conversationsLoading: true } }));
+    try {
+      const res = await fetch(`http://localhost:8000/stakeholder/${tenantId}/conversations`);
+      const data = await res.json();
+      set((state) => ({ stakeholder: { ...state.stakeholder, conversations: Array.isArray(data) ? data : [] } }));
+    } catch (e) {
+      console.error(e);
+    }
+    set((state) => ({ stakeholder: { ...state.stakeholder, conversationsLoading: false } }));
+  },
+
+  loadConversation: async (id) => {
+    const { tenantId } = useStore.getState();
+    if (!tenantId || !id) return;
+    try {
+      const res = await fetch(`http://localhost:8000/stakeholder/${tenantId}/conversations/${id}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      set((state) => ({
+        stakeholder: { ...state.stakeholder, activeConversationId: id, messages: data.messages || [] },
+      }));
+    } catch (e) {
+      console.error(e);
+    }
+  },
+
+  startNewConversation: () => {
+    set((state) => ({ stakeholder: { ...state.stakeholder, activeConversationId: '', messages: [], question: '' } }));
+  },
+
+  askStakeholder: async (text) => {
+    const { tenantId, stakeholder } = useStore.getState();
+    const queryText = text || stakeholder.question;
+    if (!queryText || !tenantId) return;
+    set((state) => ({ stakeholder: { ...state.stakeholder, loading: true } }));
+    try {
+      const res = await fetch(`http://localhost:8000/stakeholder/${tenantId}/answer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: queryText, conversation_id: stakeholder.activeConversationId }),
+      });
+      const data = await res.json();
+      set((state) => ({
+        stakeholder: {
+          ...state.stakeholder,
+          question: '',
+          activeConversationId: data.conversation_id || state.stakeholder.activeConversationId,
+          messages: [...state.stakeholder.messages, data],
+        },
+      }));
+      await useStore.getState().fetchConversations();
+    } catch (e) {
+      console.error(e);
+    }
+    set((state) => ({ stakeholder: { ...state.stakeholder, loading: false } }));
+  },
+
+  renameConversation: async (id, title) => {
+    const { tenantId } = useStore.getState();
+    try {
+      await fetch(`http://localhost:8000/stakeholder/${tenantId}/conversations/${id}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title }),
+      });
+      await useStore.getState().fetchConversations();
+    } catch (e) {
+      console.error(e);
+    }
+  },
+
+  starConversation: async (id, starred) => {
+    const { tenantId } = useStore.getState();
+    try {
+      await fetch(`http://localhost:8000/stakeholder/${tenantId}/conversations/${id}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ starred }),
+      });
+      await useStore.getState().fetchConversations();
+    } catch (e) {
+      console.error(e);
+    }
+  },
+
+  deleteConversation: async (id) => {
+    const { tenantId, stakeholder } = useStore.getState();
+    try {
+      await fetch(`http://localhost:8000/stakeholder/${tenantId}/conversations/${id}`, { method: 'DELETE' });
+      if (stakeholder.activeConversationId === id) {
+        useStore.getState().startNewConversation();
+      }
+      await useStore.getState().fetchConversations();
+    } catch (e) {
+      console.error(e);
+    }
+  },
+
+  submitFeedback: async (answerId, rating) => {
+    const { tenantId } = useStore.getState();
+    try {
+      await fetch(`http://localhost:8000/stakeholder/${tenantId}/feedback`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ answer_id: answerId, rating }),
+      });
+      set((state) => ({
+        stakeholder: {
+          ...state.stakeholder,
+          messages: state.stakeholder.messages.map((m) =>
+            m.answer_id === answerId ? { ...m, feedback: rating } : m),
+        },
+      }));
+    } catch (e) {
+      console.error(e);
+    }
+  },
 
   junior: { logs: [], isConnected: false },
   setJunior: (data) => set((state) => ({ junior: { ...state.junior, ...data } })),
