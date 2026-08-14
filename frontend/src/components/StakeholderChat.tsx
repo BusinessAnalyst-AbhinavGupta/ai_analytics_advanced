@@ -5,6 +5,26 @@ import { useStore } from '@/store/useStore';
 import { ChartRenderer } from '@/components/ChartRenderer';
 import { Plus, Star, Pencil, Trash2, ThumbsUp, ThumbsDown } from 'lucide-react';
 
+function CollapsibleCode({ label, code }: { label: string; code: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ marginTop: '1rem' }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.05em', padding: 0 }}
+      >
+        <span style={{ display: 'inline-block', transition: 'transform 0.15s', transform: open ? 'rotate(90deg)' : 'none' }}>▶</span>
+        {label}
+      </button>
+      {open && (
+        <pre style={{ background: '#0a0a0c', padding: '1rem', borderRadius: '8px', overflowX: 'auto', fontSize: '0.85rem', color: '#a0a0a0', border: '1px solid rgba(255,255,255,0.05)', marginTop: '0.5rem' }}>
+          <code>{code}</code>
+        </pre>
+      )}
+    </div>
+  );
+}
+
 function ConversationHistorySidebar() {
   const { conversations, conversationsLoading, activeConversationId } = useStore(state => state.stakeholder);
   const fetchConversations = useStore(state => state.fetchConversations);
@@ -148,6 +168,11 @@ export function StakeholderChat() {
                   <div style={{ marginTop: '1.5rem', padding: '1rem', background: 'rgba(0,0,0,0.1)', borderRadius: '8px' }}>
                     <ChartRenderer data={m.chart_data || []} config={m.chart_config} />
                   </div>
+                )}
+                {m.queries_run && m.queries_run.length > 0 && (
+                  m.queries_run.map((q, qi) => (
+                    <CollapsibleCode key={qi} label={`SQL executed${m.queries_run.length > 1 ? ` (${qi + 1}/${m.queries_run.length})` : ''}`} code={q} />
+                  ))
                 )}
               </div>
             </div>
