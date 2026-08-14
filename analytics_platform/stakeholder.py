@@ -277,7 +277,7 @@ class StakeholderService:
                 "stakeholder.answer: all %d matched approved queries failed to execute "
                 "for tenant %s; falling through past approved-query reuse instead of "
                 "returning CANNOT_ANSWER. last_err=%s", len(query_nodes), tenant_id, last_err)
-        if defn_nodes:
+        def _recite_definitions():
             answers = []
             facts = []
             citations = []
@@ -290,7 +290,7 @@ class StakeholderService:
                     "evidence_ref": d_node.evidence_ref,
                     "freshness": d_node.confidence.get("freshness", 0.0)
                 })
-            
+
             answer = "Definitions: " + " | ".join(answers)
             out = self._record(tenant_id, question, user_id, category, trace, answer,
                                AnswerMode.DIRECT_FROM_APPROVED_KNOWLEDGE, "ANSWERED", False,
@@ -302,6 +302,11 @@ class StakeholderService:
                            actor="stakeholder", resource=out["answer_id"], status="OK",
                            meta={"category": category, "mode": AnswerMode.DIRECT_FROM_APPROVED_KNOWLEDGE.value})
             return out
+
+        if defn_nodes and not self._llm_live(llm):
+            # No live LLM means skill-matching and freeform synthesis are both
+            # unreachable below anyway, so recite immediately as before.
+            return _recite_definitions()
 
         if self._llm_live(llm):
             # Check for skill match
@@ -347,6 +352,16 @@ class StakeholderService:
                                    actor="stakeholder", resource=out["answer_id"], status="OK",
                                    meta={"category": category, "mode": out["answer_mode"]})
                     return out
+
+            # No skill matched (or the matched skill couldn't be loaded).
+            # Brain retrieval is rank-only with no absolute relevance
+            # threshold (see brain/fusion.py's RRF fusion) -- a retrieved
+            # definition being "best of what's there" is not proof it
+            # actually addresses this question. Don't let it preempt a
+            # purpose-built skill's chance to run above; recite it here only
+            # as a fallback, still ahead of generic freeform synthesis.
+            if defn_nodes:
+                return _recite_definitions()
 
             # Fallback to direct LLM synthesis if no skill matched
             answer, toks, chart_config = self._synthesize(llm, question, category)

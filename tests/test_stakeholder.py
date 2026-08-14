@@ -157,6 +157,59 @@ class TestStakeholder(unittest.TestCase):
         self.assertEqual(res["answer"], "Fallback synthesized answer after approved query failed.")
 
     @patch("analytics_platform.stakeholder.make_role_client")
+    def test_irrelevant_definition_match_falls_through_to_skill_match(self, mock_make_role_client):
+        """Brain retrieval is purely rank-based (RRF fusion, no absolute
+        relevance threshold -- see brain/fusion.py) -- a DEFINITION node can
+        rank best simply because nothing else in the corpus is closer, not
+        because it actually addresses the question. Reciting it must not
+        preempt a purpose-built skill that can actually answer: when the LLM
+        is live, skill-matching gets first chance, and the definition is
+        used only as a fallback if no skill fits."""
+        brain = self.ctx.pipeline.brain(self.tid)
+        d = brain.create(NodeKind.DEFINITION, "username_continue",
+                         summary="username_continue is an unrelated login-form field flag")
+        brain.submit(d.id, by="junior")
+        d = brain.approve(d.id, by="senior")
+
+        # Retrieval ranking is a separate, already-covered concern (Brain's
+        # RRF fusion has no absolute relevance threshold -- see
+        # brain/fusion.py); pin _retrieve's output directly so this test
+        # deterministically exercises answer()'s handling of "a definition
+        # got retrieved but is irrelevant", regardless of whether this
+        # specific synthetic corpus would rank it best in a real search.
+        self.ctx.stakeholder._retrieve = MagicMock(return_value=([], [d]))
+
+        intent_resp = MagicMock(text="widget dropoff", ok=True, tokens_in=0, tokens_out=0)
+        no_sql_resp = MagicMock(text="", tokens_in=0, tokens_out=0)  # SQL synthesis declines
+        synth_resp = MagicMock(
+            text='{"answer": "Real skill-computed drop-off analysis."}',
+            tokens_in=15, tokens_out=10)
+
+        mock_llm = MagicMock()
+        mock_llm.name = "mock_gateway"
+        mock_llm.generate.side_effect = [intent_resp, no_sql_resp, synth_resp]
+        mock_make_role_client.return_value = mock_llm
+
+        self.ctx.tenants.set_analyst_config(self.tid, {
+            "stakeholder": {"enabled": True, "provider": "openrouter", "model": "anthropic/claude-3-haiku"}
+        })
+
+        fake_skill = MagicMock()
+        fake_skill.meta.name = "fake-dropoff-skill"
+        self.ctx.stakeholder.skill_engine = MagicMock()
+        self.ctx.stakeholder.skill_engine.match.return_value = MagicMock(skill_name="fake-dropoff-skill")
+        self.ctx.stakeholder.skill_engine.extract_params.return_value = ({}, False, "")
+        self.ctx.stakeholder.skill_engine.execute.return_value = MagicMock(
+            ok=True, error="", queries_run=["SELECT 1"],
+            data_previews=[{"preview": [{"widgets_dropped": 42}]}])
+        self.ctx.stakeholder.skill_registry.get_skill = MagicMock(return_value=fake_skill)
+
+        res = self.ctx.stakeholder.answer(self.tid, "why are widgets dropping off before dispatch")
+        self.assertEqual(res["answer_mode"], AnswerMode.SKILL_EXECUTED_ANALYSIS.value)
+        self.assertEqual(res["status"], "ANSWERED")
+        self.assertEqual(res["answer"], "Real skill-computed drop-off analysis.")
+
+    @patch("analytics_platform.stakeholder.make_role_client")
     def test_approved_query_chart_synthesis_token_accounting(self, mock_make_role_client):
         # answer() now makes 3 LLM calls for this path: search-intent extraction,
         # a SQL-synthesis attempt, then chart synthesis. Give each a response shaped
