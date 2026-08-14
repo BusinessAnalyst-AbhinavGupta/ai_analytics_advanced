@@ -33,6 +33,24 @@ class TestStakeholder(unittest.TestCase):
         self.assertEqual(res["citations"][0]["title"], "monthly retail orders")
         self.assertIn("monthly retail orders", res["answer"])
 
+    def test_reuse_resolves_metabase_template_placeholder(self):
+        # A stored query authored in Metabase's native editor can carry a
+        # {{Date}}-style Field Filter tag -- valid inside Metabase's own
+        # parameter UI, not valid raw SQL once reused verbatim outside it.
+        templated_sql = (
+            "SELECT date_format(CAST(created_at AS TIMESTAMP), '%Y-%m') AS month, "
+            "COUNT(*) AS orders FROM events WHERE {{Date}} AND action = 'order' "
+            "GROUP BY 1 ORDER BY 1 LIMIT 40"
+        )
+        self.ctx.pipeline.register_approved_query(
+            self.tid, templated_sql, "templated retail orders",
+            "how many templated retail orders per month", by="admin")
+        res = self.ctx.stakeholder.answer(self.tid, "how many templated retail orders per month")
+        self.assertEqual(res["status"], "ANSWERED")
+        self.assertEqual(res["answer_mode"], AnswerMode.REFRESHED_APPROVED_QUERY.value)
+        self.assertTrue(any("{{Date}}" in c and "no filter" in c for c in res["caveats"]),
+                        res["caveats"])
+
     def test_approved_definition_falls_through(self):
         brain = self.ctx.pipeline.brain(self.tid)
         d = brain.create(NodeKind.DEFINITION, "gross margin",

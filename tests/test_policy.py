@@ -4,7 +4,7 @@ from __future__ import annotations
 import unittest
 
 from analytics_platform.config import PolicySettings
-from analytics_platform.execution.policy import QueryPolicy
+from analytics_platform.execution.policy import QueryPolicy, resolve_template_placeholders
 
 
 class TestPolicy(unittest.TestCase):
@@ -52,6 +52,24 @@ class TestPolicy(unittest.TestCase):
         # SQL that happens to contain braces (e.g. a JSON literal).
         d = self.policy.validate("SELECT * FROM shirt WHERE meta = '{}' ")
         self.assertTrue(d.allowed, d.reasons)
+
+
+class TestResolveTemplatePlaceholders(unittest.TestCase):
+    def test_substitutes_field_filter_with_permissive_condition(self):
+        sql, found = resolve_template_placeholders("SELECT * FROM shirt WHERE {{Date}} AND color = 'red'")
+        self.assertEqual(found, ["{{Date}}"])
+        self.assertEqual(sql, "SELECT * FROM shirt WHERE 1=1 AND color = 'red'")
+
+    def test_no_placeholder_returns_sql_unchanged(self):
+        sql, found = resolve_template_placeholders("SELECT * FROM shirt")
+        self.assertEqual(sql, "SELECT * FROM shirt")
+        self.assertEqual(found, [])
+
+    def test_substitutes_multiple_placeholders(self):
+        sql, found = resolve_template_placeholders(
+            "SELECT * FROM shirt WHERE {{Date}} AND {{osname}}")
+        self.assertEqual(found, ["{{Date}}", "{{osname}}"])
+        self.assertEqual(sql, "SELECT * FROM shirt WHERE 1=1 AND 1=1")
 
 
 if __name__ == "__main__":

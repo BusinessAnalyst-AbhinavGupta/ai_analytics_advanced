@@ -7,12 +7,34 @@ policy on every attempt.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import sqlglot
 
 from ..config import PolicySettings
 from ..domain import PolicyDecision
+
+# Metabase's native-query editor uses {{Tag}} as a whole Field Filter
+# condition (e.g. `WHERE {{Date}}`), not a value substitution -- resolving
+# it means "no filter on this dimension" (a permissive TRUE), not "delete
+# the WHERE clause". Shared between QueryPolicy.validate() (rejects
+# LLM-synthesized SQL that still has one) and resolve_template_placeholders()
+# (used for verbatim reuse of a stored, already-approved Metabase question,
+# where rejecting outright would just make it inexecutable).
+_TEMPLATE_PLACEHOLDER_RE = re.compile(r"\{\{\s*[\w.]+\s*\}\}")
+
+
+def resolve_template_placeholders(sql: str) -> "tuple[str, List[str]]":
+    """Replace {{Tag}} placeholders with a permissive `1=1` so a stored,
+    Metabase-authored query can execute outside Metabase's own parameter UI.
+
+    Returns (resolved_sql, placeholders_found) -- an empty list means `sql`
+    was returned unchanged.
+    """
+    found = _TEMPLATE_PLACEHOLDER_RE.findall(sql)
+    if not found:
+        return sql, []
+    return _TEMPLATE_PLACEHOLDER_RE.sub("1=1", sql), found
 
 
 class QueryPolicy:
@@ -39,7 +61,7 @@ class QueryPolicy:
         # 1b. unresolved templating -- {{Date}}-style placeholders are a Metabase
         # UI convention, not valid SQL. They parse-fail or silently misbehave at
         # the executor, so catch them here with a clear reason instead.
-        template_placeholders = re.findall(r"\{\{\s*[\w.]+\s*\}\}", sql)
+        template_placeholders = _TEMPLATE_PLACEHOLDER_RE.findall(sql)
         if template_placeholders:
             reasons.append(
                 f"Unresolved template placeholder(s) {sorted(set(template_placeholders))} -- "

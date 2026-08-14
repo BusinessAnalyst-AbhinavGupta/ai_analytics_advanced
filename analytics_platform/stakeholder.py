@@ -22,7 +22,7 @@ from .config import Settings
 from .database import Store, dump_json
 from .domain import AnswerMode, NodeKind, new_id, now_iso
 from .execution.base import ExecutionContext
-from .execution.policy import QueryPolicy
+from .execution.policy import QueryPolicy, resolve_template_placeholders
 from .llm.client import make_role_client
 from .observability import Observability, new_trace
 from .stores import TenantStoreProvider
@@ -115,10 +115,17 @@ class StakeholderService:
     def _refresh(self, tenant_id: str, node: Any, question: str) -> Dict[str, Any]:
         ec = ExecutionContext(tenant_id=tenant_id, question=question,
                               dialect=node.payload.get("dialect", "athena"))
-        result = self.executor.execute(node.payload.get("sql", ""), ec)
+        sql, placeholders = resolve_template_placeholders(node.payload.get("sql", ""))
+        if placeholders:
+            logger.warning(
+                "stakeholder._refresh: resolved template placeholder(s) %s in stored "
+                "query %r to a permissive filter for verbatim reuse",
+                sorted(set(placeholders)), node.id)
+        result = self.executor.execute(sql, ec)
         if not result.ok:
             return {"ok": False, "error": result.error, "row_count": 0,
-                    "execution_ms": result.execution_ms}
+                    "execution_ms": result.execution_ms, "sql": sql,
+                    "placeholders_resolved": placeholders}
         preview = []
         rows = result.data
         if rows is not None:
@@ -127,7 +134,8 @@ class StakeholderService:
             except Exception:  # noqa: BLE001 - non-DataFrame result
                 preview = list(rows)[:3]
         return {"ok": True, "row_count": result.row_count,
-                "execution_ms": result.execution_ms, "preview": preview}
+                "execution_ms": result.execution_ms, "preview": preview,
+                "sql": sql, "placeholders_resolved": placeholders}
 
     # -- answer ------------------------------------------------------------
     def answer(self, tenant_id: str, question: str, user_id: str = "") -> Dict[str, Any]:
@@ -212,11 +220,14 @@ class StakeholderService:
             any_failed = False
             last_err = ""
             for q_node in query_nodes:
-                sql = q_node.payload.get("sql", "")
-                if sql:
-                    queries_run.append(sql)
                 refreshed = self._refresh(tenant_id, q_node, question)
                 all_details.append(refreshed)
+                if refreshed.get("sql"):
+                    queries_run.append(refreshed["sql"])
+                if refreshed.get("placeholders_resolved"):
+                    caveats.append(
+                        f"'{q_node.title}': template filter(s) "
+                        f"{sorted(set(refreshed['placeholders_resolved']))} defaulted to no filter")
                 if not refreshed["ok"]:
                     any_failed = True
                     last_err = refreshed["error"]
@@ -238,7 +249,7 @@ class StakeholderService:
             else:
                 answer = f"Matched {len(query_nodes)} approved queries, but execution failed: {last_err}"
                 mode = AnswerMode.CANNOT_ANSWER
-                caveats = [str(last_err)]
+                caveats.append(str(last_err))
                 
             chart_config = None
             t_in, t_out = 0, 0
