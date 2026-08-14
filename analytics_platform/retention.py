@@ -31,6 +31,7 @@ RETENTION_TABLES = [
     ("questions", "created_at"),
     ("stakeholder_answers", "created_at"),
     ("stakeholder_feedback", "created_at"),
+    ("stakeholder_conversations", "updated_at"),
     ("research_docs", "created_at"),
 ]
 

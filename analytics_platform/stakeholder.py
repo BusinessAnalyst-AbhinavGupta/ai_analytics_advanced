@@ -153,7 +153,9 @@ class StakeholderService:
 
     # NOTE: messages don't carry prior feedback ratings (no join against
     # stakeholder_feedback) -- reloading a conversation loses the thumbs-up/down
-    # highlight even though the rating itself is correctly persisted. Follow-up.
+    # highlight even though the rating itself is correctly persisted. Similarly,
+    # chart_config/chart_data aren't persisted/returned here, so a reloaded
+    # thread shows the answer text but not its original chart. Follow-up.
     def get_conversation(self, tenant_id: str, conversation_id: str) -> Optional[Dict[str, Any]]:
         store = self.stores.for_tenant(tenant_id)
         conv = store.query_one(
@@ -201,6 +203,10 @@ class StakeholderService:
             (conversation_id, tenant_id))
         if not row:
             return False
+        store.execute(
+            "DELETE FROM stakeholder_feedback WHERE tenant_id = ? AND answer_id IN "
+            "(SELECT id FROM stakeholder_answers WHERE conversation_id = ? AND tenant_id = ?)",
+            (tenant_id, conversation_id, tenant_id))
         store.execute("DELETE FROM stakeholder_answers WHERE conversation_id=? AND tenant_id=?",
                       (conversation_id, tenant_id))
         store.execute("DELETE FROM stakeholder_conversations WHERE id=? AND tenant_id=?",

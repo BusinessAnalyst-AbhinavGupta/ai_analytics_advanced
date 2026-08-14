@@ -11,6 +11,7 @@ function CollapsibleCode({ label, code }: { label: string; code: string }) {
     <div style={{ marginTop: '1rem' }}>
       <button
         onClick={() => setOpen(o => !o)}
+        aria-expanded={open}
         style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.05em', padding: 0 }}
       >
         <span style={{ display: 'inline-block', transition: 'transform 0.15s', transform: open ? 'rotate(90deg)' : 'none' }}>▶</span>
@@ -37,7 +38,7 @@ function ConversationHistorySidebar() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
 
-  useEffect(() => { fetchConversations(); }, [tenantId, fetchConversations]);
+  useEffect(() => { fetchConversations(); startNewConversation(); }, [tenantId, fetchConversations, startNewConversation]);
 
   const commitRename = (id: string) => {
     const title = editingTitle.trim();
@@ -150,6 +151,8 @@ export function StakeholderChat() {
                   <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem' }}>
                     <button
                       title="Good answer"
+                      aria-label="Good answer"
+                      aria-pressed={m.feedback === 'up'}
                       onClick={() => submitFeedback(m.answer_id, 'up')}
                       style={{ background: m.feedback === 'up' ? 'rgba(34,197,94,0.15)' : 'none', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px', padding: '0.3rem 0.5rem', cursor: 'pointer', color: m.feedback === 'up' ? 'var(--success)' : 'var(--text-muted)', display: 'flex' }}
                     >
@@ -157,6 +160,8 @@ export function StakeholderChat() {
                     </button>
                     <button
                       title="Bad answer"
+                      aria-label="Bad answer"
+                      aria-pressed={m.feedback === 'down'}
                       onClick={() => submitFeedback(m.answer_id, 'down')}
                       style={{ background: m.feedback === 'down' ? 'rgba(239,68,68,0.15)' : 'none', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px', padding: '0.3rem 0.5rem', cursor: 'pointer', color: m.feedback === 'down' ? 'var(--error)' : 'var(--text-muted)', display: 'flex' }}
                     >
