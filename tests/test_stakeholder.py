@@ -448,6 +448,46 @@ class TestStakeholder(unittest.TestCase):
         self.assertEqual(res["answer_mode"], AnswerMode.REFRESHED_APPROVED_QUERY.value)
         self.assertEqual(mock_llm.generate.call_count, 5)
 
+    def test_ensure_conversation_creates_then_reuses(self):
+        svc = self.ctx.stakeholder
+        cid = svc._ensure_conversation(self.tid, "", "how many retail orders per month")
+        self.assertTrue(cid)
+        again = svc._ensure_conversation(self.tid, cid, "a follow-up question")
+        self.assertEqual(again, cid)
+
+    def test_ensure_conversation_unknown_id_starts_new(self):
+        svc = self.ctx.stakeholder
+        cid = svc._ensure_conversation(self.tid, "not-a-real-id", "how many retail orders per month")
+        self.assertNotEqual(cid, "not-a-real-id")
+
+    def test_list_and_get_conversation(self):
+        svc = self.ctx.stakeholder
+        cid = svc._ensure_conversation(self.tid, "", "how many retail orders per month")
+        convs = svc.list_conversations(self.tid)
+        self.assertEqual(len(convs), 1)
+        self.assertEqual(convs[0]["id"], cid)
+        self.assertIn("title", convs[0])
+        got = svc.get_conversation(self.tid, cid)
+        self.assertEqual(got["id"], cid)
+        self.assertEqual(got["messages"], [])
+
+    def test_get_conversation_missing_returns_none(self):
+        self.assertIsNone(self.ctx.stakeholder.get_conversation(self.tid, "nope"))
+
+    def test_update_conversation_rename_and_star(self):
+        svc = self.ctx.stakeholder
+        cid = svc._ensure_conversation(self.tid, "", "q")
+        updated = svc.update_conversation(self.tid, cid, title="Renamed", starred=True)
+        self.assertEqual(updated["title"], "Renamed")
+        self.assertTrue(updated["starred"])
+
+    def test_delete_conversation(self):
+        svc = self.ctx.stakeholder
+        cid = svc._ensure_conversation(self.tid, "", "q")
+        self.assertTrue(svc.delete_conversation(self.tid, cid))
+        self.assertIsNone(svc.get_conversation(self.tid, cid))
+        self.assertFalse(svc.delete_conversation(self.tid, cid))
+
 
 class TestConversationSchema(unittest.TestCase):
     def test_conversation_table_and_column_exist(self):

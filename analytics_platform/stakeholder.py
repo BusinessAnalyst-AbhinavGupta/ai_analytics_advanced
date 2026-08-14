@@ -19,7 +19,7 @@ from .brain.embedding import Embedder
 from .brain.index import BrainIndex
 from .brain.store import CompanyBrain
 from .config import Settings
-from .database import Store, dump_json
+from .database import Store, dump_json, load_json
 from .domain import AnswerMode, NodeKind, new_id, now_iso
 from .execution.base import ExecutionContext
 from .execution.policy import QueryPolicy, resolve_template_placeholders
@@ -111,6 +111,98 @@ class StakeholderService:
         q = brain.search(question, kind=NodeKind.QUERY, usable_only=True, limit=3)
         d = brain.search(question, kind=NodeKind.DEFINITION, usable_only=True, limit=3)
         return (q or []), (d or [])
+
+    # -- conversations -------------------------------------------------------
+    def _ensure_conversation(self, tenant_id: str, conversation_id: str, question: str) -> str:
+        """Reuse an existing conversation if the caller supplied a valid id for
+        this tenant; otherwise start a new one. Never raises on a stale/foreign
+        id -- a deleted or mistyped conversation_id just starts a fresh thread."""
+        store = self.stores.for_tenant(tenant_id)
+        if conversation_id:
+            row = store.query_one(
+                "SELECT id FROM stakeholder_conversations WHERE id=? AND tenant_id=?",
+                (conversation_id, tenant_id))
+            if row:
+                store.execute(
+                    "UPDATE stakeholder_conversations SET updated_at=? WHERE id=? AND tenant_id=?",
+                    (now_iso(), conversation_id, tenant_id))
+                return conversation_id
+            logger.warning(
+                "stakeholder._ensure_conversation: conversation_id %r not found for "
+                "tenant %s -- starting a new conversation", conversation_id, tenant_id)
+        cid = new_id("conv")
+        title = question.strip()[:80] or "New conversation"
+        ts = now_iso()
+        store.execute(
+            "INSERT INTO stakeholder_conversations (id,tenant_id,title,starred,created_at,updated_at) "
+            "VALUES (?,?,?,?,?,?)", (cid, tenant_id, title, 0, ts, ts))
+        return cid
+
+    def list_conversations(self, tenant_id: str) -> List[Dict[str, Any]]:
+        store = self.stores.for_tenant(tenant_id)
+        rows = store.query_all(
+            "SELECT c.id, c.title, c.starred, c.created_at, c.updated_at, "
+            "COUNT(a.id) AS message_count "
+            "FROM stakeholder_conversations c "
+            "LEFT JOIN stakeholder_answers a ON a.conversation_id = c.id AND a.tenant_id = c.tenant_id "
+            "WHERE c.tenant_id=? GROUP BY c.id ORDER BY c.starred DESC, c.updated_at DESC",
+            (tenant_id,))
+        return [{"id": r["id"], "title": r["title"], "starred": bool(r["starred"]),
+                 "created_at": r["created_at"], "updated_at": r["updated_at"],
+                 "message_count": r["message_count"]} for r in rows]
+
+    def get_conversation(self, tenant_id: str, conversation_id: str) -> Optional[Dict[str, Any]]:
+        store = self.stores.for_tenant(tenant_id)
+        conv = store.query_one(
+            "SELECT id, title, starred, created_at, updated_at FROM stakeholder_conversations "
+            "WHERE id=? AND tenant_id=?", (conversation_id, tenant_id))
+        if not conv:
+            return None
+        rows = store.query_all(
+            "SELECT * FROM stakeholder_answers WHERE conversation_id=? AND tenant_id=? "
+            "ORDER BY created_at ASC", (conversation_id, tenant_id))
+        messages = [{
+            "answer_id": r["id"], "question": r["question"], "answer": r["answer"],
+            "answer_mode": r["answer_mode"], "status": r["status"],
+            "citations": load_json(r["citations"], []), "caveats": load_json(r["caveats"], []),
+            "facts": load_json(r["facts"], []), "queries_run": load_json(r["queries_run"], []),
+            "escalated": bool(r["escalated"]), "cost": r["cost"], "created_at": r["created_at"],
+        } for r in rows]
+        return {"id": conv["id"], "title": conv["title"], "starred": bool(conv["starred"]),
+                "created_at": conv["created_at"], "updated_at": conv["updated_at"],
+                "messages": messages}
+
+    def update_conversation(self, tenant_id: str, conversation_id: str,
+                            title: Optional[str] = None,
+                            starred: Optional[bool] = None) -> Optional[Dict[str, Any]]:
+        store = self.stores.for_tenant(tenant_id)
+        row = store.query_one(
+            "SELECT id FROM stakeholder_conversations WHERE id=? AND tenant_id=?",
+            (conversation_id, tenant_id))
+        if not row:
+            return None
+        if title is not None:
+            store.execute(
+                "UPDATE stakeholder_conversations SET title=?, updated_at=? WHERE id=? AND tenant_id=?",
+                (title, now_iso(), conversation_id, tenant_id))
+        if starred is not None:
+            store.execute(
+                "UPDATE stakeholder_conversations SET starred=?, updated_at=? WHERE id=? AND tenant_id=?",
+                (int(starred), now_iso(), conversation_id, tenant_id))
+        return self.get_conversation(tenant_id, conversation_id)
+
+    def delete_conversation(self, tenant_id: str, conversation_id: str) -> bool:
+        store = self.stores.for_tenant(tenant_id)
+        row = store.query_one(
+            "SELECT id FROM stakeholder_conversations WHERE id=? AND tenant_id=?",
+            (conversation_id, tenant_id))
+        if not row:
+            return False
+        store.execute("DELETE FROM stakeholder_answers WHERE conversation_id=? AND tenant_id=?",
+                      (conversation_id, tenant_id))
+        store.execute("DELETE FROM stakeholder_conversations WHERE id=? AND tenant_id=?",
+                      (conversation_id, tenant_id))
+        return True
 
     def _refresh(self, tenant_id: str, node: Any, question: str) -> Dict[str, Any]:
         ec = ExecutionContext(tenant_id=tenant_id, question=question,
