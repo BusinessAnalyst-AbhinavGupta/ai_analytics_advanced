@@ -63,6 +63,36 @@ class TestPythonCodePolicy(unittest.TestCase):
         decision = self.policy.validate("import os\nx = eval('1')")
         self.assertGreaterEqual(len(decision.reasons), 2)
 
+    def test_builtins_eval_is_denied(self):
+        """__builtins__.eval(...) is a critical escape vector and must be denied."""
+        decision = self.policy.validate("result = __builtins__.eval('1+1')")
+        self.assertTrue(decision.denied)
+        self.assertTrue(any("__builtins__" in r for r in decision.reasons))
+
+    def test_builtins_exec_is_denied(self):
+        """__builtins__.exec(...) is a critical escape vector and must be denied."""
+        decision = self.policy.validate("result = __builtins__.exec('x=1')")
+        self.assertTrue(decision.denied)
+        self.assertTrue(any("__builtins__" in r for r in decision.reasons))
+
+    def test_builtins_open_is_denied(self):
+        """__builtins__.open(...) is a critical escape vector and must be denied."""
+        decision = self.policy.validate("result = __builtins__.open('/etc/passwd')")
+        self.assertTrue(decision.denied)
+        self.assertTrue(any("__builtins__" in r for r in decision.reasons))
+
+    def test_builtins_subscript_eval_is_denied(self):
+        """__builtins__['eval'](...) subscript form must be denied."""
+        decision = self.policy.validate("result = __builtins__['eval']('1+1')")
+        self.assertTrue(decision.denied)
+        self.assertTrue(any("__builtins__" in r for r in decision.reasons))
+
+    def test_result_nested_in_function_is_denied(self):
+        """result assigned only inside a function def (not module-level) must be denied."""
+        decision = self.policy.validate("def f():\n    result = 1\nx = 5")
+        self.assertTrue(decision.denied)
+        self.assertTrue(any("result" in r for r in decision.reasons))
+
 
 if __name__ == "__main__":
     unittest.main()

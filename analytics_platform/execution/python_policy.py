@@ -23,13 +23,22 @@ DENIED_NAMES = {
 
 
 def _has_result_assignment(tree: ast.AST) -> bool:
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            for target in node.targets:
+    """Check if code has a module-level assignment to 'result'.
+
+    Only accepts 'result = ...' or 'result: ... = ...' at the top level of
+    the module, not nested inside function/class/lambda definitions (which
+    would fail at runtime with NameError when code executes).
+    """
+    if not isinstance(tree, ast.Module):
+        return False
+
+    for stmt in tree.body:
+        if isinstance(stmt, ast.Assign):
+            for target in stmt.targets:
                 if isinstance(target, ast.Name) and target.id == "result":
                     return True
-        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) \
-                and node.target.id == "result":
+        elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name) \
+                and stmt.target.id == "result":
             return True
     return False
 
@@ -54,6 +63,8 @@ class _Visitor(ast.NodeVisitor):
     def visit_Name(self, node: ast.Name) -> None:
         if node.id in DENIED_NAMES:
             self.reasons.append(f"use of '{node.id}' is not allowed")
+        elif node.id.startswith("__") and node.id.endswith("__"):
+            self.reasons.append(f"use of dunder name '{node.id}' is not allowed")
         self.generic_visit(node)
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
