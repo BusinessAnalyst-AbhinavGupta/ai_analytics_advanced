@@ -104,11 +104,20 @@ class TestStakeholder(unittest.TestCase):
 
     @patch("analytics_platform.stakeholder.make_role_client")
     def test_approved_query_chart_synthesis_token_accounting(self, mock_make_role_client):
+        # answer() now makes 3 LLM calls for this path: search-intent extraction,
+        # a SQL-synthesis attempt, then chart synthesis. Give each a response shaped
+        # like what that specific prompt would actually get back, so the mock
+        # exercises the real call sequence instead of a single fixed reply that
+        # happened to work before intent extraction existed.
+        intent_resp = MagicMock(text="retail orders", ok=True, tokens_in=0, tokens_out=0)
+        no_sql_resp = MagicMock(text="", tokens_in=0, tokens_out=0)  # "context insufficient"
+        chart_resp = MagicMock(
+            text='{"answer": "Reused answer", "chart_config": {"type": "BarChart"}}',
+            tokens_in=200, tokens_out=80)
+
         mock_llm = MagicMock()
         mock_llm.name = "mock_gateway"
-        mock_llm.generate.return_value.text = '{"answer": "Reused answer", "chart_config": {"type": "BarChart"}}'
-        mock_llm.generate.return_value.tokens_in = 200
-        mock_llm.generate.return_value.tokens_out = 80
+        mock_llm.generate.side_effect = [intent_resp, no_sql_resp, chart_resp]
         mock_make_role_client.return_value = mock_llm
 
         self.ctx.tenants.set_analyst_config(self.tid, {
@@ -121,6 +130,118 @@ class TestStakeholder(unittest.TestCase):
         self.assertEqual(res["chart_config"]["type"], "BarChart")
         self.assertTrue(len(res["chart_data"]) > 0)
         self.assertGreater(res["cost"], 0.0)
+
+    def test_extract_search_intent_passes_through_when_llm_not_configured(self):
+        """No live LLM (default NullClient) -> intent extraction is a no-op, and
+        retrieval still runs on the original question."""
+        from analytics_platform.llm.client import NullClient
+        intent = self.ctx.stakeholder._extract_search_intent(NullClient(), "how many retail orders per month")
+        self.assertEqual(intent, "how many retail orders per month")
+
+    @patch("analytics_platform.stakeholder.make_role_client")
+    def test_synthesized_sql_answers_from_adapted_approved_context(self, mock_make_role_client):
+        """A live LLM that returns real SQL from approved context takes the
+        ADAPTED_APPROVED_QUERY path -- ad-hoc SQL, not the verbatim approved query."""
+        intent_resp = MagicMock(text="retail orders", ok=True, tokens_in=0, tokens_out=0)
+        synthesized_sql = (
+            "```sql\n"
+            "SELECT COUNT(*) AS orders FROM events WHERE action = 'order'\n"
+            "```"
+        )
+        sql_resp = MagicMock(text=synthesized_sql, tokens_in=150, tokens_out=40)
+        answer_resp = MagicMock(
+            text='{"answer": "There were N orders.", "chart_config": {"type": "BarChart"}}',
+            tokens_in=90, tokens_out=30)
+
+        mock_llm = MagicMock()
+        mock_llm.name = "mock_gateway"
+        mock_llm.generate.side_effect = [intent_resp, sql_resp, answer_resp]
+        mock_make_role_client.return_value = mock_llm
+
+        self.ctx.tenants.set_analyst_config(self.tid, {
+            "stakeholder": {"enabled": True, "provider": "openrouter", "model": "anthropic/claude-3-haiku"}
+        })
+
+        res = self.ctx.stakeholder.answer(self.tid, "how many retail orders per month")
+        self.assertEqual(res["answer_mode"], AnswerMode.ADAPTED_APPROVED_QUERY.value)
+        self.assertEqual(res["status"], "ANSWERED")
+        self.assertEqual(len(res["queries_run"]), 1)
+        # The executed SQL is the synthesized query as approved by QueryPolicy --
+        # confirms the policy gate actually ran (it appends LIMIT when absent),
+        # not just that some SQL executed.
+        self.assertIn("SELECT COUNT(*) AS orders FROM events WHERE action = 'order'",
+                      res["queries_run"][0])
+        self.assertIn("LIMIT", res["queries_run"][0])
+        self.assertEqual(len(res["citations"]), 1)
+        self.assertEqual(res["citations"][0]["title"], "monthly retail orders")
+        self.assertIn("dynamically generated SQL", res["caveats"])
+        self.assertIsNotNone(res["chart_config"])
+        self.assertTrue(len(res["chart_data"]) > 0)
+        self.assertGreater(res["cost"], 0.0)
+
+    @patch("analytics_platform.stakeholder.make_role_client")
+    def test_sql_synthesis_falls_back_when_llm_declines(self, mock_make_role_client):
+        """An LLM that returns nothing for SQL synthesis (its documented
+        'context insufficient' behaviour) falls through to reusing the
+        approved query verbatim, not a crash or an empty answer."""
+        intent_resp = MagicMock(text="retail orders", ok=True, tokens_in=0, tokens_out=0)
+        no_sql_resp = MagicMock(text="", tokens_in=0, tokens_out=0)
+        answer_resp = MagicMock(text='{"answer": "Reused answer"}', tokens_in=10, tokens_out=5)
+
+        mock_llm = MagicMock()
+        mock_llm.name = "mock_gateway"
+        mock_llm.generate.side_effect = [intent_resp, no_sql_resp, answer_resp]
+        mock_make_role_client.return_value = mock_llm
+
+        self.ctx.tenants.set_analyst_config(self.tid, {
+            "stakeholder": {"enabled": True, "provider": "openrouter", "model": "anthropic/claude-3-haiku"}
+        })
+
+        res = self.ctx.stakeholder.answer(self.tid, "how many retail orders per month")
+        self.assertEqual(res["answer_mode"], AnswerMode.REFRESHED_APPROVED_QUERY.value)
+
+    @patch("analytics_platform.stakeholder.make_role_client")
+    def test_sql_synthesis_falls_back_when_policy_rejects_synthesized_sql(self, mock_make_role_client):
+        """Synthesized SQL is LLM-authored and un-reviewed -- a write statement must
+        be blocked by QueryPolicy (same read-only gate the structured pipeline
+        applies) and fall through, never reach the executor."""
+        intent_resp = MagicMock(text="retail orders", ok=True, tokens_in=0, tokens_out=0)
+        unsafe_sql_resp = MagicMock(
+            text="```sql\nDELETE FROM events WHERE 1=1\n```", tokens_in=50, tokens_out=10)
+        answer_resp = MagicMock(text='{"answer": "Reused answer"}', tokens_in=10, tokens_out=5)
+
+        mock_llm = MagicMock()
+        mock_llm.name = "mock_gateway"
+        mock_llm.generate.side_effect = [intent_resp, unsafe_sql_resp, answer_resp]
+        mock_make_role_client.return_value = mock_llm
+
+        self.ctx.tenants.set_analyst_config(self.tid, {
+            "stakeholder": {"enabled": True, "provider": "openrouter", "model": "anthropic/claude-3-haiku"}
+        })
+
+        res = self.ctx.stakeholder.answer(self.tid, "how many retail orders per month")
+        self.assertEqual(res["answer_mode"], AnswerMode.REFRESHED_APPROVED_QUERY.value)
+        self.assertNotIn("DELETE", " ".join(res["queries_run"]))
+
+    @patch("analytics_platform.stakeholder.make_role_client")
+    def test_sql_synthesis_falls_back_when_generated_sql_fails_execution(self, mock_make_role_client):
+        """Synthesized SQL that fails to execute (bad syntax) falls through to the
+        verbatim-reuse path rather than surfacing a raw execution error."""
+        intent_resp = MagicMock(text="retail orders", ok=True, tokens_in=0, tokens_out=0)
+        bad_sql_resp = MagicMock(text="```sql\nSELEKT this is not sql\n```", tokens_in=50, tokens_out=10)
+        answer_resp = MagicMock(text='{"answer": "Reused answer"}', tokens_in=10, tokens_out=5)
+
+        mock_llm = MagicMock()
+        mock_llm.name = "mock_gateway"
+        mock_llm.generate.side_effect = [intent_resp, bad_sql_resp, answer_resp]
+        mock_make_role_client.return_value = mock_llm
+
+        self.ctx.tenants.set_analyst_config(self.tid, {
+            "stakeholder": {"enabled": True, "provider": "openrouter", "model": "anthropic/claude-3-haiku"}
+        })
+
+        res = self.ctx.stakeholder.answer(self.tid, "how many retail orders per month")
+        self.assertEqual(res["answer_mode"], AnswerMode.REFRESHED_APPROVED_QUERY.value)
 
 
 if __name__ == "__main__":
