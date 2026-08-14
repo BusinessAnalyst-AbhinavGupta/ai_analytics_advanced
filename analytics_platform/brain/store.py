@@ -167,30 +167,46 @@ class CompanyBrain:
             params.append(kind.value if hasattr(kind, "value") else kind)
         sql += " ORDER BY updated_at DESC LIMIT ?"
         params.append(cap)
-        return self.store.query_all(sql, tuple(params))
+        rows = self.store.query_all(sql, tuple(params))
+        if len(rows) == cap:
+            # The pre-filter hit its own cap: some usable nodes older than the
+            # cap-th are invisible to this call. A curated Brain is thousands of
+            # nodes at most (see brain/index.py's brute-force design rationale),
+            # so this should be rare — if it isn't, that's worth knowing.
+            logger.warning("candidate pre-filter capped at %d rows for tenant %s "
+                           "(kind=%s); older usable nodes are not searchable this call",
+                           cap, self.tenant_id, kind)
+        return rows
 
     def search(self, query: str = "", kind: Optional[NodeKind] = None,
                usable_only: bool = True, limit: int = 20) -> List[KnowledgeNode]:
         """Hybrid retrieval: SQL pre-filter, BM25 + dense recall, RRF, rerank.
 
-        With no query, this is "most recently updated usable nodes". With a query,
-        both recall legs run over the pre-filtered candidate set and are fused by
-        rank. A node that neither leg surfaces is not returned — relevance is a
-        real filter, not a sort.
+        With no query, this is "most recently updated usable nodes" — a browsing
+        mode, not a relevance claim. With a query, relevance is a real filter: both
+        recall legs run over the pre-filtered candidate set and are fused by rank,
+        and a node neither leg surfaces is not returned. This holds even with no
+        index configured — returning recency-ordered nodes for a real question
+        would be answering with content nobody asked about, presented as if it
+        were a match. That is worse than returning nothing, which is what an
+        unindexed brain does instead until Task 8 gives every consumer an index.
         """
         # Pre-filter wide enough that recall is not truncated before ranking.
         rows = self._candidate_rows(kind, usable_only, cap=max(limit * 25, 500))
         nodes = [self._row_to_node(r) for r in rows]
-        if not query or not nodes:
+        if not query:
             return nodes[:limit]
+        if not nodes:
+            return []
 
         by_id = {n.id: n for n in nodes}
         candidate_ids = list(by_id)
 
         if self.index is None:
-            logger.debug("no BrainIndex on tenant %s; returning recency order",
-                         self.tenant_id)
-            return nodes[:limit]
+            logger.warning("search(%r) on tenant %s has no BrainIndex — returning no "
+                           "results rather than unrelated recent nodes; this tenant's "
+                           "brain needs an index (see Task 8)", query, self.tenant_id)
+            return []
 
         recall = max(limit * 4, 40)
         lexical = self.index.lexical_search(query, self.tenant_id, candidate_ids, recall)

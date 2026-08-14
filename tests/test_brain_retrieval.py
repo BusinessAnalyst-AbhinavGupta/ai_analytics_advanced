@@ -79,10 +79,23 @@ class SearchTest(unittest.TestCase):
         hits = self.brain.search("conversion", kind=NodeKind.QUERY)
         self.assertTrue(all(hasattr(n, "id") and hasattr(n, "title") for n in hits))
 
-    def test_search_without_an_index_still_works(self):
-        """No index injected -> lexical-free fallback must not raise."""
+    def test_search_without_an_index_returns_nothing_for_a_real_query(self):
+        """No index -> [] for a query, never unrelated nodes presented as matches.
+
+        `self.approved` genuinely exists in this tenant's table and would match —
+        proving this isn't just "empty database, nothing to find." An indexless
+        brain that returned it (or any other recent node) here would be answering
+        a real question with unrelated content, which is worse than the original
+        bug this plan fixes (that one at least returned nothing).
+        """
         bare = CompanyBrain(self.ctx.store, "t1")
-        self.assertIsInstance(bare.search("conversion", kind=NodeKind.QUERY), list)
+        self.assertEqual(bare.search("checkout conversion rate", kind=NodeKind.QUERY), [])
+
+    def test_search_without_an_index_and_no_query_still_browses_recent_nodes(self):
+        """No query is a browsing request, not a relevance claim -- unaffected."""
+        bare = CompanyBrain(self.ctx.store, "t1")
+        hits = bare.search("", kind=NodeKind.QUERY)
+        self.assertIn(self.approved.id, [n.id for n in hits])
 
 
 class IndexSyncTest(unittest.TestCase):
