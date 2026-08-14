@@ -4,7 +4,7 @@ from __future__ import annotations
 import unittest
 from unittest import mock
 
-from analytics_platform.brain.embedding import NullEmbedder
+from analytics_platform.brain.embedding import NullEmbedder, SentenceTransformerEmbedder
 from analytics_platform.brain.index import BrainIndex
 from tests.helpers import make_ctx
 
@@ -160,6 +160,75 @@ class ChunkedLexicalSearchTest(unittest.TestCase):
         self.assertEqual(hits[0], "kn_decoy")
         self.assertIn("kn_5", hits)
         self.assertIn("kn_1", hits)
+
+
+class VectorSearchTest(unittest.TestCase):
+    """Replaces the ChromaDB test that used to live in tests/test_vector_search.py."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.embedder = SentenceTransformerEmbedder("BAAI/bge-small-en-v1.5")
+        if not cls.embedder.available:
+            raise unittest.SkipTest("bge-small-en-v1.5 not available offline")
+
+    def setUp(self):
+        self.ctx = make_ctx()
+        self.index = BrainIndex(self.ctx.store, embedder=self.embedder)
+        self.index.upsert("kn_churn", "t1", "Q3 European churn",
+                          "High user churn observed in Q3 for the European market.")
+        self.index.upsert("kn_latency", "t1", "Latency regression",
+                          "New product feature increased server latency.")
+        self.index.upsert("kn_other", "t2", "Q3 European churn",
+                          "High user churn observed in Q3 for the European market.")
+
+    def tearDown(self):
+        self.ctx.close()
+
+    def test_matches_on_meaning_not_keywords(self):
+        # "customer attrition" shares no token with "user churn".
+        hits = self.index.vector_search("customer attrition", "t1", None, 5)
+        self.assertEqual(hits[0], "kn_churn")
+
+    def test_lexical_leg_cannot_do_this(self):
+        # Demonstrates why both legs exist.
+        self.assertEqual(self.index.lexical_search("customer attrition", "t1", None, 5), [])
+
+    def test_other_tenants_are_never_returned(self):
+        hits = self.index.vector_search("customer attrition", "t1", None, 5)
+        self.assertNotIn("kn_other", hits)
+
+    def test_candidate_ids_restrict_results(self):
+        hits = self.index.vector_search("customer attrition", "t1", ["kn_latency"], 5)
+        self.assertEqual(hits, ["kn_latency"])
+
+    def test_empty_candidate_list_returns_nothing(self):
+        self.assertEqual(self.index.vector_search("customer attrition", "t1", [], 5), [])
+
+    def test_delete_removes_the_vector(self):
+        self.index.delete("kn_churn")
+        hits = self.index.vector_search("customer attrition", "t1", None, 5)
+        self.assertNotIn("kn_churn", hits)
+
+
+class VectorSearchDegradationTest(unittest.TestCase):
+    def setUp(self):
+        self.ctx = make_ctx()
+        self.index = BrainIndex(self.ctx.store, embedder=NullEmbedder("test"))
+
+    def tearDown(self):
+        self.ctx.close()
+
+    def test_returns_empty_when_embeddings_unavailable(self):
+        self.index.upsert("kn_1", "t1", "Churn", "User churn in Q3")
+        self.assertEqual(self.index.vector_search("attrition", "t1", None, 5), [])
+
+    def test_no_vector_row_is_written_without_an_embedder(self):
+        self.index.upsert("kn_1", "t1", "Churn", "User churn in Q3")
+        rows = self.ctx.store.query_all("SELECT node_id FROM knowledge_vectors")
+        self.assertEqual(rows, [])
+
+    def test_embedding_available_is_false(self):
+        self.assertFalse(self.index.embedding_available)
 
 
 if __name__ == "__main__":

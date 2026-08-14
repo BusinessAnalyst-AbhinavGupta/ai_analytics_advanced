@@ -149,6 +149,67 @@ class BrainIndex:
             return []
         return [(r["node_id"], r["score"]) for r in rows]
 
+    def vector_search(self, query: str, tenant_id: str,
+                      candidate_ids: Optional[Sequence[str]] = None,
+                      limit: int = 40) -> List[str]:
+        """Node ids by descending cosine similarity. [] when embeddings are off.
+
+        Brute force is deliberate: a curated Brain is thousands of nodes, and a
+        dot product over a normalised float32 matrix of that size is sub-millisecond.
+        An ANN index would add a second stateful store for no measurable gain.
+        """
+        if candidate_ids is not None and len(candidate_ids) == 0:
+            return []
+        if not self.embedding_available:
+            return []
+        qvec = self.embedder.encode_query(query)
+        if qvec is None:
+            return []
+
+        rows = self._load_vectors(tenant_id, candidate_ids)
+        if not rows:
+            return []
+
+        ids, matrix = rows
+        sims = matrix @ np.asarray(qvec, dtype=np.float32)
+        order = np.argsort(-sims)[:limit]
+        return [ids[i] for i in order]
+
+    def _load_vectors(self, tenant_id: str,
+                      candidate_ids: Optional[Sequence[str]]
+                      ) -> Optional[Tuple[List[str], np.ndarray]]:
+        sql = ("SELECT node_id, dim, vector FROM knowledge_vectors "
+               "WHERE tenant_id = ? AND model = ?")
+        params: List[object] = [tenant_id, self.embedder.model_name]
+        sql += self._restrict_clause(candidate_ids, params)
+
+        try:
+            rows = self.store.query_all(sql, tuple(params))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("vector load failed for tenant %s: %s", tenant_id, exc,
+                           exc_info=True)
+            return None
+        if not rows:
+            return None
+
+        wanted = set(candidate_ids) if candidate_ids else None
+        ids: List[str] = []
+        vectors: List[np.ndarray] = []
+        expected = self.embedder.dim
+        for r in rows:
+            if wanted is not None and r["node_id"] not in wanted:
+                continue  # candidate set was too large to bind; filter here instead
+            if int(r["dim"]) != expected:
+                logger.warning("skipping %s: vector dim %s != model dim %s "
+                               "(reindex required)", r["node_id"], r["dim"], expected)
+                continue
+            ids.append(r["node_id"])
+            vectors.append(np.frombuffer(r["vector"], dtype=np.float32))
+
+        if not ids:
+            return None
+        return ids, np.vstack(vectors)
+
     @staticmethod
     def _restrict_clause(candidate_ids: Optional[Sequence[str]],
                          params: List[object]) -> str:
