@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useStore } from '@/store/useStore';
 import { ChartRenderer } from '@/components/ChartRenderer';
-import { Plus, Star, Pencil, Trash2 } from 'lucide-react';
+import { Plus, Star, Pencil, Trash2, ThumbsUp, ThumbsDown } from 'lucide-react';
 
 function ConversationHistorySidebar() {
   const { conversations, conversationsLoading, activeConversationId } = useStore(state => state.stakeholder);
@@ -99,6 +99,7 @@ export function StakeholderChat() {
   const { question, loading, messages } = useStore(state => state.stakeholder);
   const setStakeholder = useStore(state => state.setStakeholder);
   const askStakeholder = useStore(state => state.askStakeholder);
+  const submitFeedback = useStore(state => state.submitFeedback);
   const threadEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -125,6 +126,24 @@ export function StakeholderChat() {
                   </span>
                 </div>
                 <p style={{ color: 'var(--text-secondary)', lineHeight: 1.6 }}>{m.answer}</p>
+                {m.answer_id && (
+                  <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem' }}>
+                    <button
+                      title="Good answer"
+                      onClick={() => submitFeedback(m.answer_id, 'up')}
+                      style={{ background: m.feedback === 'up' ? 'rgba(34,197,94,0.15)' : 'none', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px', padding: '0.3rem 0.5rem', cursor: 'pointer', color: m.feedback === 'up' ? 'var(--success)' : 'var(--text-muted)', display: 'flex' }}
+                    >
+                      <ThumbsUp size={14} />
+                    </button>
+                    <button
+                      title="Bad answer"
+                      onClick={() => submitFeedback(m.answer_id, 'down')}
+                      style={{ background: m.feedback === 'down' ? 'rgba(239,68,68,0.15)' : 'none', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px', padding: '0.3rem 0.5rem', cursor: 'pointer', color: m.feedback === 'down' ? 'var(--error)' : 'var(--text-muted)', display: 'flex' }}
+                    >
+                      <ThumbsDown size={14} />
+                    </button>
+                  </div>
+                )}
                 {m.chart_config && (
                   <div style={{ marginTop: '1.5rem', padding: '1rem', background: 'rgba(0,0,0,0.1)', borderRadius: '8px' }}>
                     <ChartRenderer data={m.chart_data || []} config={m.chart_config} />

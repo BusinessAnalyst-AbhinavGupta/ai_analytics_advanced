@@ -151,6 +151,9 @@ class StakeholderService:
                  "created_at": r["created_at"], "updated_at": r["updated_at"],
                  "message_count": r["message_count"]} for r in rows]
 
+    # NOTE: messages don't carry prior feedback ratings (no join against
+    # stakeholder_feedback) -- reloading a conversation loses the thumbs-up/down
+    # highlight even though the rating itself is correctly persisted. Follow-up.
     def get_conversation(self, tenant_id: str, conversation_id: str) -> Optional[Dict[str, Any]]:
         store = self.stores.for_tenant(tenant_id)
         conv = store.query_one(
