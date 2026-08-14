@@ -39,8 +39,8 @@ export default function Governance() {
                   <h3 style={{ margin: '0 0 0.25rem 0', fontSize: '1rem', color: 'var(--text-primary)' }}>PII Detection & Masking</h3>
                   <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Automatically mask sensitive data</p>
                 </div>
-                <button 
-                  onClick={() => setPiiDetection(!piiDetection)}
+                <button
+                  onClick={() => setGovernance({ piiDetection: !piiDetection })}
                   style={{ 
                     width: '40px', height: '24px', borderRadius: '12px', border: 'none', cursor: 'pointer',
                     background: piiDetection ? 'var(--accent-primary)' : 'rgba(255,255,255,0.1)',

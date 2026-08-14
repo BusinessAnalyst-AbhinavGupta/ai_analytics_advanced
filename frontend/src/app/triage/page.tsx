@@ -79,6 +79,7 @@ export default function Triage() {
   const setTriage = useStore(state => state.setTriage);
   const approveKnowledgeNodes = useStore(state => state.approveKnowledgeNodes);
   const rejectKnowledgeNodes = useStore(state => state.rejectKnowledgeNodes);
+  const reviewSeniorRun = useStore(state => state.reviewSeniorRun);
 
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
   const [expanded, setExpanded] = useState<ExpandedState>({});
@@ -191,8 +192,14 @@ export default function Triage() {
                       )}
 
                       <div style={{ display: 'flex', gap: '0.5rem' }}>
-                        <button style={{ background: 'var(--success)', padding: '0.5rem 1rem', borderRadius: '4px', border: 'none', color: '#fff', cursor: 'pointer' }}>Approve</button>
-                        <button style={{ background: 'var(--error)', padding: '0.5rem 1rem', borderRadius: '4px', border: 'none', color: '#fff', cursor: 'pointer' }}>Reject</button>
+                        <button
+                          onClick={() => reviewSeniorRun(run.run_id, 'approve')}
+                          style={{ background: 'var(--success)', padding: '0.5rem 1rem', borderRadius: '4px', border: 'none', color: '#fff', cursor: 'pointer' }}
+                        >Approve</button>
+                        <button
+                          onClick={() => reviewSeniorRun(run.run_id, 'reject')}
+                          style={{ background: 'var(--error)', padding: '0.5rem 1rem', borderRadius: '4px', border: 'none', color: '#fff', cursor: 'pointer' }}
+                        >Reject</button>
                       </div>
                     </div>
                   ))

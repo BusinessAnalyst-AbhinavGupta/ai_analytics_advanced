@@ -42,6 +42,7 @@ interface AppState {
   setTriage: (data: Partial<AppState['triage']>) => void;
   approveKnowledgeNodes: (ids: string[]) => Promise<void>;
   rejectKnowledgeNodes: (ids: string[]) => Promise<void>;
+  reviewSeniorRun: (runId: string, action: 'approve' | 'reject') => Promise<void>;
 
   // Deep Research
   research: {
@@ -101,7 +102,11 @@ interface AppState {
 }
 
 export const useStore = create<AppState>((set) => ({
-  tenantId: '1',
+  // No tenant is assumed real -- the Sidebar fetches /tenants on load and
+  // sets this to an actual tenant id. A stale hardcoded value here 404s
+  // every request silently (fetch() doesn't throw on HTTP error status),
+  // which is indistinguishable from "it worked but found nothing".
+  tenantId: '',
   setTenantId: (id) => set({ tenantId: id }),
 
   stakeholder: { question: '', answer: null, loading: false },
@@ -142,6 +147,20 @@ export const useStore = create<AppState>((set) => ({
       const res = await fetch(`http://localhost:8000/triage/${tenantId}/queue${statusParam}`);
       const data = await res.json();
       set((state) => ({ triage: { ...state.triage, triageQueue: Array.isArray(data) ? data : [] } }));
+    } catch (e) {
+      console.error(e);
+    }
+  },
+  reviewSeniorRun: async (runId, action) => {
+    const { tenantId } = useStore.getState();
+    try {
+      await fetch(`http://localhost:8000/senior/${tenantId}/review`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ run_id: runId, action, by: 'admin' })
+      });
+      const res = await fetch(`http://localhost:8000/senior/${tenantId}/queue`);
+      const data = await res.json();
+      set((state) => ({ triage: { ...state.triage, seniorQueue: Array.isArray(data) ? data : [] } }));
     } catch (e) {
       console.error(e);
     }
