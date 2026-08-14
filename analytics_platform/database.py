@@ -120,6 +120,10 @@ CREATE TABLE IF NOT EXISTS stakeholder_feedback (
     id TEXT PRIMARY KEY, tenant_id TEXT, answer_id TEXT, user_id TEXT,
     rating TEXT, comment TEXT, created_at TEXT
 );
+CREATE TABLE IF NOT EXISTS stakeholder_conversations (
+    id TEXT PRIMARY KEY, tenant_id TEXT, title TEXT, starred INTEGER DEFAULT 0,
+    created_at TEXT, updated_at TEXT
+);
 CREATE TABLE IF NOT EXISTS research_sources (
     id TEXT PRIMARY KEY, tenant_id TEXT, name TEXT, url TEXT,
     kind TEXT, credibility TEXT, policy TEXT, created_at TEXT
@@ -154,6 +158,7 @@ CREATE INDEX IF NOT EXISTS idx_runs_tenant ON analysis_runs(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_tel_tenant ON telemetry(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_tel_trace ON telemetry(trace_id);
 CREATE INDEX IF NOT EXISTS idx_sa_tenant ON stakeholder_answers(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_sconv_tenant ON stakeholder_conversations(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_rd_tenant ON research_docs(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_audit_tenant ON audit_log(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_cph_tenant ON company_profile_history(tenant_id);
@@ -215,6 +220,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
             sa_cols = {row[1] for row in conn.execute("PRAGMA table_info(stakeholder_answers)").fetchall()}
             if "queries_run" not in sa_cols:
                 conn.execute("ALTER TABLE stakeholder_answers ADD COLUMN queries_run TEXT")
+            if "conversation_id" not in sa_cols:
+                conn.execute("ALTER TABLE stakeholder_answers ADD COLUMN conversation_id TEXT")
 
         # Brain retrieval: both recall legs must exist or search silently degrades.
         # Only tenant databases carry them — a control store legitimately has neither,

@@ -449,5 +449,19 @@ class TestStakeholder(unittest.TestCase):
         self.assertEqual(mock_llm.generate.call_count, 5)
 
 
+class TestConversationSchema(unittest.TestCase):
+    def test_conversation_table_and_column_exist(self):
+        ctx, base = app_ctx(warehouse=build_retail_warehouse())
+        tid = ctx.tenants.create_tenant("SchemaCo", retention_days=90).id
+        store = ctx.stores.for_tenant(tid)
+        # table exists and is queryable
+        rows = store.query_all("SELECT * FROM stakeholder_conversations WHERE tenant_id=?", (tid,))
+        self.assertEqual(rows, [])
+        # new column exists on the pre-existing table
+        cols = {r[1] for r in store.conn.execute("PRAGMA table_info(stakeholder_answers)").fetchall()}
+        self.assertIn("conversation_id", cols)
+        base.close()
+
+
 if __name__ == "__main__":
     unittest.main()
