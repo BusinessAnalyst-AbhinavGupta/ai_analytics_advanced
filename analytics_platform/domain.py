@@ -258,6 +258,17 @@ class PolicyDecision:
 
 
 @dataclass
+class PythonPolicyDecision:
+    allowed: bool
+    reasons: List[str] = field(default_factory=list)
+    approved_code: str = ""
+
+    @property
+    def denied(self) -> bool:
+        return not self.allowed
+
+
+@dataclass
 class Question:
     id: str
     tenant_id: str
