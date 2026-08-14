@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from .brain.embedding import Embedder
+from .brain.index import BrainIndex
 from .brain.ingest import ingest_sql
 from .brain.store import CompanyBrain
 from .database import Store
@@ -21,14 +23,18 @@ from .tenancy import TenantService
 class OnboardingService:
     def __init__(self, stores: TenantStoreProvider, tenants: Optional[TenantService] = None,
                  pipeline: Optional[Pipeline] = None,
-                 observability: Optional[Observability] = None):
+                 observability: Optional[Observability] = None,
+                 embedder: Optional[Embedder] = None):
         self.stores = stores
         self.tenants = tenants or TenantService(stores)
         self.pipeline = pipeline
         self.obs = observability or Observability(stores)
+        self.embedder = embedder
 
     def brain(self, tenant_id: str) -> CompanyBrain:
-        return CompanyBrain(self.stores.for_tenant(tenant_id), tenant_id)
+        store = self.stores.for_tenant(tenant_id)
+        return CompanyBrain(store, tenant_id,
+                            index=BrainIndex(store, embedder=self.embedder))
 
     # -- step 1 + 2: tenant + company profile --------------------------------
     def provision_company(self, profile: Dict[str, Any],

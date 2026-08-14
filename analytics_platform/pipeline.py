@@ -11,6 +11,8 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 
 from .analysis import analyze_results, evaluate_rules, profile_df, synthesize_analysis_llm
+from .brain.embedding import Embedder
+from .brain.index import BrainIndex
 from .brain.store import CompanyBrain
 from .config import Settings
 from .database import Store, dump_json, load_json
@@ -32,12 +34,14 @@ class Pipeline:
                  brain_factory: Optional[BrainFactory] = None,
                  executor: Optional[QueryExecutor] = None,
                  llm: Optional[LLMClient] = None,
-                 observability: Optional[Observability] = None):
+                 observability: Optional[Observability] = None,
+                 embedder: Optional[Embedder] = None):
         self.stores = stores
         self.settings = settings or Settings()
         self.tenants = tenant_service or TenantService(stores)
+        self.embedder = embedder
         self.brain_factory = brain_factory if brain_factory is not None else (
-            lambda s, t: CompanyBrain(s, t))
+            lambda s, t: CompanyBrain(s, t, index=BrainIndex(s, embedder=self.embedder)))
         self.executor = executor
         self.llm = llm or make_client(self.settings.llm_provider,
                                       self.settings.llm_model,

@@ -123,5 +123,61 @@ class IndexSyncTest(unittest.TestCase):
         self.assertEqual(len(rows), 1)
 
 
+class ContextWiringTest(unittest.TestCase):
+    """Regression guard for the defect that made the Brain look empty.
+
+    Every service that reads the Brain must receive an index. This test fails if
+    any of them is constructed without one.
+    """
+
+    def setUp(self):
+        import tempfile
+        from analytics_platform.api import make_context
+        from analytics_platform.config import Settings
+        self._tmp = tempfile.TemporaryDirectory()
+        self.ctx = make_context(Settings(data_dir=self._tmp.name,
+                                         embedding_enabled=False))
+        self.ctx.tenants.create("t1", name="T1")
+
+    def tearDown(self):
+        self.ctx.stores.close_all()
+        self._tmp.cleanup()
+
+    def test_every_brain_reader_has_an_index(self):
+        for name in ("stakeholder", "junior", "onboarding", "research", "triage"):
+            service = getattr(self.ctx, name, None)
+            if service is None:
+                continue
+            brain = service.brain("t1")
+            self.assertIsNotNone(
+                brain.index, f"{name}.brain() has no BrainIndex — searches "
+                             f"will silently return recency order")
+
+    def test_each_brain_index_uses_its_own_tenants_store(self):
+        """An index bound to the wrong store would read another company's data."""
+        self.ctx.tenants.create("t2", name="T2")
+        a = self.ctx.stakeholder.brain("t1").index
+        b = self.ctx.stakeholder.brain("t2").index
+        self.assertNotEqual(a.store.db_path, b.store.db_path)
+
+    def test_the_embedder_is_shared_across_tenants(self):
+        """Loading a model per tenant would cost seconds and hundreds of MB each."""
+        self.ctx.tenants.create("t2", name="T2")
+        self.assertIs(self.ctx.stakeholder.brain("t1").index.embedder,
+                      self.ctx.stakeholder.brain("t2").index.embedder)
+
+    def test_stakeholder_retrieves_an_approved_query_from_a_paraphrase(self):
+        brain = self.ctx.stakeholder.brain("t1")
+        node = brain.create(NodeKind.QUERY, "Checkout conversion rate",
+                            payload={"sql": "SELECT 1", "dialect": "duckdb"},
+                            summary="Share of sessions reaching payment")
+        brain.submit(node.id, by="junior")
+        brain.approve(node.id, by="senior")
+
+        q, d = self.ctx.stakeholder._retrieve(
+            "t1", "how is our checkout conversion doing?")
+        self.assertIn(node.id, [n.id for n in q])
+
+
 if __name__ == "__main__":
     unittest.main()

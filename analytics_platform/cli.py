@@ -169,7 +169,7 @@ def cmd_review(args: argparse.Namespace) -> int:
     except KeyError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
-    svc = TriageService(ctx.stores, ctx.observability)
+    svc = TriageService(ctx.stores, ctx.observability, embedder=ctx.embedder)
     kind = _parse_kind(args.kind)
 
     if args.approve:

@@ -28,6 +28,8 @@ from typing import Any, Dict, List, Optional
 
 from .analysis import (analyze_results, evaluate_rules, profile_df,
                        synthesize_analysis_llm)
+from .brain.embedding import Embedder
+from .brain.index import BrainIndex
 from .brain.store import CompanyBrain
 from .database import Store, dump_json, load_json
 from .domain import (AnalysisRun, AnswerMode, NodeKind, ReviewStatus, RunStatus,
@@ -60,13 +62,18 @@ class JuniorWorker:
                  observability: Optional[Observability] = None,
                  clock: Any = time.time, default_tenant: Optional[str] = None,
                  reviews_dir: str = "data/reviews",
-                 row_limit: int = 50000):
+                 row_limit: int = 50000,
+                 embedder: Optional[Embedder] = None):
         self.stores = stores
         self.tenant_id = tenant_id      # also exposed for Scheduler.tick
         # One tenant per worker, so its own database is resolved once here.
         # `scheduler_state` (rate/daily-cap bookkeeping) is control-plane and is
         # accessed via `self.stores.control` explicitly where needed below.
         self.store = stores.for_tenant(tenant_id)
+        self.embedder = embedder
+        # This worker is bound to one tenant for its whole lifetime, so the
+        # index (unlike the shared embedder) can be built once here and reused.
+        self.index = BrainIndex(self.store, embedder=self.embedder)
         self.junior = junior            # JuniorEngine (suggestions + executor)
         self.work_start = work_start
         self.work_end = work_end
@@ -334,7 +341,7 @@ class JuniorWorker:
                            actor="junior", resource=run.id, status="WARN",
                            meta={"cap": self.autopromote_cap})
             return None
-        brain = CompanyBrain(self.store, tid)
+        brain = CompanyBrain(self.store, tid, index=self.index)
         node = brain.create(
             NodeKind.FINDING, title=run.question_text, summary=run.answer,
             payload={"facts": run.facts, "hypotheses": run.hypotheses,
@@ -522,7 +529,7 @@ class JuniorWorker:
         rules = evaluate_rules(df)
         existing: Optional[List[str]] = None
         try:
-            existing = [n.title for n in CompanyBrain(self.store, tid).all(limit=500)
+            existing = [n.title for n in CompanyBrain(self.store, tid, index=self.index).all(limit=500)
                         if getattr(n, "kind", None) == NodeKind.FINDING
                         and getattr(getattr(n, "status", None), "is_usable", lambda: False)()]
         except Exception:  # noqa: BLE001 - novelty is best-effort

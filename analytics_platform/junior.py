@@ -21,6 +21,8 @@ import threading
 import time
 from typing import Any, Dict, List, Optional
 
+from .brain.embedding import Embedder
+from .brain.index import BrainIndex
 from .brain.store import CompanyBrain
 from .config import Settings
 from .database import Store
@@ -49,7 +51,8 @@ class JuniorEngine:
     def __init__(self, stores: TenantStoreProvider, executor: Optional[QueryExecutor] = None,
                  tenants: Optional[TenantService] = None,
                  observability: Optional[Observability] = None,
-                 settings: Optional[Settings] = None):
+                 settings: Optional[Settings] = None,
+                 embedder: Optional[Embedder] = None):
         from .execution.sampler import SamplerExecutor
         from .config import Settings
         self.stores = stores
@@ -57,6 +60,7 @@ class JuniorEngine:
         self.tenants = tenants or TenantService(stores)
         self.obs = observability or Observability(stores)
         self.settings = settings or Settings()
+        self.embedder = embedder
 
     @property
     def llm_cache_ttl_seconds(self) -> int:
@@ -126,7 +130,9 @@ class JuniorEngine:
                 tenant_id, self.llm_daily_cap, exc_info=True)
 
     def brain(self, tenant_id: str) -> CompanyBrain:
-        return CompanyBrain(self.stores.for_tenant(tenant_id), tenant_id)
+        store = self.stores.for_tenant(tenant_id)
+        return CompanyBrain(store, tenant_id,
+                            index=BrainIndex(store, embedder=self.embedder))
 
     # -- reads ---------------------------------------------------------------
     def approved_queries(self, tenant_id: str, limit: int = 200) -> List[KnowledgeNode]:

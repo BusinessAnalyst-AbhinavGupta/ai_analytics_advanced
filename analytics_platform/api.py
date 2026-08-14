@@ -13,6 +13,8 @@ import sys
 import logging
 from dataclasses import dataclass
 
+logger = logging.getLogger(__name__)
+
 api_logger = logging.getLogger("api_access")
 api_logger.setLevel(logging.INFO)
 api_logger.propagate = False
@@ -42,6 +44,7 @@ import asyncio
 from .analysis import evaluate_rules, profile_df
 from .auth import AuthGate, Role, issue
 from .billing import BillingService
+from .brain.index import BrainIndex
 from .brain.store import CompanyBrain
 from .config import Settings
 from .database import Store
@@ -268,6 +271,7 @@ class AppContext:
     junior_worker: Optional[Any] = None
     junior: Optional[Any] = None
     senior: Optional[Any] = None
+    embedder: Optional[Any] = None
 
     @property
     def store(self) -> Store:
@@ -284,30 +288,33 @@ def make_context(settings: Optional[Settings] = None,
     tenants = TenantService(stores)
     obs = Observability(stores)
     executor = SamplerExecutor(warehouse or {})
-    try:
-        from .brain.vector_store import BrainVectorStore
-        # BrainVectorStore is deprecated; will be replaced by hybrid index in Task 9
-        vector_store = None
-    except Exception:
-        vector_store = None
+
+    from .brain.embedding import get_embedder
+    # One model for the whole process. Loading it costs seconds and hundreds of
+    # megabytes; the per-tenant BrainIndex objects that wrap it are free.
+    embedder = get_embedder(settings)
+    if not embedder.available:
+        logger.warning("Brain retrieval running lexical-only: embeddings unavailable")
 
     pipeline = Pipeline(stores, settings=settings, tenant_service=tenants,
-                        executor=executor, observability=obs,
-                        brain_factory=lambda s, t: CompanyBrain(s, t, vector_store=vector_store))
+                        executor=executor, observability=obs, embedder=embedder,
+                        brain_factory=lambda s, t: CompanyBrain(
+                            s, t, index=BrainIndex(s, embedder=embedder)))
     onboarding = OnboardingService(stores, tenants=tenants, pipeline=pipeline,
-                                   observability=obs)
+                                   observability=obs, embedder=embedder)
     stakeholder = StakeholderService(stores, tenants=tenants, executor=executor,
                                      observability=obs,
                                      settings=settings,
                                      cost_per_1k_input=settings.cost_per_1k_input,
-                                     cost_per_1k_output=settings.cost_per_1k_output)
-    research = ResearchService(stores, observability=obs)
+                                     cost_per_1k_output=settings.cost_per_1k_output,
+                                     embedder=embedder)
+    research = ResearchService(stores, observability=obs, embedder=embedder)
     auth = AuthGate(settings)
     billing = BillingService(stores, settings=settings, observability=obs)
     retention = RetentionService(stores, tenants=tenants, observability=obs)
     junior = JuniorEngine(stores, executor=executor, tenants=tenants,
-                          observability=obs, settings=settings)
-    junior_worker = _make_junior_worker(settings, stores, junior, obs)
+                          observability=obs, settings=settings, embedder=embedder)
+    junior_worker = _make_junior_worker(settings, stores, junior, obs, embedder)
     scheduler = Scheduler(stores, observability=obs,
                           retention_days=settings.log_retention_days,
                           maintenance_interval_days=settings.maintenance_interval_days,
@@ -318,11 +325,12 @@ def make_context(settings: Optional[Settings] = None,
                       onboarding=onboarding, stakeholder=stakeholder,
                       research=research, auth=auth, billing=billing,
                       retention=retention, scheduler=scheduler,
-                      junior_worker=junior_worker, junior=junior, senior=senior)
+                      junior_worker=junior_worker, junior=junior, senior=senior,
+                      embedder=embedder)
 
 
 def _make_junior_worker(settings: Settings, stores: TenantStoreProvider, junior: Any,
-                        obs: Observability) -> Optional[JuniorWorker]:
+                        obs: Observability, embedder: Optional[Any] = None) -> Optional[JuniorWorker]:
     """Build a background youth worker bound to a tenant.
 
     The worker needs a concrete tenant. We pick the *oldest* active tenant as the
@@ -343,7 +351,7 @@ def _make_junior_worker(settings: Settings, stores: TenantStoreProvider, junior:
             review_backlog_max=settings.junior_review_backlog_max,
             autopromote_cap=settings.junior_autopromote_cap,
             supporting_cap=settings.junior_supporting_cap,
-            observability=obs, default_tenant=target["id"])
+            observability=obs, default_tenant=target["id"], embedder=embedder)
     except Exception:
         return None
 
@@ -356,9 +364,11 @@ def ensure_services(ctx: AppContext) -> AppContext:
             ctx.stores, tenants=ctx.tenants, executor=ctx.executor,
             observability=ctx.observability, settings=ctx.settings,
             cost_per_1k_input=ctx.settings.cost_per_1k_input,
-            cost_per_1k_output=ctx.settings.cost_per_1k_output)
+            cost_per_1k_output=ctx.settings.cost_per_1k_output,
+            embedder=ctx.embedder)
     if ctx.research is None:
-        ctx.research = ResearchService(ctx.stores, observability=ctx.observability)
+        ctx.research = ResearchService(ctx.stores, observability=ctx.observability,
+                                       embedder=ctx.embedder)
     if ctx.auth is None:
         ctx.auth = AuthGate(ctx.settings)
     if ctx.billing is None:
@@ -372,10 +382,12 @@ def ensure_services(ctx: AppContext) -> AppContext:
         ctx.junior = JuniorEngine(ctx.stores, executor=ctx.executor,
                                   tenants=ctx.tenants,
                                   observability=ctx.observability,
-                                  settings=ctx.settings)
+                                  settings=ctx.settings,
+                                  embedder=ctx.embedder)
     if ctx.junior_worker is None:
         ctx.junior_worker = _make_junior_worker(ctx.settings, ctx.stores,
-                                                ctx.junior, ctx.observability)
+                                                ctx.junior, ctx.observability,
+                                                ctx.embedder)
     if ctx.scheduler is None:
         ctx.scheduler = Scheduler(
             ctx.stores, observability=ctx.observability,
@@ -873,7 +885,7 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
     # -- triage (senior-review inbox over the Brain) ----------------------
     def _triage(tenant_id: str) -> TriageService:
         tenant_or_404(tenant_id)
-        return TriageService(ctx.stores, ctx.observability)
+        return TriageService(ctx.stores, ctx.observability, embedder=ctx.embedder)
 
     @app.get("/triage/{tenant_id}/summary")
     def triage_summary(tenant_id: str) -> Dict[str, Any]:
