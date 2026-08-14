@@ -10,7 +10,9 @@
 
 ## Prerequisite
 
-**This plan depends on [Tenant Store Isolation](2026-08-13-tenant-store-isolation.md), which must land first.** That plan gives every tenant its own SQLite file and a `TenantStoreProvider` to resolve it. This plan's two tables live in `TENANT_SCHEMA`, and its index objects are constructed against a tenant's own store — neither exists until that plan is done.
+**This plan depends on [Tenant Store Isolation](2026-08-13-tenant-store-isolation.md) — landed 2026-08-13 (PR #6, merged).** Every tenant now has its own SQLite file and a `TenantStoreProvider` resolves it. This plan's two tables live in `TENANT_SCHEMA`, and its index objects are constructed against a tenant's own store.
+
+**Also blocking Task 1 of this plan: [PR #3](https://github.com/BusinessAnalyst-AbhinavGupta/ai_analytics_advanced/pull/3) is open and conflicts with the merged tenant-isolation work — do not merge it as-is.** See "PR #3" under Follow-on plans below for what to salvage from it before starting Task 1.
 
 ## Global Constraints
 
@@ -1864,3 +1866,20 @@ This plan fixes retrieval only. Three sibling plans cover the rest of the evalua
 - `2026-08-13-brain-governance.md` — junior self-approval, ungated review endpoint, the AI senior's non-gating verdict, two dead write paths
 - `2026-08-13-skills-portability.md` — placeholder mismatch, tenant-specific SQL in core, skills as a fallback rather than an orthogonal axis, no write-back loop
 - `2026-08-13-frameworks-and-confidence.md` — the four friction types and Metrics Tree in prompts, freshness decay, evidence scoring
+
+## PR #3 — hold, then port (do not merge as-is)
+
+[PR #3](https://github.com/BusinessAnalyst-AbhinavGupta/ai_analytics_advanced/pull/3) ("feat(stakeholder): wire tenant-isolated vector search into Brain, Stakeholder, and Triage") was opened before the tenant-store-isolation plan merged and now conflicts with it — `mergeable: CONFLICTING` on GitHub, confirmed via `git merge-tree`. It still constructs `StakeholderService`/`TriageService` with the pre-isolation `store: Store` + `vector_store: Any` signature; `main` now takes `stores: TenantStoreProvider` with no `vector_store` parameter. The conflict isn't resolvable by picking a side — the PR's features need re-implementing against the current constructors.
+
+Decision (2026-08-14, user-confirmed): **hold PR #3 closed/unmerged until this plan's Task 9 removes ChromaDB, then port its durable features onto whatever `CompanyBrain.search()` looks like post-Task-9** — do not rebase it onto the old architecture first, since its Chroma-specific fixes become moot the moment Chroma is gone.
+
+What's durable and worth porting after Task 9:
+- **`StakeholderService._extract_search_intent()`** — a fast LLM call that distills a verbose question into a 2-4 word topic before running retrieval, improving recall quality. Applies directly to this plan's `search()` regardless of backend — port as-is, called before the `lexical_search`/`vector_search` calls in the rewritten `CompanyBrain.search()`.
+- **`StakeholderService._synthesize_sql()`** — lets the stakeholder analyst write and execute ad-hoc SQL from approved query/definition context (a new `AnswerMode.ADAPTED_APPROVED_QUERY` path) instead of only reusing an approved query verbatim. Independent of the retrieval backend — port as a stakeholder.py feature, not a brain.py one.
+
+What becomes unnecessary once Task 9 lands (do not port):
+- The `BrainVectorStore.search_similar()` `$and` filter fix — dead once ChromaDB is removed.
+- `CompanyBrain.reindex_vectors()` (Chroma-specific rebuild) — superseded by this plan's own `reindex_tenant()` (Task 9).
+- The `vector_store` threading through `AppContext`/`make_context` — this plan's `embedder` (Task 8) replaces it.
+
+Action when starting this plan: after Task 9 is reviewed clean, re-open or re-create a PR porting `_extract_search_intent` and `_synthesize_sql` onto the then-current `stakeholder.py`, then close PR #3 without merging (its diff will no longer apply).
