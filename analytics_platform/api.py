@@ -286,7 +286,8 @@ def make_context(settings: Optional[Settings] = None,
     executor = SamplerExecutor(warehouse or {})
     try:
         from .brain.vector_store import BrainVectorStore
-        vector_store = BrainVectorStore(settings.resolve_vector_path())
+        # BrainVectorStore is deprecated; will be replaced by hybrid index in Task 9
+        vector_store = None
     except Exception:
         vector_store = None
 

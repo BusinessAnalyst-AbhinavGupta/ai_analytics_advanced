@@ -24,6 +24,11 @@ class Settings:
     llm_api_key: str = ""              # prefer env ANALYTICS_LLM_API_KEY
     ollama_base_url: str = "http://localhost:11434"
     source_dialect: str = "athena"      # dialect the SQL is authored in (executors transpile if needed)
+    # Brain retrieval -------------------------------------------------------
+    embedding_enabled: bool = True      # False -> lexical-only retrieval (logged)
+    embedding_model: str = "BAAI/bge-small-en-v1.5"   # ~130MB; large variant is 1.3GB
+    embedding_query_prefix: str = (      # BGE retrieval models expect this on queries only
+        "Represent this sentence for searching relevant passages: ")
     policy: PolicySettings = field(default_factory=PolicySettings)
     data_dir: str = field(default_factory=lambda: os.environ.get("ANALYTICS_DATA_DIR", "")) # synthetic / sampled warehouse loader dir
     metabase_live: bool = False        # gate for live Metabase executors/tests (ANALYTICS_MB_LIVE=1)
@@ -72,11 +77,6 @@ class Settings:
         if self.data_dir:
             return os.path.join(self.data_dir, "tenants")
         return "tenants"
-
-    def resolve_vector_path(self) -> str:
-        if self.data_dir:
-            return os.path.join(self.data_dir, ".chroma_db")
-        return ".chroma_db"
 
     def effective_api_key(self) -> str:
         """LLM key resolution: explicit override, then ANALYTICS_LLM_API_KEY, then
