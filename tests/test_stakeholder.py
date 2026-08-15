@@ -564,6 +564,55 @@ class TestStakeholder(unittest.TestCase):
         self.assertIsNone(svc.get_conversation(self.tid, cid))
         self.assertFalse(svc.delete_conversation(self.tid, cid))
 
+    def test_choose_compute_path_defaults_to_sql_when_nothing_cached(self):
+        mock_llm = MagicMock()
+        path, label = self.ctx.stakeholder._choose_compute_path(
+            mock_llm, self.tid, "no-such-conversation", "how many orders")
+        self.assertEqual(path, "sql")
+        self.assertEqual(label, "")
+        mock_llm.generate.assert_not_called()  # no point asking if nothing's cached
+
+    def test_choose_compute_path_returns_python_when_llm_says_so_and_label_exists(self):
+        import pandas as pd
+        self.ctx.stakeholder.data_cache.put(
+            self.tid, "conv-1", "df_1", "orders by month", pd.DataFrame({"a": [1, 2]}))
+        mock_llm = MagicMock()
+        mock_llm.generate.return_value = MagicMock(
+            text='{"path": "python", "df_label": "df_1"}', tokens_in=5, tokens_out=5)
+
+        path, label = self.ctx.stakeholder._choose_compute_path(
+            mock_llm, self.tid, "conv-1", "what's the total")
+
+        self.assertEqual(path, "python")
+        self.assertEqual(label, "df_1")
+
+    def test_choose_compute_path_falls_back_to_sql_on_unknown_label(self):
+        import pandas as pd
+        self.ctx.stakeholder.data_cache.put(
+            self.tid, "conv-1", "df_1", "orders by month", pd.DataFrame({"a": [1, 2]}))
+        mock_llm = MagicMock()
+        mock_llm.generate.return_value = MagicMock(
+            text='{"path": "python", "df_label": "df_does_not_exist"}', tokens_in=5, tokens_out=5)
+
+        path, label = self.ctx.stakeholder._choose_compute_path(
+            mock_llm, self.tid, "conv-1", "what's the total")
+
+        self.assertEqual(path, "sql")
+        self.assertEqual(label, "")
+
+    def test_choose_compute_path_falls_back_to_sql_on_malformed_llm_response(self):
+        import pandas as pd
+        self.ctx.stakeholder.data_cache.put(
+            self.tid, "conv-1", "df_1", "orders by month", pd.DataFrame({"a": [1, 2]}))
+        mock_llm = MagicMock()
+        mock_llm.generate.return_value = MagicMock(text="not json at all", tokens_in=0, tokens_out=0)
+
+        path, label = self.ctx.stakeholder._choose_compute_path(
+            mock_llm, self.tid, "conv-1", "what's the total")
+
+        self.assertEqual(path, "sql")
+        self.assertEqual(label, "")
+
 
 class TestConversationSchema(unittest.TestCase):
     def test_conversation_table_and_column_exist(self):

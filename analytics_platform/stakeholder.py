@@ -507,6 +507,51 @@ class StakeholderService:
             return False
         return getattr(client, "name", "null") != "null"
 
+    def _choose_compute_path(self, llm: Any, tenant_id: str, conversation_id: str,
+                             question: str) -> Tuple[str, str]:
+        """Decide whether this turn should re-run SQL or run Python against an
+        already-cached DataFrame from earlier in the same conversation.
+        Returns (path, df_label) where path is "python" or "sql"; df_label is
+        "" when path == "sql". Defaults to "sql" (the existing, well-tested
+        path) whenever nothing is cached, the LLM response doesn't parse, or
+        it names a label that isn't actually cached -- Python-over-cache is
+        only ever an optimization layered on the SQL path, never a
+        replacement for it.
+        """
+        available = self.data_cache.list_available(tenant_id, conversation_id)
+        if not available:
+            return "sql", ""
+
+        frames_desc = "\n".join(
+            f"- {f['label']}: {f['description']} (columns: {f['columns']})" for f in available)
+        sys_prompt = (
+            "You are deciding how to answer a follow-up analytics question. "
+            "You must respond with a strict JSON object: "
+            '{"path": "python"|"sql", "df_label": "the label to use, or empty string"}. '
+            "Choose \"python\" ONLY if the question can be fully answered by computing "
+            "over one of the DataFrames already available below (e.g. a follow-up "
+            "aggregation, filter, or reshape of data already fetched this conversation). "
+            "Choose \"sql\" if the question needs data that isn't in any available DataFrame."
+        )
+        prompt = f"Question: {question}\n\nAvailable DataFrames this conversation:\n{frames_desc}"
+        try:
+            import json
+            res = llm.generate(prompt=prompt, system_prompt=sys_prompt, temperature=0.0)
+            text = (res.text or "").strip() if res and hasattr(res, "text") else ""
+            if "```json" in text:
+                text = text.split("```json")[1].split("```")[0].strip()
+            elif "```" in text:
+                text = text.split("```")[1].strip()
+            parsed = json.loads(text)
+            path = parsed.get("path", "sql")
+            df_label = parsed.get("df_label") or ""
+            if path == "python" and df_label in {f["label"] for f in available}:
+                return "python", df_label
+            return "sql", ""
+        except Exception as exc:  # noqa: BLE001 - routing is best-effort, default to the proven path
+            logger.warning("compute-path routing failed for question %r: %s", question, exc)
+            return "sql", ""
+
     def _synthesize_sql(self, llm: Any, question: str, query_nodes: List[Any],
                         defn_nodes: List[Any], prior_sql: str = "",
                         prior_error: str = "") -> Tuple[str, Tuple[int, int]]:
