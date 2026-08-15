@@ -727,6 +727,61 @@ class TestStakeholder(unittest.TestCase):
         conv = self.ctx.stakeholder.get_conversation(self.tid, cid)
         self.assertEqual(len(conv["messages"][0]["python_cells"]), 1)
 
+    def test_multi_turn_conversation_second_turn_uses_cached_dataframe_not_new_sql(self):
+        """End-to-end: turn 1 goes through real SQL synthesis (Task 4) and
+        caches its DataFrame; turn 2 is routed by _choose_compute_path (Task 5)
+        to run Python (Task 6) over that cached DataFrame instead of hitting
+        the warehouse again. Drives both turns through the public answer()
+        entry point -- no internal method is called directly to fake a step.
+
+        The fixture warehouse's only table is `events` (see
+        build_retail_warehouse()/WEEKLY_ORDER_SQL in analytics_platform/fixtures)
+        and it has no `amount` column, so the synthesized SQL and Python below
+        use `revenue`, the numeric column that actually exists there.
+        """
+        mock_llm = MagicMock()
+        mock_llm.name = "mock_gateway"
+        mock_llm.generate.side_effect = [
+            # Turn 1: search-intent extraction -> SQL synthesis -> answer synthesis
+            # (same shape as test_successful_sql_synthesis_caches_the_resulting_dataframe).
+            MagicMock(text="retail orders", ok=True, tokens_in=10, tokens_out=5),
+            MagicMock(text="```sql\nSELECT revenue FROM events WHERE action = 'order' LIMIT 10\n```",
+                      tokens_in=20, tokens_out=10),
+            MagicMock(text='{"answer": "here is the order data"}', tokens_in=15, tokens_out=8),
+            # Turn 2: search-intent extraction -> routing(python) -> python synthesis -> answer synthesis.
+            MagicMock(text='{"category": "metric_lookup"}', tokens_in=10, tokens_out=5),
+            MagicMock(text='{"path": "python", "df_label": "df_1"}', tokens_in=5, tokens_out=5),
+            MagicMock(text="```python\nresult = int(df_1['revenue'].sum())\n```", tokens_in=10, tokens_out=5),
+            MagicMock(text='{"answer": "the total is computed from what we already fetched"}',
+                     tokens_in=10, tokens_out=5),
+        ]
+        with patch("analytics_platform.stakeholder.make_role_client", return_value=mock_llm):
+            self.ctx.tenants.set_analyst_config(
+                self.tid, {"stakeholder": {"enabled": True, "provider": "mock", "model": "mock"}})
+
+            turn1 = self.ctx.stakeholder.answer(self.tid, "show me order amounts", conversation_id="")
+            conv_id = turn1["conversation_id"]
+            self.assertEqual(len(turn1["queries_run"]), 1)
+
+            # Ground truth computed from the cache itself, not hard-coded --
+            # this test must pass regardless of what the fixture warehouse's
+            # actual order revenue values are.
+            cached_df = self.ctx.stakeholder.data_cache.get(self.tid, conv_id, "df_1")
+            expected_sum = int(cached_df["revenue"].sum())
+
+            turn2 = self.ctx.stakeholder.answer(
+                self.tid, "what's the total of that", conversation_id=conv_id)
+
+        # Turn 2 answered via Python over the cache, not a fresh SQL execution.
+        self.assertEqual(turn2["queries_run"], [])
+        self.assertEqual(len(turn2["python_cells"]), 1)
+        self.assertEqual(turn2["python_cells"][0]["result_summary"], expected_sum)
+        self.assertEqual(turn2["conversation_id"], conv_id)
+
+        conv = self.ctx.stakeholder.get_conversation(self.tid, conv_id)
+        self.assertEqual(len(conv["messages"]), 2)
+        self.assertEqual(conv["messages"][1]["python_cells"][0]["df_label"], "df_1")
+
 
 class TestConversationSchema(unittest.TestCase):
     def test_conversation_table_and_column_exist(self):
