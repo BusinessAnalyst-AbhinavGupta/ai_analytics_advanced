@@ -504,7 +504,11 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
     ctx = ctx or make_context()
     app = FastAPI(title="AI Analytics Platform", version="0.1.0")
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
-                       allow_headers=["*"])
+                       allow_headers=["*"],
+                       # Content-Disposition is not a CORS-safelisted response header, so
+                       # without this the browser hides it from fetch() and the storyline
+                       # export falls back to a generic filename.
+                       expose_headers=["Content-Disposition"])
     app.state.ctx = ctx
     ctx = ensure_services(ctx)
     C = ctx  # closure shorthand

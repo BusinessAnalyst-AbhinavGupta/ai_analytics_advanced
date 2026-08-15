@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from fastapi import HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from analytics_platform.api import (FeedbackIn, StakeholderIn, ConversationPatchIn,
                                     StorylineExportIn, create_app)
 from analytics_platform.domain import AnswerMode, DataSourceKind, NodeKind
@@ -158,6 +159,15 @@ class TestStakeholder(unittest.TestCase):
                          "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
         self.assertIn("attachment", resp.headers["content-disposition"])
         self.assertTrue(resp.body.startswith(b"PK"))  # docx is a zip archive
+
+    def test_cors_exposes_content_disposition_for_export_downloads(self):
+        # The route tests above call the endpoint closure directly, so they never exercise
+        # middleware. Content-Disposition is not a CORS-safelisted response header: without
+        # expose_headers the browser hides it from fetch() and the frontend's filename
+        # extraction silently falls back to a generic "storyline.md".
+        cors = [m for m in self.app.user_middleware if m.cls is CORSMiddleware]
+        self.assertEqual(len(cors), 1, "expected exactly one CORSMiddleware")
+        self.assertIn("Content-Disposition", cors[0].kwargs["expose_headers"])
 
     def test_export_unknown_conversation_is_404(self):
         with self.assertRaises(HTTPException) as cm:

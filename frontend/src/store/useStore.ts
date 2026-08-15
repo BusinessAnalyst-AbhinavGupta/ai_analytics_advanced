@@ -287,9 +287,35 @@ export const useStore = create<AppState>((set) => ({
   clearSelectedAnswers: () => set(state => ({
     stakeholder: { ...state.stakeholder, selectedAnswerIds: [] },
   })),
-  // STUB: Task 7 replaces this with the real export implementation
-  // (calls the backend storyline export endpoint and downloads the file).
-  exportStoryline: async () => {},
+  exportStoryline: async (format) => {
+    const { tenantId } = useStore.getState();
+    const { activeConversationId, selectedAnswerIds } = useStore.getState().stakeholder;
+    if (!activeConversationId || selectedAnswerIds.length === 0) return;
+    try {
+      const res = await fetch(
+        `http://localhost:8000/stakeholder/${tenantId}/conversations/${activeConversationId}/export`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ answer_ids: selectedAnswerIds, format }),
+        });
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const disposition = res.headers.get('content-disposition') || '';
+      const match = disposition.match(/filename="([^"]+)"/);
+      const filename = match ? match[1] : `storyline.${format === 'docx' ? 'docx' : 'md'}`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error(e);
+    }
+  },
 
   junior: { logs: [], isConnected: false },
   setJunior: (data) => set((state) => ({ junior: { ...state.junior, ...data } })),
