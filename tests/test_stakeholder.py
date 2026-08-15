@@ -5,7 +5,8 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from fastapi import HTTPException
-from analytics_platform.api import FeedbackIn, StakeholderIn, ConversationPatchIn, create_app
+from analytics_platform.api import (FeedbackIn, StakeholderIn, ConversationPatchIn,
+                                    StorylineExportIn, create_app)
 from analytics_platform.domain import AnswerMode, DataSourceKind, NodeKind
 from analytics_platform.fixtures import WEEKLY_ORDER_SQL, build_retail_warehouse
 from tests.test_api import app_ctx, call
@@ -134,6 +135,46 @@ class TestStakeholder(unittest.TestCase):
         with self.assertRaises(HTTPException):
             call(self.app, "GET", "/stakeholder/{tenant_id}/conversations/{conversation_id}",
                 self.tid, "nope")
+
+    def test_export_markdown_returns_a_markdown_document(self):
+        res = self.ctx.stakeholder.answer(self.tid, "how many retail orders per month")
+        cid = res["conversation_id"]
+        aid = res["answer_id"]
+        resp = call(self.app, "POST",
+                   "/stakeholder/{tenant_id}/conversations/{conversation_id}/export",
+                   self.tid, cid, StorylineExportIn(answer_ids=[aid], format="markdown"))
+        self.assertEqual(resp.media_type, "text/markdown")
+        self.assertIn("attachment", resp.headers["content-disposition"])
+        self.assertIn("how many retail orders per month", resp.body.decode("utf-8"))
+
+    def test_export_docx_returns_an_openxml_document(self):
+        res = self.ctx.stakeholder.answer(self.tid, "how many retail orders per month")
+        cid = res["conversation_id"]
+        aid = res["answer_id"]
+        resp = call(self.app, "POST",
+                   "/stakeholder/{tenant_id}/conversations/{conversation_id}/export",
+                   self.tid, cid, StorylineExportIn(answer_ids=[aid], format="docx"))
+        self.assertEqual(resp.media_type,
+                         "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        self.assertIn("attachment", resp.headers["content-disposition"])
+        self.assertTrue(resp.body.startswith(b"PK"))  # docx is a zip archive
+
+    def test_export_unknown_conversation_is_404(self):
+        with self.assertRaises(HTTPException) as cm:
+            call(self.app, "POST",
+                "/stakeholder/{tenant_id}/conversations/{conversation_id}/export",
+                self.tid, "does-not-exist",
+                StorylineExportIn(answer_ids=["x"], format="markdown"))
+        self.assertEqual(cm.exception.status_code, 404)
+
+    def test_export_empty_answer_ids_is_400(self):
+        res = self.ctx.stakeholder.answer(self.tid, "how many retail orders per month")
+        cid = res["conversation_id"]
+        with self.assertRaises(HTTPException) as cm:
+            call(self.app, "POST",
+                "/stakeholder/{tenant_id}/conversations/{conversation_id}/export",
+                self.tid, cid, StorylineExportIn(answer_ids=[], format="markdown"))
+        self.assertEqual(cm.exception.status_code, 400)
 
     def test_disabled_stakeholder_returns_graceful_message(self):
         self.ctx.tenants.set_analyst_config(self.tid, {"stakeholder": {"enabled": False}})

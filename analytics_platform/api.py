@@ -36,7 +36,7 @@ except Exception as e:
 
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, Header, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Header, Query, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import asyncio
@@ -64,6 +64,7 @@ from .scheduler import Scheduler
 from .senior import SeniorService
 from .stakeholder import StakeholderService
 from .stores import TenantStoreProvider
+from .storyline import assemble_storyline, render_docx, render_markdown
 from .tenancy import TenantService
 from .triage import TriageService
 
@@ -230,6 +231,11 @@ class FeedbackIn(BaseModel):
 class ConversationPatchIn(BaseModel):
     title: Optional[str] = None
     starred: Optional[bool] = None
+
+
+class StorylineExportIn(BaseModel):
+    answer_ids: List[str]
+    format: str = "markdown"   # "markdown" | "docx"
 
 
 class ResearchBatchIn(BaseModel):
@@ -1062,6 +1068,36 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
         if not C.stakeholder.delete_conversation(tenant_id, conversation_id):
             raise HTTPException(status_code=404, detail="conversation not found")
         return {"deleted": conversation_id}
+
+    @app.post("/stakeholder/{tenant_id}/conversations/{conversation_id}/export")
+    def stakeholder_export_storyline(tenant_id: str, conversation_id: str,
+                                     body: StorylineExportIn) -> Response:
+        tenant_or_404(tenant_id)
+        conv = C.stakeholder.get_conversation(tenant_id, conversation_id)
+        if conv is None:
+            raise HTTPException(status_code=404, detail="conversation not found")
+        if not body.answer_ids:
+            raise HTTPException(status_code=400, detail="answer_ids must not be empty")
+        known_ids = {m["answer_id"] for m in conv["messages"]}
+        unknown = [a for a in body.answer_ids if a not in known_ids]
+        if unknown:
+            raise HTTPException(status_code=400,
+                                detail=f"unknown answer_id(s): {unknown}")
+        content = assemble_storyline(conv, body.answer_ids)
+        title_slug = "".join(c if c.isalnum() else "-" for c in (conv["title"] or "storyline")).strip("-") or "storyline"
+        if body.format == "docx":
+            data = render_docx(content)
+            media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            filename = f"{title_slug}.docx"
+        elif body.format == "markdown":
+            data = render_markdown(content).encode("utf-8")
+            media_type = "text/markdown"
+            filename = f"{title_slug}.md"
+        else:
+            raise HTTPException(status_code=400,
+                                detail=f"unsupported format: {body.format!r}")
+        return Response(content=data, media_type=media_type,
+                        headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
     @app.post("/stakeholder/{tenant_id}/feedback")
     def stakeholder_feedback(tenant_id: str, body: FeedbackIn) -> Dict[str, Any]:
