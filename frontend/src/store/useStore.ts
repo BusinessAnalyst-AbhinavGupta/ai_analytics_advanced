@@ -11,6 +11,7 @@ export type StakeholderMessage = {
   queries_run: string[]; escalated: boolean; cost: number; created_at: string;
   chart_config?: any; chart_data?: any[]; feedback?: 'up' | 'down';
   python_cells?: Array<{ code: string; df_label: string; result_summary: unknown }>;
+  produced_df_label?: string;
 };
 
 interface AppState {
@@ -26,6 +27,8 @@ interface AppState {
     conversationsLoading: boolean;
     activeConversationId: string;
     messages: StakeholderMessage[];
+    reportBuilderOpen: boolean;
+    selectedAnswerIds: string[];
   };
   setStakeholder: (data: Partial<AppState['stakeholder']>) => void;
   fetchConversations: () => Promise<void>;
@@ -36,6 +39,11 @@ interface AppState {
   starConversation: (id: string, starred: boolean) => Promise<void>;
   deleteConversation: (id: string) => Promise<void>;
   submitFeedback: (answerId: string, rating: 'up' | 'down') => Promise<void>;
+  toggleReportBuilder: () => void;
+  toggleAnswerSelected: (answerId: string) => void;
+  selectAllAnswers: () => void;
+  clearSelectedAnswers: () => void;
+  exportStoryline: (format: 'markdown' | 'docx') => Promise<void>;
 
   // Junior Activity
   junior: {
@@ -136,6 +144,7 @@ export const useStore = create<AppState>((set) => ({
   stakeholder: {
     question: '', loading: false, conversations: [], conversationsLoading: false,
     activeConversationId: '', messages: [],
+    reportBuilderOpen: false, selectedAnswerIds: [],
   },
   setStakeholder: (data) => set((state) => ({ stakeholder: { ...state.stakeholder, ...data } })),
 
@@ -161,7 +170,9 @@ export const useStore = create<AppState>((set) => ({
       if (!res.ok) return;
       const data = await res.json();
       set((state) => ({
-        stakeholder: { ...state.stakeholder, activeConversationId: id, messages: data.messages || [] },
+        stakeholder: {
+          ...state.stakeholder, activeConversationId: id, messages: data.messages || [], selectedAnswerIds: [],
+        },
       }));
     } catch (e) {
       console.error(e);
@@ -169,7 +180,9 @@ export const useStore = create<AppState>((set) => ({
   },
 
   startNewConversation: () => {
-    set((state) => ({ stakeholder: { ...state.stakeholder, activeConversationId: '', messages: [], question: '' } }));
+    set((state) => ({
+      stakeholder: { ...state.stakeholder, activeConversationId: '', messages: [], question: '', selectedAnswerIds: [] },
+    }));
   },
 
   askStakeholder: async (text) => {
@@ -256,6 +269,27 @@ export const useStore = create<AppState>((set) => ({
       console.error(e);
     }
   },
+
+  toggleReportBuilder: () => set(state => ({
+    stakeholder: { ...state.stakeholder, reportBuilderOpen: !state.stakeholder.reportBuilderOpen },
+  })),
+  toggleAnswerSelected: (answerId) => set(state => {
+    const cur = state.stakeholder.selectedAnswerIds;
+    const next = cur.includes(answerId) ? cur.filter(id => id !== answerId) : [...cur, answerId];
+    return { stakeholder: { ...state.stakeholder, selectedAnswerIds: next } };
+  }),
+  selectAllAnswers: () => set(state => ({
+    stakeholder: {
+      ...state.stakeholder,
+      selectedAnswerIds: state.stakeholder.messages.map(m => m.answer_id).filter(Boolean),
+    },
+  })),
+  clearSelectedAnswers: () => set(state => ({
+    stakeholder: { ...state.stakeholder, selectedAnswerIds: [] },
+  })),
+  // STUB: Task 7 replaces this with the real export implementation
+  // (calls the backend storyline export endpoint and downloads the file).
+  exportStoryline: async () => {},
 
   junior: { logs: [], isConnected: false },
   setJunior: (data) => set((state) => ({ junior: { ...state.junior, ...data } })),

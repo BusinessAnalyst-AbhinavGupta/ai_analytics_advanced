@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from 'react';
-import { useStore } from '@/store/useStore';
+import { useStore, StakeholderMessage } from '@/store/useStore';
 import { ChartRenderer } from '@/components/ChartRenderer';
 import { Plus, Star, Pencil, Trash2, ThumbsUp, ThumbsDown } from 'lucide-react';
 
@@ -116,11 +116,72 @@ function ConversationHistorySidebar() {
   );
 }
 
+function estimateTokens(messages: StakeholderMessage[], selectedIds: string[]): number {
+  const text = messages
+    .filter(m => selectedIds.includes(m.answer_id))
+    .map(m => m.question + m.answer + (m.facts || []).join(' ') + (m.caveats || []).join(' '))
+    .join('\n');
+  return Math.floor(text.length / 4);
+}
+
+const WARN_TOKEN_THRESHOLD = 50_000; // must match analytics_platform/storyline.py's WARN_TOKEN_THRESHOLD
+
+function ReportBuilderPanel() {
+  const { messages, selectedAnswerIds } = useStore(state => state.stakeholder);
+  const toggleAnswerSelected = useStore(state => state.toggleAnswerSelected);
+  const selectAllAnswers = useStore(state => state.selectAllAnswers);
+  const clearSelectedAnswers = useStore(state => state.clearSelectedAnswers);
+  const exportStoryline = useStore(state => state.exportStoryline);
+  const [format, setFormat] = useState<'markdown' | 'docx'>('markdown');
+  const [exporting, setExporting] = useState(false);
+
+  const estimated = estimateTokens(messages, selectedAnswerIds);
+  const overBudget = estimated > WARN_TOKEN_THRESHOLD;
+
+  return (
+    <div style={{ width: '300px', flexShrink: 0, borderLeft: '1px solid rgba(255,255,255,0.08)', display: 'flex', flexDirection: 'column', height: '100%', padding: '1rem' }}>
+      <h3 style={{ marginBottom: '0.75rem' }}>Report Builder</h3>
+      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem' }}>
+        <button onClick={selectAllAnswers} style={{ fontSize: '0.8rem', padding: '0.3rem 0.6rem', background: 'none', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '6px', color: 'var(--text-secondary)', cursor: 'pointer' }}>Select all</button>
+        <button onClick={clearSelectedAnswers} style={{ fontSize: '0.8rem', padding: '0.3rem 0.6rem', background: 'none', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '6px', color: 'var(--text-secondary)', cursor: 'pointer' }}>Clear</button>
+      </div>
+      <div style={{ flex: 1, overflowY: 'auto' }}>
+        {messages.filter(m => m.answer_id).map(m => (
+          <label key={m.answer_id} style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start', marginBottom: '0.6rem', fontSize: '0.85rem', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={selectedAnswerIds.includes(m.answer_id)}
+              onChange={() => toggleAnswerSelected(m.answer_id)}
+            />
+            <span style={{ color: 'var(--text-secondary)' }}>{m.question}</span>
+          </label>
+        ))}
+      </div>
+      <div style={{ fontSize: '0.8rem', color: overBudget ? 'var(--error)' : 'var(--text-muted)', marginBottom: '0.5rem' }}>
+        ~{estimated.toLocaleString()} estimated tokens
+        {overBudget && ' — this is a large export, consider selecting fewer turns'}
+      </div>
+      <select value={format} onChange={e => setFormat(e.target.value as 'markdown' | 'docx')} style={{ marginBottom: '0.5rem', padding: '0.4rem', background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px', color: '#fff' }}>
+        <option value="markdown">Markdown</option>
+        <option value="docx">Word (.docx)</option>
+      </select>
+      <button
+        disabled={selectedAnswerIds.length === 0 || exporting}
+        onClick={async () => { setExporting(true); try { await exportStoryline(format); } finally { setExporting(false); } }}
+        style={{ background: 'var(--accent-primary)', padding: '0.6rem', borderRadius: '8px', border: 'none', color: '#fff', cursor: 'pointer', fontWeight: 600 }}
+      >
+        {exporting ? 'Exporting…' : `Export (${selectedAnswerIds.length})`}
+      </button>
+    </div>
+  );
+}
+
 export function StakeholderChat() {
-  const { question, loading, messages } = useStore(state => state.stakeholder);
+  const { question, loading, messages, reportBuilderOpen } = useStore(state => state.stakeholder);
   const setStakeholder = useStore(state => state.setStakeholder);
   const askStakeholder = useStore(state => state.askStakeholder);
   const submitFeedback = useStore(state => state.submitFeedback);
+  const toggleReportBuilder = useStore(state => state.toggleReportBuilder);
   const threadEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -131,6 +192,11 @@ export function StakeholderChat() {
     <div style={{ display: 'flex', height: 'calc(100vh - 4rem)' }}>
       <ConversationHistorySidebar />
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '0.75rem 1.5rem 0' }}>
+          <button onClick={toggleReportBuilder} style={{ fontSize: '0.85rem', padding: '0.4rem 0.8rem', background: 'none', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '6px', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+            {reportBuilderOpen ? 'Hide' : 'Report Builder'}
+          </button>
+        </div>
         <div style={{ flex: 1, overflowY: 'auto', padding: '1.5rem' }}>
           {messages.length === 0 && (
             <p style={{ color: 'var(--text-secondary)' }}>
@@ -211,6 +277,7 @@ export function StakeholderChat() {
           </button>
         </div>
       </div>
+      {reportBuilderOpen && <ReportBuilderPanel />}
     </div>
   );
 }
