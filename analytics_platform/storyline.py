@@ -88,3 +88,31 @@ def assemble_storyline(conversation: Dict[str, Any], answer_ids: List[str]) -> S
         estimated_tokens=estimated_tokens,
         over_budget=estimated_tokens > WARN_TOKEN_THRESHOLD,
     )
+
+
+def render_markdown(content: StorylineContent) -> str:
+    lines = [f"# {content.conversation_title or 'Storyline Export'}", ""]
+    for t in content.turns:
+        lines.append(f"## {t.question}")
+        lines.append("")
+        lines.append(t.answer)
+        if t.facts:
+            lines.append("")
+            lines.append("**Facts:** " + "; ".join(t.facts))
+        if t.caveats:
+            lines.append("")
+            lines.append("**Caveats:** " + "; ".join(t.caveats))
+        lines.append("")
+    if content.code_appendix:
+        lines.append("## Code Appendix")
+        lines.append("")
+        for e in content.code_appendix:
+            heading = f"### {e.label or e.source_answer_id} ({e.kind})"
+            if e.is_dependency:
+                heading += f" — (included as a dependency of {e.label})"
+            lines.append(heading)
+            lines.append(f"```{e.kind}")
+            lines.append(e.code)
+            lines.append("```")
+            lines.append("")
+    return "\n".join(lines)

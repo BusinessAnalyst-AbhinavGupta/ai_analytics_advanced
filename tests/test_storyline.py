@@ -1,7 +1,7 @@
 import unittest
 
 from analytics_platform.storyline import (
-    StorylineContent, StorylineTurn, CodeAppendixEntry, assemble_storyline,
+    StorylineContent, StorylineTurn, CodeAppendixEntry, assemble_storyline, render_markdown,
 )
 
 
@@ -82,3 +82,26 @@ class TestAssembleStoryline(unittest.TestCase):
         ]}
         big_content = assemble_storyline(big_conv, ["a1"])
         self.assertTrue(big_content.over_budget)
+
+    def test_render_markdown_includes_turns_and_dependency_annotated_appendix(self):
+        content = StorylineContent(
+            conversation_title="Q3 Funnel Review",
+            turns=[StorylineTurn(answer_id="a1", question="Why did signups drop?",
+                                  answer="Signups dropped 12% after the consent page.",
+                                  facts=["computed via SQL"], caveats=[],
+                                  created_at="2026-08-15T00:00:00Z")],
+            code_appendix=[
+                CodeAppendixEntry(label="df_1", kind="sql", code="SELECT 1",
+                                  source_answer_id="a0", is_dependency=True),
+                CodeAppendixEntry(label="df_1", kind="python", code="result = 1",
+                                  source_answer_id="a1", is_dependency=False),
+            ],
+            estimated_tokens=42, over_budget=False,
+        )
+        md = render_markdown(content)
+        self.assertIn("# Q3 Funnel Review", md)
+        self.assertIn("Why did signups drop?", md)
+        self.assertIn("Signups dropped 12%", md)
+        self.assertIn("```sql", md)
+        self.assertIn("```python", md)
+        self.assertIn("(included as a dependency of df_1)", md)
