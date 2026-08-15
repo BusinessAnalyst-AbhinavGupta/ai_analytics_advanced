@@ -892,6 +892,64 @@ class TestStakeholder(unittest.TestCase):
 
         self.assertEqual(res["produced_df_label"], "")
 
+    def test_export_of_python_only_turn_pulls_in_its_sql_dependency(self):
+        """End-to-end proof of the whole storyline chain: turn 1 synthesizes SQL
+        and caches a DataFrame (recording produced_df_label per Task 1); turn 2
+        answers via Python over that cached DataFrame. Exporting ONLY turn 2
+        must still pull turn 1's SQL into the Code Appendix as a dependency
+        (Task 2's assemble_storyline).
+
+        Mock sequencing mirrors test_sql_turn_records_the_df_label_it_populated_in_the_cache
+        for turn 1 (intent extraction -> SQL synthesis -> answer synthesis) and
+        test_python_turn_records_no_produced_df_label for turn 2 (intent
+        extraction -> path routing -> python synthesis -> answer synthesis).
+        classify() is a pure keyword heuristic with no LLM call, so the first
+        generate() in each turn is _extract_search_intent, not intent
+        classification -- its return value is consumed as plain-text search
+        query, not JSON. The fixture warehouse (build_retail_warehouse) only
+        has an `events` table with a `revenue` column, not `orders`/`amount`.
+        setUp already registers the "Events" datasource, so it is reused here
+        rather than calling stakeholder.add_datasource (which does not exist).
+        """
+        import pandas as pd
+        from analytics_platform.storyline import assemble_storyline
+
+        mock_llm = MagicMock()
+        mock_llm.name = "mock_gateway"
+        mock_llm.generate.side_effect = [
+            MagicMock(text="retail orders", ok=True, tokens_in=10, tokens_out=5),
+            MagicMock(text="```sql\nSELECT revenue FROM events WHERE action = 'order' LIMIT 10\n```",
+                      tokens_in=20, tokens_out=10),
+            MagicMock(text='{"answer": "here is the revenue"}', tokens_in=15, tokens_out=8),
+        ]
+        with patch("analytics_platform.stakeholder.make_role_client", return_value=mock_llm):
+            self.ctx.tenants.set_analyst_config(
+                self.tid, {"stakeholder": {"enabled": True, "provider": "mock", "model": "mock"}})
+            turn1 = self.ctx.stakeholder.answer(self.tid, "what's the revenue", conversation_id="")
+
+        conv_id = turn1["conversation_id"]
+        self.assertEqual(turn1["produced_df_label"], "df_1")
+
+        mock_llm.generate.side_effect = [
+            MagicMock(text='{"category": "metric_lookup"}', tokens_in=5, tokens_out=5),
+            MagicMock(text='{"path": "python", "df_label": "df_1"}', tokens_in=5, tokens_out=5),
+            MagicMock(text="```python\nresult = int(df_1['revenue'].sum())\n```",
+                      tokens_in=10, tokens_out=5),
+            MagicMock(text='{"answer": "the total is 6"}', tokens_in=10, tokens_out=5),
+        ]
+        with patch("analytics_platform.stakeholder.make_role_client", return_value=mock_llm):
+            turn2 = self.ctx.stakeholder.answer(
+                self.tid, "what's the total", conversation_id=conv_id)
+
+        conv = self.ctx.stakeholder.get_conversation(self.tid, conv_id)
+        content = assemble_storyline(conv, [turn2["answer_id"]])  # only the Python turn
+
+        self.assertEqual([t.answer_id for t in content.turns], [turn2["answer_id"]])
+        sql_entries = [e for e in content.code_appendix if e.kind == "sql"]
+        self.assertEqual(len(sql_entries), 1)
+        self.assertTrue(sql_entries[0].is_dependency)
+        self.assertEqual(sql_entries[0].source_answer_id, turn1["answer_id"])
+
 
 class TestConversationSchema(unittest.TestCase):
     def test_conversation_table_and_column_exist(self):
