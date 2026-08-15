@@ -3,8 +3,11 @@ stakeholder conversation dict. No I/O here -- Task 3/4's renderers and the API l
 own fetching and formatting; this module only decides WHAT goes into the export and
 resolves the Code Appendix's cross-turn dependencies.
 """
+import io
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
+
+import docx
 
 CHARS_PER_TOKEN_ESTIMATE = 4
 WARN_TOKEN_THRESHOLD = 50_000
@@ -116,3 +119,29 @@ def render_markdown(content: StorylineContent) -> str:
             lines.append("```")
             lines.append("")
     return "\n".join(lines)
+
+
+def render_docx(content: StorylineContent) -> bytes:
+    doc = docx.Document()
+    doc.add_heading(content.conversation_title or "Storyline Export", level=1)
+    for t in content.turns:
+        doc.add_heading(t.question, level=2)
+        doc.add_paragraph(t.answer)
+        if t.facts:
+            doc.add_paragraph("Facts: " + "; ".join(t.facts))
+        if t.caveats:
+            doc.add_paragraph("Caveats: " + "; ".join(t.caveats))
+    if content.code_appendix:
+        doc.add_heading("Code Appendix", level=1)
+        for e in content.code_appendix:
+            heading = f"{e.label or e.source_answer_id} ({e.kind})"
+            if e.is_dependency:
+                heading += f" — included as a dependency of {e.label}"
+            doc.add_heading(heading, level=3)
+            code_para = doc.add_paragraph(e.code)
+            code_para.style = doc.styles["Normal"]
+            for run in code_para.runs:
+                run.font.name = "Courier New"
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()

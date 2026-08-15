@@ -2,6 +2,7 @@ import unittest
 
 from analytics_platform.storyline import (
     StorylineContent, StorylineTurn, CodeAppendixEntry, assemble_storyline, render_markdown,
+    render_docx,
 )
 
 
@@ -105,3 +106,26 @@ class TestAssembleStoryline(unittest.TestCase):
         self.assertIn("```sql", md)
         self.assertIn("```python", md)
         self.assertIn("(included as a dependency of df_1)", md)
+
+    def test_render_docx_produces_a_valid_document_with_turns_and_appendix(self):
+        import io
+        import docx
+
+        content = StorylineContent(
+            conversation_title="Q3 Funnel Review",
+            turns=[StorylineTurn(answer_id="a1", question="Why did signups drop?",
+                                  answer="Signups dropped 12% after the consent page.",
+                                  facts=[], caveats=[], created_at="2026-08-15T00:00:00Z")],
+            code_appendix=[CodeAppendixEntry(label="df_1", kind="sql", code="SELECT 1",
+                                             source_answer_id="a1", is_dependency=False)],
+            estimated_tokens=10, over_budget=False,
+        )
+        data = render_docx(content)
+        self.assertIsInstance(data, bytes)
+        doc = docx.Document(io.BytesIO(data))
+        full_text = "\n".join(p.text for p in doc.paragraphs)
+        self.assertIn("Q3 Funnel Review", full_text)
+        self.assertIn("Why did signups drop?", full_text)
+        self.assertIn("Signups dropped 12%", full_text)
+        self.assertIn("Code Appendix", full_text)
+        self.assertIn("SELECT 1", full_text)
