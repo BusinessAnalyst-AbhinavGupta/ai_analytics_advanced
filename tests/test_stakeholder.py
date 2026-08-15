@@ -613,6 +613,65 @@ class TestStakeholder(unittest.TestCase):
         self.assertEqual(path, "sql")
         self.assertEqual(label, "")
 
+    def test_python_synthesis_repairs_after_policy_rejection(self):
+        import pandas as pd
+        self.ctx.stakeholder.data_cache.put(
+            self.tid, "conv-1", "df_1", "orders", pd.DataFrame({"amount": [1, 2, 3]}))
+        mock_llm = MagicMock()
+        mock_llm.generate.side_effect = [
+            MagicMock(text="```python\nimport os\nresult = 1\n```", tokens_in=10, tokens_out=5),
+            MagicMock(text="```python\nresult = int(df_1['amount'].sum())\n```", tokens_in=10, tokens_out=5),
+        ]
+
+        code, exec_res, toks = self.ctx.stakeholder._synthesize_and_execute_python(
+            mock_llm, self.tid, "conv-1", "what's the total amount", "df_1")
+
+        self.assertIsNotNone(exec_res)
+        self.assertTrue(exec_res.ok)
+        self.assertEqual(exec_res.result_summary, 6)
+        second_call_prompt = mock_llm.generate.call_args_list[1].kwargs["prompt"]
+        self.assertIn("os", second_call_prompt)
+
+    def test_python_synthesis_repairs_after_execution_failure(self):
+        import pandas as pd
+        self.ctx.stakeholder.data_cache.put(
+            self.tid, "conv-1", "df_1", "orders", pd.DataFrame({"amount": [1, 2, 3]}))
+        mock_llm = MagicMock()
+        mock_llm.generate.side_effect = [
+            MagicMock(text="```python\nresult = 1 / 0\n```", tokens_in=10, tokens_out=5),
+            MagicMock(text="```python\nresult = int(df_1['amount'].sum())\n```", tokens_in=10, tokens_out=5),
+        ]
+
+        code, exec_res, toks = self.ctx.stakeholder._synthesize_and_execute_python(
+            mock_llm, self.tid, "conv-1", "what's the total amount", "df_1")
+
+        self.assertIsNotNone(exec_res)
+        self.assertTrue(exec_res.ok)
+        second_call_prompt = mock_llm.generate.call_args_list[1].kwargs["prompt"]
+        self.assertIn("ZeroDivisionError", second_call_prompt)
+
+    def test_python_synthesis_stops_after_max_attempts_and_returns_none(self):
+        import pandas as pd
+        self.ctx.stakeholder.data_cache.put(
+            self.tid, "conv-1", "df_1", "orders", pd.DataFrame({"amount": [1, 2, 3]}))
+        mock_llm = MagicMock()
+        mock_llm.generate.return_value = MagicMock(
+            text="```python\nresult = 1 / 0\n```", tokens_in=10, tokens_out=5)
+
+        code, exec_res, toks = self.ctx.stakeholder._synthesize_and_execute_python(
+            mock_llm, self.tid, "conv-1", "what's the total amount", "df_1", max_attempts=3)
+
+        self.assertIsNone(exec_res)
+        self.assertEqual(code, "")
+        self.assertEqual(mock_llm.generate.call_count, 3)
+
+    def test_synthesize_and_execute_python_returns_none_for_unknown_label(self):
+        mock_llm = MagicMock()
+        code, exec_res, toks = self.ctx.stakeholder._synthesize_and_execute_python(
+            mock_llm, self.tid, "conv-1", "what's the total", "df_does_not_exist")
+        self.assertIsNone(exec_res)
+        mock_llm.generate.assert_not_called()
+
 
 class TestConversationSchema(unittest.TestCase):
     def test_conversation_table_and_column_exist(self):

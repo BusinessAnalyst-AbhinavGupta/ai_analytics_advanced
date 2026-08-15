@@ -24,6 +24,8 @@ from .domain import AnswerMode, NodeKind, new_id, now_iso
 from .execution.base import ExecutionContext
 from .execution.dataframe_cache import ConversationDataCache
 from .execution.policy import QueryPolicy, resolve_template_placeholders
+from .execution.python_policy import PythonCodePolicy
+from .execution.python_sandbox import run_python_sandboxed
 from .llm.client import make_role_client
 from .observability import Observability, new_trace
 from .stores import TenantStoreProvider
@@ -644,6 +646,96 @@ class StakeholderService:
             logger.warning("synthesized SQL execution failed for tenant %s "
                            "(attempt %d/%d): %s", tenant_id, attempt, max_attempts, exec_res.error)
             prior_sql, prior_error = decision.approved_sql, exec_res.error
+
+        return "", None, (t_in_total, t_out_total)
+
+    def _synthesize_python(self, llm: Any, question: str, df_label: str,
+                           frame_desc: Dict[str, Any], prior_code: str = "",
+                           prior_error: str = "") -> Tuple[str, Tuple[int, int]]:
+        prompt = (
+            f"Question: {question}\n\n"
+            f"A pandas DataFrame named `{df_label}` is available with columns "
+            f"{frame_desc['columns']} and dtypes {frame_desc['dtypes']} "
+            f"({frame_desc['row_count']} rows).\n"
+        )
+        if prior_code:
+            prompt += (
+                f"\nYour previous attempt failed:\n{prior_code}\n\nError:\n{prior_error}\n\n"
+                "Write corrected code that fixes this specific problem."
+            )
+        sys_prompt = (
+            "You are an expert data analyst. Write pandas Python code that computes the "
+            f"answer to the question using the DataFrame `{df_label}` (already in scope -- "
+            "do not redefine it or read it from any file/database). Assign your final "
+            "answer to a variable named `result` (a scalar, dict, list, or small DataFrame "
+            "-- not the full raw DataFrame unmodified). Only `pandas` (as `pd`), `numpy`, "
+            "`math`, `statistics`, `datetime`, `collections`, and `re` may be imported; no "
+            "file, network, or system access is available and will be rejected. Return "
+            "ONLY the Python code in a ```python block. If the question can't be answered "
+            "from this DataFrame, output NOTHING."
+        )
+        try:
+            res = llm.generate(prompt=prompt, system_prompt=sys_prompt, temperature=0.0)
+            text = (res.text or "").strip() if res and hasattr(res, "text") else ""
+            if "```python" in text:
+                code = text.split("```python")[1].split("```")[0].strip()
+            elif "```" in text:
+                code = text.split("```")[1].strip()
+            else:
+                code = text.strip()
+            return code, (getattr(res, "tokens_in", 0), getattr(res, "tokens_out", 0))
+        except Exception as exc:  # noqa: BLE001 - Python synthesis is best-effort
+            logger.warning("Python synthesis failed for question %r: %s", question, exc,
+                           exc_info=True)
+            return "", (0, 0)
+
+    def _synthesize_and_execute_python(self, llm: Any, tenant_id: str, conversation_id: str,
+                                       question: str, df_label: str,
+                                       max_attempts: int = 3) -> Tuple[str, Any, Tuple[int, int]]:
+        """Mirrors _synthesize_and_execute_sql's retry loop: synthesize Python,
+        run it through PythonCodePolicy then the sandbox, and on
+        rejection/failure feed the reason back to the LLM for a corrected
+        attempt. Stops at the first successful execution, or after
+        max_attempts.
+
+        Returns (code, exec_result_or_None, total_tokens). exec_result is
+        None if the label isn't cached, or if every attempt failed -- the
+        caller falls back to the SQL path either way.
+        """
+        df = self.data_cache.get(tenant_id, conversation_id, df_label)
+        if df is None:
+            return "", None, (0, 0)
+        frame_desc = next(
+            (f for f in self.data_cache.list_available(tenant_id, conversation_id)
+             if f["label"] == df_label),
+            {"columns": [], "dtypes": {}, "row_count": 0})
+
+        policy = PythonCodePolicy()
+        prior_code, prior_error = "", ""
+        t_in_total, t_out_total = 0, 0
+        for attempt in range(1, max_attempts + 1):
+            code, (t_in, t_out) = self._synthesize_python(
+                llm, question, df_label, frame_desc, prior_code=prior_code, prior_error=prior_error)
+            t_in_total += t_in
+            t_out_total += t_out
+            if not code:
+                break  # LLM declined -- retrying won't help
+
+            decision = policy.validate(code)
+            if decision.denied:
+                logger.warning("synthesized Python rejected by policy for tenant %s "
+                               "(attempt %d/%d): %s", tenant_id, attempt, max_attempts,
+                               decision.reasons)
+                prior_code, prior_error = code, "; ".join(decision.reasons)
+                continue
+
+            exec_res = run_python_sandboxed(decision.approved_code, {df_label: df})
+            if exec_res.ok:
+                return decision.approved_code, exec_res, (t_in_total, t_out_total)
+
+            logger.warning("synthesized Python execution failed for tenant %s "
+                           "(attempt %d/%d): %s", tenant_id, attempt, max_attempts, exec_res.error)
+            prior_code, prior_error = decision.approved_code, exec_res.error
 
         return "", None, (t_in_total, t_out_total)
 
