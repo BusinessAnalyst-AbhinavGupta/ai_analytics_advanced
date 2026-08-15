@@ -72,13 +72,34 @@ def _worker(code: str, dataframes: Dict[str, pd.DataFrame], memory_mb: int,
         conn.close()
 
 
+def _cap_structured_summary(value: Any) -> Any:
+    """Enforce the same MAX_RESULT_CHARS ceiling on a structured (list/dict)
+    summary that the scalar branch of _summarize already enforces. Row-count
+    capping (head(MAX_RESULT_ROWS)) alone isn't enough -- a handful of rows
+    with wide or long-text columns can still serialize to something far
+    larger than MAX_RESULT_CHARS. Falls back to a truncated string, mirroring
+    the scalar path's fallback when JSON serialization would exceed the cap."""
+    import json
+    try:
+        text = json.dumps(value, default=str)
+    except TypeError:
+        text = str(value)
+    if len(text) > MAX_RESULT_CHARS:
+        return text[:MAX_RESULT_CHARS] + "...(truncated)"
+    return value
+
+
 def _summarize(value: Any):
     if isinstance(value, pd.DataFrame):
         head = value.head(MAX_RESULT_ROWS)
-        return head.to_dict(orient="records"), {"rows": len(value), "columns": len(value.columns)}
+        records = head.to_dict(orient="records")
+        shape = {"rows": len(value), "columns": len(value.columns)}
+        return _cap_structured_summary(records), shape
     if isinstance(value, pd.Series):
         head = value.head(MAX_RESULT_ROWS)
-        return head.to_dict(), {"rows": len(value), "columns": 1}
+        series_dict = head.to_dict()
+        shape = {"rows": len(value), "columns": 1}
+        return _cap_structured_summary(series_dict), shape
     try:
         import json
         text = json.dumps(value)
@@ -99,30 +120,43 @@ def run_python_sandboxed(code: str, dataframes: Dict[str, pd.DataFrame],
     proc.start()
     child_conn.close()  # only the child writes; parent must not hold this open
 
-    if not parent_conn.poll(timeout_s):
-        proc.terminate()
+    try:
+        if not parent_conn.poll(timeout_s):
+            proc.terminate()
+            proc.join(2)
+            if proc.is_alive():
+                proc.kill()
+                proc.join(2)
+            return PythonExecResult(ok=False, error=f"execution exceeded {timeout_s}s timeout",
+                                    execution_ms=(time.monotonic() - start) * 1000)
+
+        try:
+            status, payload, stdout = parent_conn.recv()
+        except EOFError:
+            proc.join(2)
+            if proc.is_alive():
+                proc.kill()
+                proc.join(2)
+            return PythonExecResult(
+                ok=False,
+                error="sandboxed process terminated unexpectedly (likely a memory limit or crash)",
+                execution_ms=(time.monotonic() - start) * 1000)
+
         proc.join(2)
         if proc.is_alive():
             proc.kill()
             proc.join(2)
-        return PythonExecResult(ok=False, error=f"execution exceeded {timeout_s}s timeout",
-                                execution_ms=(time.monotonic() - start) * 1000)
+        elapsed_ms = (time.monotonic() - start) * 1000
+        # Same cap applies whether the child succeeded or errored -- printed
+        # output (e.g. `print(df)` right before a raised exception) can carry
+        # raw DataFrame content and must never cross this boundary uncapped.
+        capped_stdout = stdout[-MAX_RESULT_CHARS:]
 
-    try:
-        status, payload, stdout = parent_conn.recv()
-    except EOFError:
-        proc.join(2)
-        return PythonExecResult(
-            ok=False,
-            error="sandboxed process terminated unexpectedly (likely a memory limit or crash)",
-            execution_ms=(time.monotonic() - start) * 1000)
+        if status == "error":
+            return PythonExecResult(ok=False, error=payload, stdout=capped_stdout, execution_ms=elapsed_ms)
 
-    proc.join(2)
-    elapsed_ms = (time.monotonic() - start) * 1000
-
-    if status == "error":
-        return PythonExecResult(ok=False, error=payload, stdout=stdout, execution_ms=elapsed_ms)
-
-    summary, shape = _summarize(payload)
-    return PythonExecResult(ok=True, result_summary=summary, result_shape=shape,
-                            stdout=stdout[-MAX_RESULT_CHARS:], execution_ms=elapsed_ms)
+        summary, shape = _summarize(payload)
+        return PythonExecResult(ok=True, result_summary=summary, result_shape=shape,
+                                stdout=capped_stdout, execution_ms=elapsed_ms)
+    finally:
+        parent_conn.close()

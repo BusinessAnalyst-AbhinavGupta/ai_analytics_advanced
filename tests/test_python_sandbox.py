@@ -3,12 +3,13 @@ in an isolated subprocess with CPU/memory/wall-clock limits, returning only
 a capped summary of its `result` variable."""
 from __future__ import annotations
 
+import json
 import time
 import unittest
 
 import pandas as pd
 
-from analytics_platform.execution.python_sandbox import run_python_sandboxed
+from analytics_platform.execution.python_sandbox import MAX_RESULT_CHARS, run_python_sandboxed
 
 
 class TestRunPythonSandboxed(unittest.TestCase):
@@ -55,6 +56,24 @@ class TestRunPythonSandboxed(unittest.TestCase):
         res = run_python_sandboxed("result = list(df_1['x'])", {"df_1": df})
         self.assertTrue(res.ok, res.error)
         self.assertEqual(res.result_summary, [10, 20])
+
+    def test_stdout_is_capped_on_error_path(self):
+        # print() a large amount of output (as if the code had printed a raw
+        # DataFrame) and then blow up -- the error path must cap stdout the
+        # same way the success path does, not let it cross uncapped.
+        res = run_python_sandboxed(
+            "print('x' * 50000)\nresult = 1 / 0", {})
+        self.assertFalse(res.ok)
+        self.assertLessEqual(len(res.stdout), MAX_RESULT_CHARS)
+
+    def test_dataframe_result_with_wide_text_is_capped(self):
+        long_text = "y" * 10000
+        df = pd.DataFrame({"blob": [long_text] * 25})
+        res = run_python_sandboxed("result = df_1", {"df_1": df})
+        self.assertTrue(res.ok, res.error)
+        serialized_len = len(json.dumps(res.result_summary)) \
+            if not isinstance(res.result_summary, str) else len(res.result_summary)
+        self.assertLess(serialized_len, MAX_RESULT_CHARS * 2)
 
 
 if __name__ == "__main__":
