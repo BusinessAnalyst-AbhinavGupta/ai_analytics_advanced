@@ -35,6 +35,7 @@ except Exception as e:
     print(f"Failed to setup file logger in tmp: {e}")
 
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Header, Query, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -64,7 +65,8 @@ from .scheduler import Scheduler
 from .senior import SeniorService
 from .stakeholder import StakeholderService
 from .stores import TenantStoreProvider
-from .storyline import assemble_storyline, render_docx, render_markdown
+from .storyline import (DocxRendererUnavailable, assemble_storyline, render_docx,
+                        render_markdown)
 from .tenancy import TenantService
 from .triage import TriageService
 
@@ -1088,20 +1090,37 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
             raise HTTPException(status_code=400,
                                 detail=f"unknown answer_id(s): {unknown}")
         content = assemble_storyline(conv, body.answer_ids)
-        title_slug = "".join(c if c.isalnum() else "-" for c in (conv["title"] or "storyline")).strip("-") or "storyline"
         if body.format == "docx":
-            data = render_docx(content)
+            try:
+                data = render_docx(content)
+            except DocxRendererUnavailable:
+                raise HTTPException(
+                    status_code=503,
+                    detail="docx export unavailable: python-docx not installed")
             media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            filename = f"{title_slug}.docx"
+            ext = "docx"
         elif body.format == "markdown":
             data = render_markdown(content).encode("utf-8")
             media_type = "text/markdown"
-            filename = f"{title_slug}.md"
+            ext = "md"
         else:
             raise HTTPException(status_code=400,
                                 detail=f"unsupported format: {body.format!r}")
-        return Response(content=data, media_type=media_type,
-                        headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+        # Starlette encodes response headers as latin-1, so a CJK/Cyrillic/Devanagari
+        # title (str.isalnum() is Unicode-aware, and titles are auto-derived from the
+        # user's question) would raise UnicodeEncodeError before the response exists.
+        # Emit an ASCII-safe quoted filename plus the RFC 5987 UTF-8 form, and bound
+        # the title -- PATCH accepts an arbitrary-length title and an oversized
+        # Content-Disposition gets rejected by some proxies.
+        raw_title = (conv["title"] or "storyline")[:60]
+        ascii_slug = "".join(
+            c if (c.isascii() and c.isalnum()) else "-" for c in raw_title
+        ).strip("-") or "storyline"
+        utf8_name = quote(f"{raw_title}.{ext}", safe="")
+        return Response(
+            content=data, media_type=media_type,
+            headers={"Content-Disposition":
+                     f'attachment; filename="{ascii_slug}.{ext}"; filename*=UTF-8\'\'{utf8_name}'})
 
     @app.post("/stakeholder/{tenant_id}/feedback")
     def stakeholder_feedback(tenant_id: str, body: FeedbackIn) -> Dict[str, Any]:

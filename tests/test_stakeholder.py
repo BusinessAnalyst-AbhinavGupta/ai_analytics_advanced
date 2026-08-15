@@ -1,8 +1,11 @@
 """P6 — Stakeholder analyst tests (reuse approved, refresh, escalate, feedback)."""
 from __future__ import annotations
 
+import re
+import sys
 import unittest
 from unittest.mock import MagicMock, patch
+from urllib.parse import quote
 
 from fastapi import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -185,6 +188,90 @@ class TestStakeholder(unittest.TestCase):
                 "/stakeholder/{tenant_id}/conversations/{conversation_id}/export",
                 self.tid, cid, StorylineExportIn(answer_ids=[], format="markdown"))
         self.assertEqual(cm.exception.status_code, 400)
+
+    def test_export_rejects_an_answer_id_from_a_different_conversation(self):
+        """The plan's Global Constraint: answer_ids are validated against *this*
+        conversation, not mere existence. A refactor that moved the check to a global
+        stakeholder_answers lookup would pass every other test while enabling a
+        cross-conversation read."""
+        a = self.ctx.stakeholder.answer(self.tid, "how many retail orders per month")
+        b = self.ctx.stakeholder.answer(self.tid, "how many retail orders per month")
+        self.assertNotEqual(a["conversation_id"], b["conversation_id"])
+        with self.assertRaises(HTTPException) as cm:
+            call(self.app, "POST",
+                 "/stakeholder/{tenant_id}/conversations/{conversation_id}/export",
+                 self.tid, a["conversation_id"],
+                 StorylineExportIn(answer_ids=[b["answer_id"]], format="markdown"))
+        self.assertEqual(cm.exception.status_code, 400)
+        self.assertIn("unknown answer_id", str(cm.exception.detail))
+
+    def test_export_unsupported_format_is_400(self):
+        res = self.ctx.stakeholder.answer(self.tid, "how many retail orders per month")
+        with self.assertRaises(HTTPException) as cm:
+            call(self.app, "POST",
+                 "/stakeholder/{tenant_id}/conversations/{conversation_id}/export",
+                 self.tid, res["conversation_id"],
+                 StorylineExportIn(answer_ids=[res["answer_id"]], format="pdf"))
+        self.assertEqual(cm.exception.status_code, 400)
+        self.assertIn("unsupported format", str(cm.exception.detail))
+
+    def test_export_with_a_non_ascii_title_succeeds_with_an_ascii_filename(self):
+        """Starlette encodes response headers as latin-1 inside Response.__init__, and
+        str.isalnum() is Unicode-aware, so a CJK/Cyrillic title used to survive the
+        slug verbatim and blow up with UnicodeEncodeError before the response existed.
+        Titles are auto-derived from the user's question, so this was reachable for
+        any non-English analyst."""
+        res = self.ctx.stakeholder.answer(self.tid, "how many retail orders per month")
+        cid = res["conversation_id"]
+        call(self.app, "PATCH", "/stakeholder/{tenant_id}/conversations/{conversation_id}",
+             self.tid, cid, ConversationPatchIn(title="Q3 売上分析"))
+
+        resp = call(self.app, "POST",
+                    "/stakeholder/{tenant_id}/conversations/{conversation_id}/export",
+                    self.tid, cid,
+                    StorylineExportIn(answer_ids=[res["answer_id"]], format="markdown"))
+        disposition = resp.headers["content-disposition"]
+        # Latin-1 encodable (this is what actually raised before the fix).
+        disposition.encode("latin-1")
+        self.assertIn('filename="Q3.md"', disposition)
+        self.assertIn("filename*=UTF-8''", disposition)
+        # The RFC 5987 form carries the real title, percent-encoded.
+        self.assertIn(quote("Q3 売上分析.md", safe=""), disposition)
+        # The frontend's regex only reads the quoted form -- it must still match.
+        self.assertEqual(re.search(r'filename="([^"]+)"', disposition).group(1), "Q3.md")
+
+    def test_export_filename_slug_is_bounded(self):
+        res = self.ctx.stakeholder.answer(self.tid, "how many retail orders per month")
+        cid = res["conversation_id"]
+        call(self.app, "PATCH", "/stakeholder/{tenant_id}/conversations/{conversation_id}",
+             self.tid, cid, ConversationPatchIn(title="A" * 5000))
+        resp = call(self.app, "POST",
+                    "/stakeholder/{tenant_id}/conversations/{conversation_id}/export",
+                    self.tid, cid,
+                    StorylineExportIn(answer_ids=[res["answer_id"]], format="markdown"))
+        name = re.search(r'filename="([^"]+)"', resp.headers["content-disposition"]).group(1)
+        self.assertEqual(name, "A" * 60 + ".md")
+
+    def test_export_docx_is_503_when_python_docx_is_unavailable(self):
+        """python-docx is imported lazily inside render_docx, so a broken install
+        disables the Word format alone instead of taking down the whole API."""
+        res = self.ctx.stakeholder.answer(self.tid, "how many retail orders per month")
+        cid = res["conversation_id"]
+        with patch.dict(sys.modules, {"docx": None}):
+            with self.assertRaises(HTTPException) as cm:
+                call(self.app, "POST",
+                     "/stakeholder/{tenant_id}/conversations/{conversation_id}/export",
+                     self.tid, cid,
+                     StorylineExportIn(answer_ids=[res["answer_id"]], format="docx"))
+            self.assertEqual(cm.exception.status_code, 503)
+            self.assertEqual(cm.exception.detail,
+                             "docx export unavailable: python-docx not installed")
+            # Markdown export still works with python-docx missing.
+            ok = call(self.app, "POST",
+                      "/stakeholder/{tenant_id}/conversations/{conversation_id}/export",
+                      self.tid, cid,
+                      StorylineExportIn(answer_ids=[res["answer_id"]], format="markdown"))
+            self.assertEqual(ok.media_type, "text/markdown")
 
     def test_disabled_stakeholder_returns_graceful_message(self):
         self.ctx.tenants.set_analyst_config(self.tid, {"stakeholder": {"enabled": False}})
@@ -912,7 +999,7 @@ class TestStakeholder(unittest.TestCase):
         rather than calling stakeholder.add_datasource (which does not exist).
         """
         import pandas as pd
-        from analytics_platform.storyline import assemble_storyline
+        from analytics_platform.storyline import assemble_storyline, render_markdown
 
         mock_llm = MagicMock()
         mock_llm.name = "mock_gateway"
@@ -949,6 +1036,14 @@ class TestStakeholder(unittest.TestCase):
         self.assertEqual(len(sql_entries), 1)
         self.assertTrue(sql_entries[0].is_dependency)
         self.assertEqual(sql_entries[0].source_answer_id, turn1["answer_id"])
+        self.assertEqual(content.unresolved_dependency_count, 0)
+
+        # ...and that dependency actually reaches the rendered document. Without
+        # this the chain stops at metadata and an assembly/rendering mismatch is
+        # invisible.
+        md = render_markdown(content)
+        self.assertIn("SELECT revenue FROM events WHERE action = 'order' LIMIT 10", md)
+        self.assertIn("included as a dependency of df_1", md)
 
 
 class TestConversationSchema(unittest.TestCase):
