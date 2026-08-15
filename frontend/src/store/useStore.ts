@@ -10,6 +10,7 @@ export type StakeholderMessage = {
   status: string; citations: any[]; caveats: string[]; facts: string[];
   queries_run: string[]; escalated: boolean; cost: number; created_at: string;
   chart_config?: any; chart_data?: any[]; feedback?: 'up' | 'down';
+  python_cells?: Array<{ code: string; df_label: string; result_summary: unknown }>;
 };
 
 interface AppState {

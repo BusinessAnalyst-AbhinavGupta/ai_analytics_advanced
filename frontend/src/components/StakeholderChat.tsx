@@ -179,6 +179,15 @@ export function StakeholderChat() {
                     <CollapsibleCode key={qi} label={`SQL executed${m.queries_run.length > 1 ? ` (${qi + 1}/${m.queries_run.length})` : ''}`} code={q} />
                   ))
                 )}
+                {m.python_cells && m.python_cells.length > 0 && (
+                  m.python_cells.map((p, pi) => (
+                    <CollapsibleCode
+                      key={pi}
+                      label={`Python executed${m.python_cells!.length > 1 ? ` (${pi + 1}/${m.python_cells!.length})` : ''}`}
+                      code={p.code}
+                    />
+                  ))
+                )}
               </div>
             </div>
           ))}
