@@ -60,6 +60,22 @@ class TestConversationDataCache(unittest.TestCase):
         self.cache.put("t1", "c1", "df_1", "first", self.df)
         self.assertEqual(self.cache.next_label("t1", "c1"), "df_2")
 
+    def test_next_label_is_monotonic_across_frame_eviction(self):
+        """Frame-level LRU eviction frees a label *name*. Reissuing it would let two
+        different queries in one persisted conversation share a df_label, which is
+        exactly what made the storyline Code Appendix attribute a Python turn to the
+        wrong SQL turn. The counter is not derived from the live frames."""
+        issued = [self.cache.next_label("t1", "c1")]
+        self.cache.put("t1", "c1", issued[-1], "d", self.df)
+        for _ in range(3):  # cap is 2, so the earliest frames get evicted
+            label = self.cache.next_label("t1", "c1")
+            issued.append(label)
+            self.cache.put("t1", "c1", label, "d", self.df)
+        self.assertEqual(issued, ["df_1", "df_2", "df_3", "df_4"])
+        self.assertEqual(len(set(issued)), len(issued))
+        self.assertEqual({f["label"] for f in self.cache.list_available("t1", "c1")},
+                         {"df_3", "df_4"})
+
     def test_get_promotes_conversation_ahead_of_eviction(self):
         cache = ConversationDataCache(max_conversations=2, max_frames_per_conversation=2)
         cache.put("t1", "c1", "df_1", "first", self.df)

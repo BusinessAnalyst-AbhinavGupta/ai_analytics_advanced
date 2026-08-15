@@ -40,6 +40,12 @@ class ConversationDataCache:
         self.max_conversations = max_conversations
         self.max_frames_per_conversation = max_frames_per_conversation
         self._data: "OrderedDict[Tuple[str, str], OrderedDict[str, CachedFrame]]" = OrderedDict()
+        # Highest label ordinal ever issued per conversation. Deliberately NOT
+        # derived from the live frames: frame-level LRU eviction frees a label name,
+        # and reissuing it would let two different queries in one persisted
+        # conversation share a df_label. Only whole-conversation eviction clears it,
+        # so memory stays bounded by max_conversations exactly as before.
+        self._label_counters: "OrderedDict[Tuple[str, str], int]" = OrderedDict()
 
     def _key(self, tenant_id: str, conversation_id: str) -> Tuple[str, str]:
         return (tenant_id, conversation_id)
@@ -55,7 +61,8 @@ class ConversationDataCache:
         while len(frames) > self.max_frames_per_conversation:
             frames.popitem(last=False)
         while len(self._data) > self.max_conversations:
-            self._data.popitem(last=False)
+            evicted_key, _ = self._data.popitem(last=False)
+            self._label_counters.pop(evicted_key, None)
 
     def get(self, tenant_id: str, conversation_id: str, label: str) -> Optional[pd.DataFrame]:
         key = self._key(tenant_id, conversation_id)
@@ -73,9 +80,13 @@ class ConversationDataCache:
         return [f.describe() for f in frames.values()]
 
     def next_label(self, tenant_id: str, conversation_id: str) -> str:
-        frames = self._data.get(self._key(tenant_id, conversation_id))
+        """Issue the next df_N label for a conversation. Monotonic: a label is never
+        reissued within one conversation, even after its frame is LRU-evicted."""
+        key = self._key(tenant_id, conversation_id)
+        frames = self._data.get(key)
         existing = set(frames.keys()) if frames else set()
-        n = 1
+        n = self._label_counters.get(key, 0) + 1
         while f"df_{n}" in existing:
             n += 1
+        self._label_counters[key] = n
         return f"df_{n}"
