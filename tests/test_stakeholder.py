@@ -331,6 +331,38 @@ class TestStakeholder(unittest.TestCase):
         self.assertGreater(res["cost"], 0.0)
 
     @patch("analytics_platform.stakeholder.make_role_client")
+    def test_successful_sql_synthesis_caches_the_resulting_dataframe(self, mock_make_role_client):
+        """A successful synthesized-SQL turn should populate the per-conversation
+        DataFrame cache so later tasks (compute-engine reuse) can read the result
+        back without re-running the query."""
+        intent_resp = MagicMock(text="retail orders", ok=True, tokens_in=0, tokens_out=0)
+        synthesized_sql = (
+            "```sql\n"
+            "SELECT COUNT(*) AS orders FROM events WHERE action = 'order'\n"
+            "```"
+        )
+        sql_resp = MagicMock(text=synthesized_sql, tokens_in=150, tokens_out=40)
+        answer_resp = MagicMock(
+            text='{"answer": "There were N orders.", "chart_config": {"type": "BarChart"}}',
+            tokens_in=90, tokens_out=30)
+
+        mock_llm = MagicMock()
+        mock_llm.name = "mock_gateway"
+        mock_llm.generate.side_effect = [intent_resp, sql_resp, answer_resp]
+        mock_make_role_client.return_value = mock_llm
+
+        self.ctx.tenants.set_analyst_config(self.tid, {
+            "stakeholder": {"enabled": True, "provider": "openrouter", "model": "anthropic/claude-3-haiku"}
+        })
+
+        res = self.ctx.stakeholder.answer(self.tid, "how many retail orders per month",
+                                          conversation_id="")
+
+        available = self.ctx.stakeholder.data_cache.list_available(self.tid, res["conversation_id"])
+        self.assertEqual(len(available), 1)
+        self.assertEqual(available[0]["label"], "df_1")
+
+    @patch("analytics_platform.stakeholder.make_role_client")
     def test_sql_synthesis_repairs_after_policy_rejection(self, mock_make_role_client):
         """First attempt leaves in a Metabase {{Date}} placeholder (policy-rejected);
         the repair loop feeds that back to the LLM and succeeds on attempt 2,

@@ -22,6 +22,7 @@ from .config import Settings
 from .database import Store, dump_json, load_json
 from .domain import AnswerMode, NodeKind, new_id, now_iso
 from .execution.base import ExecutionContext
+from .execution.dataframe_cache import ConversationDataCache
 from .execution.policy import QueryPolicy, resolve_template_placeholders
 from .llm.client import make_role_client
 from .observability import Observability, new_trace
@@ -57,6 +58,7 @@ class StakeholderService:
         self.stores = stores
         self.tenants = tenants or TenantService(stores)
         self.executor = executor or SamplerExecutor()
+        self.data_cache = ConversationDataCache()
         self.obs = observability or Observability(stores)
         self.settings = settings or Settings()
         self.cost_per_1k_input = cost_per_1k_input
@@ -281,6 +283,9 @@ class StakeholderService:
             sql, exec_res, toks = self._synthesize_and_execute_sql(
                 llm, tenant_id, question, query_nodes, defn_nodes)
             if exec_res is not None and exec_res.ok:
+                if exec_res.data is not None and conversation_id:
+                    label = self.data_cache.next_label(tenant_id, conversation_id)
+                    self.data_cache.put(tenant_id, conversation_id, label, question[:200], exec_res.data)
                 preview = []
                 if exec_res.data is not None:
                     try:
