@@ -222,6 +222,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
                 conn.execute("ALTER TABLE stakeholder_answers ADD COLUMN queries_run TEXT")
             if "conversation_id" not in sa_cols:
                 conn.execute("ALTER TABLE stakeholder_answers ADD COLUMN conversation_id TEXT")
+            if "python_cells" not in sa_cols:
+                conn.execute("ALTER TABLE stakeholder_answers ADD COLUMN python_cells TEXT")
 
         # Brain retrieval: both recall legs must exist or search silently degrades.
         # Only tenant databases carry them — a control store legitimately has neither,

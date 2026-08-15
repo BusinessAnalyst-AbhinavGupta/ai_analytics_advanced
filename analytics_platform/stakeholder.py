@@ -175,6 +175,7 @@ class StakeholderService:
             "answer_mode": r["answer_mode"], "status": r["status"],
             "citations": load_json(r["citations"], []), "caveats": load_json(r["caveats"], []),
             "facts": load_json(r["facts"], []), "queries_run": load_json(r["queries_run"], []),
+            "python_cells": load_json(r["python_cells"], []),
             "escalated": bool(r["escalated"]), "cost": r["cost"], "created_at": r["created_at"],
         } for r in rows]
         return {"id": conv["id"], "title": conv["title"], "starred": bool(conv["starred"]),
@@ -279,6 +280,40 @@ class StakeholderService:
                            actor="stakeholder", resource=out["answer_id"], status="OK",
                            meta={"category": category})
             return out
+
+        if self._llm_live(llm) and conversation_id:
+            path, df_label = self._choose_compute_path(llm, tenant_id, conversation_id, question)
+            if path == "python":
+                code, exec_res, toks = self._synthesize_and_execute_python(
+                    llm, tenant_id, conversation_id, question, df_label)
+                if exec_res is not None and exec_res.ok:
+                    rows_for_context = (exec_res.result_summary
+                                        if isinstance(exec_res.result_summary, list)
+                                        else [exec_res.result_summary])
+                    data_context = {"rows": rows_for_context}
+                    answer, syn_toks, chart_config = self._synthesize(llm, question, category, data_context)
+                    t_in = toks[0] + syn_toks[0]
+                    t_out = toks[1] + syn_toks[1]
+
+                    out = self._record(tenant_id, question, user_id, category, trace, answer,
+                                       AnswerMode.ADAPTED_APPROVED_QUERY, "ANSWERED", False, [],
+                                       facts=[f"computed via Python over cached data '{df_label}'"],
+                                       caveats=["dynamically generated Python over previously-fetched data"],
+                                       tokens_in=t_in, tokens_out=t_out,
+                                       python_cells=[{"code": code, "df_label": df_label,
+                                                      "result_summary": exec_res.result_summary}],
+                                       conversation_id=conversation_id)
+                    out["chart_config"] = chart_config
+                    out["chart_data"] = rows_for_context
+                    self.obs.event(tenant_id=tenant_id, trace_id=trace, stage="stakeholder.answer",
+                                   actor="stakeholder", resource=out["answer_id"], status="OK",
+                                   meta={"category": category,
+                                         "mode": AnswerMode.ADAPTED_APPROVED_QUERY.value,
+                                         "compute": "python"})
+                    return out
+                # Every Python synthesis/policy/execution attempt failed --
+                # fall through to the existing SQL path below exactly as if
+                # routing had chosen "sql" in the first place.
 
         has_nodes = bool(query_nodes or defn_nodes)
         if has_nodes and self._llm_live(llm):
@@ -784,6 +819,7 @@ class StakeholderService:
                 caveats: Optional[List[str]] = None,
                 tokens_in: int = 0, tokens_out: int = 0,
                 queries_run: Optional[List[str]] = None,
+                python_cells: Optional[List[Dict[str, Any]]] = None,
                 conversation_id: str = "") -> Dict[str, Any]:
         answer_id = new_id("ans")
         cost = round((tokens_in / 1000.0) * self.cost_per_1k_input
@@ -794,19 +830,19 @@ class StakeholderService:
         self.stores.for_tenant(tenant_id).execute(
             "INSERT INTO stakeholder_answers (id,tenant_id,question,user_id,category,answer,"
             "answer_mode,status,trace_id,created_at,source_node_ids,citations,facts,caveats,"
-            "freshness,tokens_in,tokens_out,cost,escalated,queries_run,conversation_id) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "freshness,tokens_in,tokens_out,cost,escalated,queries_run,python_cells,conversation_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (answer_id, tenant_id, question, user_id, category, answer, mode.value, status,
              trace, now_iso(), dump_json(source_ids), dump_json(citations or []),
              dump_json(facts or []), dump_json(caveats or []), freshness,
              tokens_in, tokens_out, cost, int(escalated), dump_json(queries_run or []),
-             conversation_id))
+             dump_json(python_cells or []), conversation_id))
         return {"answer_id": answer_id, "tenant_id": tenant_id, "question": question,
                 "category": category, "answer": answer, "answer_mode": mode.value,
                 "status": status, "escalated": escalated, "citations": citations or [],
                 "caveats": caveats or [], "facts": facts or [], "freshness": freshness,
                 "cost": cost, "trace_id": trace, "queries_run": queries_run or [],
-                "conversation_id": conversation_id}
+                "python_cells": python_cells or [], "conversation_id": conversation_id}
 
     # -- feedback + quality -------------------------------------------------
     def record_feedback(self, tenant_id: str, answer_id: str, user_id: str,

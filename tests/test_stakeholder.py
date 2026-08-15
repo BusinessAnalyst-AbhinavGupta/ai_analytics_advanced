@@ -672,6 +672,61 @@ class TestStakeholder(unittest.TestCase):
         self.assertIsNone(exec_res)
         mock_llm.generate.assert_not_called()
 
+    @patch("analytics_platform.stakeholder.make_role_client")
+    def test_answer_routes_to_python_when_cache_hit_and_records_python_cells(self, mock_make_role_client):
+        # conversation_id must already exist in stakeholder_conversations for
+        # _ensure_conversation to reuse it (an unknown id silently starts a
+        # fresh conversation instead) -- create a real one first, same as
+        # test_answer_creates_and_reuses_conversation does, then seed the
+        # DataFrame cache under that real id.
+        import pandas as pd
+        cid = self.ctx.stakeholder._ensure_conversation(self.tid, "", "seed conversation")
+        self.ctx.stakeholder.data_cache.put(
+            self.tid, cid, "df_1", "orders", pd.DataFrame({"amount": [1, 2, 3]}))
+        mock_llm = MagicMock()
+        mock_llm.name = "mock_gateway"
+        mock_llm.generate.side_effect = [
+            MagicMock(text='{"category": "metric_lookup"}', tokens_in=5, tokens_out=5),
+            MagicMock(text='{"path": "python", "df_label": "df_1"}', tokens_in=5, tokens_out=5),
+            MagicMock(text="```python\nresult = int(df_1['amount'].sum())\n```", tokens_in=10, tokens_out=5),
+            MagicMock(text='{"answer": "the total is 6"}', tokens_in=10, tokens_out=5),
+        ]
+        mock_make_role_client.return_value = mock_llm
+
+        self.ctx.tenants.set_analyst_config(
+            self.tid, {"stakeholder": {"enabled": True, "provider": "mock", "model": "mock"}})
+        res = self.ctx.stakeholder.answer(
+            self.tid, "what's the total amount", conversation_id=cid)
+
+        self.assertEqual(res["queries_run"], [])
+        self.assertEqual(len(res["python_cells"]), 1)
+        self.assertEqual(res["python_cells"][0]["df_label"], "df_1")
+        self.assertEqual(res["python_cells"][0]["result_summary"], 6)
+        self.assertEqual(res["conversation_id"], cid)
+
+    @patch("analytics_platform.stakeholder.make_role_client")
+    def test_get_conversation_includes_python_cells_after_reload(self, mock_make_role_client):
+        import pandas as pd
+        cid = self.ctx.stakeholder._ensure_conversation(self.tid, "", "seed conversation")
+        self.ctx.stakeholder.data_cache.put(
+            self.tid, cid, "df_1", "orders", pd.DataFrame({"amount": [1, 2, 3]}))
+        mock_llm = MagicMock()
+        mock_llm.name = "mock_gateway"
+        mock_llm.generate.side_effect = [
+            MagicMock(text='{"category": "metric_lookup"}', tokens_in=5, tokens_out=5),
+            MagicMock(text='{"path": "python", "df_label": "df_1"}', tokens_in=5, tokens_out=5),
+            MagicMock(text="```python\nresult = int(df_1['amount'].sum())\n```", tokens_in=10, tokens_out=5),
+            MagicMock(text='{"answer": "the total is 6"}', tokens_in=10, tokens_out=5),
+        ]
+        mock_make_role_client.return_value = mock_llm
+
+        self.ctx.tenants.set_analyst_config(
+            self.tid, {"stakeholder": {"enabled": True, "provider": "mock", "model": "mock"}})
+        self.ctx.stakeholder.answer(self.tid, "what's the total amount", conversation_id=cid)
+
+        conv = self.ctx.stakeholder.get_conversation(self.tid, cid)
+        self.assertEqual(len(conv["messages"][0]["python_cells"]), 1)
+
 
 class TestConversationSchema(unittest.TestCase):
     def test_conversation_table_and_column_exist(self):
