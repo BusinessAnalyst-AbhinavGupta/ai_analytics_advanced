@@ -127,7 +127,7 @@ function estimateTokens(messages: StakeholderMessage[], selectedIds: string[]): 
 const WARN_TOKEN_THRESHOLD = 50_000; // must match analytics_platform/storyline.py's WARN_TOKEN_THRESHOLD
 
 function ReportBuilderPanel() {
-  const { messages, selectedAnswerIds } = useStore(state => state.stakeholder);
+  const { messages, selectedAnswerIds, exportError } = useStore(state => state.stakeholder);
   const toggleAnswerSelected = useStore(state => state.toggleAnswerSelected);
   const selectAllAnswers = useStore(state => state.selectAllAnswers);
   const clearSelectedAnswers = useStore(state => state.clearSelectedAnswers);
@@ -172,6 +172,11 @@ function ReportBuilderPanel() {
       >
         {exporting ? 'Exporting…' : `Export (${selectedAnswerIds.length})`}
       </button>
+      {exportError && (
+        <div role="alert" style={{ marginTop: '0.5rem', fontSize: '0.8rem', color: 'var(--error)' }}>
+          Export failed: {exportError}
+        </div>
+      )}
     </div>
   );
 }

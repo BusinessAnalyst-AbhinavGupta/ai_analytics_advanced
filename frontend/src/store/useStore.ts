@@ -29,6 +29,7 @@ interface AppState {
     messages: StakeholderMessage[];
     reportBuilderOpen: boolean;
     selectedAnswerIds: string[];
+    exportError: string;
   };
   setStakeholder: (data: Partial<AppState['stakeholder']>) => void;
   fetchConversations: () => Promise<void>;
@@ -144,7 +145,7 @@ export const useStore = create<AppState>((set) => ({
   stakeholder: {
     question: '', loading: false, conversations: [], conversationsLoading: false,
     activeConversationId: '', messages: [],
-    reportBuilderOpen: false, selectedAnswerIds: [],
+    reportBuilderOpen: false, selectedAnswerIds: [], exportError: '',
   },
   setStakeholder: (data) => set((state) => ({ stakeholder: { ...state.stakeholder, ...data } })),
 
@@ -288,6 +289,9 @@ export const useStore = create<AppState>((set) => ({
     stakeholder: { ...state.stakeholder, selectedAnswerIds: [] },
   })),
   exportStoryline: async (format) => {
+    // Clear first: without this a stale error from the previous attempt reads as a
+    // failure of the one the user just started.
+    set((state) => ({ stakeholder: { ...state.stakeholder, exportError: '' } }));
     const { tenantId } = useStore.getState();
     const { activeConversationId, selectedAnswerIds } = useStore.getState().stakeholder;
     if (!activeConversationId || selectedAnswerIds.length === 0) return;
@@ -299,7 +303,24 @@ export const useStore = create<AppState>((set) => ({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ answer_ids: selectedAnswerIds, format }),
         });
-      if (!res.ok) return;
+      if (!res.ok) {
+        // Every export failure the backend raises (400 unknown/empty answer_ids,
+        // 404 conversation, 503 docx unavailable) must reach the user; silently
+        // returning here made them indistinguishable from a no-op button.
+        let detail = res.statusText;
+        try {
+          const body = await res.json();
+          if (body && body.detail) {
+            detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail);
+          }
+        } catch (parseErr) {
+          console.error(parseErr);
+        }
+        set((state) => ({
+          stakeholder: { ...state.stakeholder, exportError: detail || 'Export failed' },
+        }));
+        return;
+      }
       const blob = await res.blob();
       const disposition = res.headers.get('content-disposition') || '';
       const match = disposition.match(/filename="([^"]+)"/);
@@ -314,6 +335,12 @@ export const useStore = create<AppState>((set) => ({
       URL.revokeObjectURL(url);
     } catch (e) {
       console.error(e);
+      set((state) => ({
+        stakeholder: {
+          ...state.stakeholder,
+          exportError: e instanceof Error ? e.message : 'Export failed',
+        },
+      }));
     }
   },
 
