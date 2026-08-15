@@ -153,7 +153,12 @@ def run_python_sandboxed(code: str, dataframes: Dict[str, pd.DataFrame],
         capped_stdout = stdout[-MAX_RESULT_CHARS:]
 
         if status == "error":
-            return PythonExecResult(ok=False, error=payload, stdout=capped_stdout, execution_ms=elapsed_ms)
+            # Same cap as stdout above -- a raised exception's message/traceback
+            # can carry raw DataFrame content (e.g. `assert False, df.to_string()`)
+            # and this string is fed verbatim into the next repair-loop prompt
+            # and into logs, so it must never cross this boundary uncapped.
+            capped_error = payload[-MAX_RESULT_CHARS:]
+            return PythonExecResult(ok=False, error=capped_error, stdout=capped_stdout, execution_ms=elapsed_ms)
 
         summary, shape = _summarize(payload)
         return PythonExecResult(ok=True, result_summary=summary, result_shape=shape,

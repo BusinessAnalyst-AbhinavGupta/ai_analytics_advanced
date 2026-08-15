@@ -66,6 +66,19 @@ class TestRunPythonSandboxed(unittest.TestCase):
         self.assertFalse(res.ok)
         self.assertLessEqual(len(res.stdout), MAX_RESULT_CHARS)
 
+    def test_error_is_capped_on_error_path(self):
+        # A raised exception's message can carry raw DataFrame content (e.g.
+        # `assert False, df.to_string()` -- the AST policy allows `assert`
+        # since it needs no denied builtin name) and that message ends up in
+        # traceback.format_exc(). The error path must cap it the same way the
+        # stdout path already does, not let raw DataFrame content cross
+        # uncapped into the repair-loop prompt or logs.
+        df = pd.DataFrame({"amount": range(400), "note": ["x" * 20] * 400})
+        res = run_python_sandboxed(
+            "assert False, df_1.to_string()\nresult = 1", {"df_1": df})
+        self.assertFalse(res.ok)
+        self.assertLessEqual(len(res.error), MAX_RESULT_CHARS)
+
     def test_dataframe_result_with_wide_text_is_capped(self):
         long_text = "y" * 10000
         df = pd.DataFrame({"blob": [long_text] * 25})
