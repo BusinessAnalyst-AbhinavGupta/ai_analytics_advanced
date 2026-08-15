@@ -25,22 +25,51 @@ DENIED_NAMES = {
 def _has_result_assignment(tree: ast.AST) -> bool:
     """Check if code has a module-level assignment to 'result'.
 
-    Only accepts 'result = ...' or 'result: ... = ...' at the top level of
-    the module, not nested inside function/class/lambda definitions (which
-    would fail at runtime with NameError when code executes).
+    Only accepts 'result = ...' or 'result: ... = ...' at module scope or in
+    control flow blocks (if/for/while/try/with) that don't create new scopes.
+    Excludes function/class/lambda definitions, which do create new scopes
+    and would fail at runtime with NameError when code executes.
     """
     if not isinstance(tree, ast.Module):
         return False
 
-    for stmt in tree.body:
-        if isinstance(stmt, ast.Assign):
-            for target in stmt.targets:
-                if isinstance(target, ast.Name) and target.id == "result":
+    def _check_statements(stmts: List[ast.stmt]) -> bool:
+        """Recursively check a list of statements for 'result' assignment.
+
+        Recurses into control-flow blocks (if/for/while/try/with) that don't
+        create new scopes, but skips function/class/lambda definitions.
+        """
+        for stmt in stmts:
+            # Direct assignment at this scope level
+            if isinstance(stmt, ast.Assign):
+                for target in stmt.targets:
+                    if isinstance(target, ast.Name) and target.id == "result":
+                        return True
+            elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name) \
+                    and stmt.target.id == "result":
+                return True
+            # Recurse into control-flow blocks (same scope)
+            elif isinstance(stmt, ast.If):
+                if _check_statements(stmt.body) or _check_statements(stmt.orelse):
                     return True
-        elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name) \
-                and stmt.target.id == "result":
-            return True
-    return False
+            elif isinstance(stmt, (ast.For, ast.While)):
+                if _check_statements(stmt.body) or _check_statements(stmt.orelse):
+                    return True
+            elif isinstance(stmt, ast.Try):
+                if _check_statements(stmt.body) or _check_statements(stmt.orelse) \
+                        or _check_statements(stmt.finalbody):
+                    return True
+                for handler in stmt.handlers:
+                    if _check_statements(handler.body):
+                        return True
+            elif isinstance(stmt, ast.With):
+                if _check_statements(stmt.body):
+                    return True
+            # Skip scope-creating constructs (FunctionDef, AsyncFunctionDef, ClassDef, Lambda)
+            # Their body is a different scope, so 'result' there doesn't bind at module level
+        return False
+
+    return _check_statements(tree.body)
 
 
 class _Visitor(ast.NodeVisitor):

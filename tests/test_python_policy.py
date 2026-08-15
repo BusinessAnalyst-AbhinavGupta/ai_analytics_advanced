@@ -93,6 +93,32 @@ class TestPythonCodePolicy(unittest.TestCase):
         self.assertTrue(decision.denied)
         self.assertTrue(any("result" in r for r in decision.reasons))
 
+    def test_result_in_if_block_is_allowed(self):
+        """result assigned in if block at module scope is allowed (if doesn't create new scope)."""
+        decision = self.policy.validate("if True:\n    result = 1\nelse:\n    result = 2")
+        self.assertTrue(decision.allowed)
+
+    def test_result_in_for_loop_is_allowed(self):
+        """result assigned in for loop at module scope is allowed (loop doesn't create new scope)."""
+        decision = self.policy.validate("for i in range(3):\n    result = i")
+        self.assertTrue(decision.allowed)
+
+    def test_result_in_try_block_is_allowed(self):
+        """result assigned in try/except at module scope is allowed (try doesn't create new scope)."""
+        decision = self.policy.validate("try:\n    result = 1\nexcept Exception:\n    result = 2")
+        self.assertTrue(decision.allowed)
+
+    def test_result_in_with_block_is_allowed(self):
+        """result assigned in with block at module scope is allowed (with doesn't create new scope)."""
+        decision = self.policy.validate("import numpy as np\nwith np.errstate(all='ignore'):\n    result = 1")
+        self.assertTrue(decision.allowed)
+
+    def test_result_only_in_nested_function_call_is_denied(self):
+        """result assigned only inside function (even if function is called) is still denied."""
+        decision = self.policy.validate("def f():\n    result = 1\nf()")
+        self.assertTrue(decision.denied)
+        self.assertTrue(any("result" in r for r in decision.reasons))
+
 
 if __name__ == "__main__":
     unittest.main()
