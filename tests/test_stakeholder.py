@@ -782,6 +782,65 @@ class TestStakeholder(unittest.TestCase):
         self.assertEqual(len(conv["messages"]), 2)
         self.assertEqual(conv["messages"][1]["python_cells"][0]["df_label"], "df_1")
 
+    @patch("analytics_platform.stakeholder.make_role_client")
+    def test_sql_turn_records_the_df_label_it_populated_in_the_cache(self, mock_make_role_client):
+        """A turn that synthesizes+caches a DataFrame (same shape as
+        test_successful_sql_synthesis_caches_the_resulting_dataframe) should
+        also record that cache label on the answer itself -- Task 2's
+        dependency tracking needs this join key."""
+        intent_resp = MagicMock(text="retail orders", ok=True, tokens_in=0, tokens_out=0)
+        synthesized_sql = (
+            "```sql\n"
+            "SELECT COUNT(*) AS orders FROM events WHERE action = 'order'\n"
+            "```"
+        )
+        sql_resp = MagicMock(text=synthesized_sql, tokens_in=150, tokens_out=40)
+        answer_resp = MagicMock(
+            text='{"answer": "There were N orders."}', tokens_in=90, tokens_out=30)
+
+        mock_llm = MagicMock()
+        mock_llm.name = "mock_gateway"
+        mock_llm.generate.side_effect = [intent_resp, sql_resp, answer_resp]
+        mock_make_role_client.return_value = mock_llm
+
+        self.ctx.tenants.set_analyst_config(self.tid, {
+            "stakeholder": {"enabled": True, "provider": "openrouter", "model": "anthropic/claude-3-haiku"}
+        })
+
+        res = self.ctx.stakeholder.answer(self.tid, "how many retail orders per month",
+                                          conversation_id="")
+
+        self.assertEqual(res["produced_df_label"], "df_1")
+        conv = self.ctx.stakeholder.get_conversation(self.tid, res["conversation_id"])
+        self.assertEqual(conv["messages"][0]["produced_df_label"], "df_1")
+
+    @patch("analytics_platform.stakeholder.make_role_client")
+    def test_python_turn_records_no_produced_df_label(self, mock_make_role_client):
+        """A turn answered via Python-over-cache (same shape as
+        test_answer_routes_to_python_when_cache_hit_and_records_python_cells)
+        doesn't itself populate the DataFrame cache, so produced_df_label
+        should stay empty."""
+        import pandas as pd
+        cid = self.ctx.stakeholder._ensure_conversation(self.tid, "", "seed conversation")
+        self.ctx.stakeholder.data_cache.put(
+            self.tid, cid, "df_1", "orders", pd.DataFrame({"amount": [1, 2, 3]}))
+        mock_llm = MagicMock()
+        mock_llm.name = "mock_gateway"
+        mock_llm.generate.side_effect = [
+            MagicMock(text='{"category": "metric_lookup"}', tokens_in=5, tokens_out=5),
+            MagicMock(text='{"path": "python", "df_label": "df_1"}', tokens_in=5, tokens_out=5),
+            MagicMock(text="```python\nresult = int(df_1['amount'].sum())\n```", tokens_in=10, tokens_out=5),
+            MagicMock(text='{"answer": "the total is 6"}', tokens_in=10, tokens_out=5),
+        ]
+        mock_make_role_client.return_value = mock_llm
+
+        self.ctx.tenants.set_analyst_config(
+            self.tid, {"stakeholder": {"enabled": True, "provider": "mock", "model": "mock"}})
+        res = self.ctx.stakeholder.answer(
+            self.tid, "what's the total amount", conversation_id=cid)
+
+        self.assertEqual(res["produced_df_label"], "")
+
 
 class TestConversationSchema(unittest.TestCase):
     def test_conversation_table_and_column_exist(self):

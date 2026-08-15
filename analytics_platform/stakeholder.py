@@ -176,6 +176,7 @@ class StakeholderService:
             "citations": load_json(r["citations"], []), "caveats": load_json(r["caveats"], []),
             "facts": load_json(r["facts"], []), "queries_run": load_json(r["queries_run"], []),
             "python_cells": load_json(r["python_cells"], []),
+            "produced_df_label": r["produced_df_label"] or "",
             "escalated": bool(r["escalated"]), "cost": r["cost"], "created_at": r["created_at"],
         } for r in rows]
         return {"id": conv["id"], "title": conv["title"], "starred": bool(conv["starred"]),
@@ -320,6 +321,7 @@ class StakeholderService:
             sql, exec_res, toks = self._synthesize_and_execute_sql(
                 llm, tenant_id, question, query_nodes, defn_nodes)
             if exec_res is not None and exec_res.ok:
+                label = ""
                 if exec_res.data is not None and conversation_id:
                     label = self.data_cache.next_label(tenant_id, conversation_id)
                     self.data_cache.put(tenant_id, conversation_id, label, question[:200], exec_res.data)
@@ -348,6 +350,7 @@ class StakeholderService:
                                    facts=["synthesized custom query based on approved knowledge"],
                                    caveats=["dynamically generated SQL"],
                                    tokens_in=t_in, tokens_out=t_out, queries_run=[sql],
+                                   produced_df_label=label,
                                    conversation_id=conversation_id)
                 out["chart_config"] = chart_config
                 out["chart_data"] = preview
@@ -820,6 +823,7 @@ class StakeholderService:
                 tokens_in: int = 0, tokens_out: int = 0,
                 queries_run: Optional[List[str]] = None,
                 python_cells: Optional[List[Dict[str, Any]]] = None,
+                produced_df_label: str = "",
                 conversation_id: str = "") -> Dict[str, Any]:
         answer_id = new_id("ans")
         cost = round((tokens_in / 1000.0) * self.cost_per_1k_input
@@ -830,19 +834,21 @@ class StakeholderService:
         self.stores.for_tenant(tenant_id).execute(
             "INSERT INTO stakeholder_answers (id,tenant_id,question,user_id,category,answer,"
             "answer_mode,status,trace_id,created_at,source_node_ids,citations,facts,caveats,"
-            "freshness,tokens_in,tokens_out,cost,escalated,queries_run,python_cells,conversation_id) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "freshness,tokens_in,tokens_out,cost,escalated,queries_run,python_cells,"
+            "produced_df_label,conversation_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (answer_id, tenant_id, question, user_id, category, answer, mode.value, status,
              trace, now_iso(), dump_json(source_ids), dump_json(citations or []),
              dump_json(facts or []), dump_json(caveats or []), freshness,
              tokens_in, tokens_out, cost, int(escalated), dump_json(queries_run or []),
-             dump_json(python_cells or []), conversation_id))
+             dump_json(python_cells or []), produced_df_label, conversation_id))
         return {"answer_id": answer_id, "tenant_id": tenant_id, "question": question,
                 "category": category, "answer": answer, "answer_mode": mode.value,
                 "status": status, "escalated": escalated, "citations": citations or [],
                 "caveats": caveats or [], "facts": facts or [], "freshness": freshness,
                 "cost": cost, "trace_id": trace, "queries_run": queries_run or [],
-                "python_cells": python_cells or [], "conversation_id": conversation_id}
+                "python_cells": python_cells or [], "produced_df_label": produced_df_label,
+                "conversation_id": conversation_id}
 
     # -- feedback + quality -------------------------------------------------
     def record_feedback(self, tenant_id: str, answer_id: str, user_id: str,
