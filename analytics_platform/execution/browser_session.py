@@ -370,6 +370,7 @@ def make_live_executor(settings: Optional["Settings"] = None) -> BrowserSessionE
         metabase_base_url=settings.metabase_base_url,
         database_id=database_id or None,
         expected_host=settings.metabase_expected_host,
+        timeout_s=float(getattr(settings, "metabase_timeout_s", 300.0)),
     )
 
 

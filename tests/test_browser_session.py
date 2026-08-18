@@ -302,6 +302,23 @@ class TestBrowserFromEnv(unittest.TestCase):
         self.assertEqual(ex.config.database_id, 7)
         self.assertEqual(ex.config.expected_host, "mb.example.com")
 
+    def test_make_live_executor_carries_the_configured_timeout(self):
+        """A query slower than the ceiling comes back as a bare 'metabase error'
+        with nothing naming the timeout, so the ceiling has to be settable."""
+        s = Settings(metabase_database_id="7", metabase_timeout_s=600.0)
+        self.assertEqual(make_live_executor(s).config.timeout_s, 600.0)
+
+    def test_the_default_timeout_outlasts_a_real_warehouse_query(self):
+        """The old hardcoded 30s was below the ~45s a full-history base view
+        scan takes, so every cube over one failed and reported nothing useful."""
+        self.assertGreaterEqual(make_live_executor(Settings()).config.timeout_s, 120.0)
+
+    def test_the_polling_deadline_uses_the_configured_timeout(self):
+        """config.timeout_s alone would be decorative: the roundtrip polls
+        against _timeout_s and the osascript runner is bound to it."""
+        ex = make_live_executor(Settings(metabase_timeout_s=600.0))
+        self.assertEqual(ex._timeout_s, 600.0)
+
     def test_make_live_executor_defaults_env(self):
         os.environ["ANALYTICS_MB_DATABASE_ID"] = "99"
         os.environ["ANALYTICS_MB_EXPECTED_HOST"] = "mb.env.example"
