@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import asdict
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .base_view import BaseViewRegistry, reconcile
 from .brain.embedding import Embedder
@@ -1929,16 +1929,66 @@ what was asked."""
 
         return "", None, (t_in_total, t_out_total)
 
+    # Synthesis sees the cube, not a sample of it. The pipeline goes to real
+    # trouble to produce a population-hashed, reconcilable cube; narrating it
+    # from an arbitrary handful of rows throws that away at the last step, and
+    # the resulting sentence reads as complete whether or not it is. Bound the
+    # prompt by characters rather than a fixed row count so a small cube always
+    # arrives whole.
+    SYNTHESIS_CONTEXT_CHARS = 12000
+
+    @classmethod
+    def _measure_key(cls, rows: Sequence[Dict[str, Any]]) -> str:
+        """The column to rank by when the cube will not fit whole: the first one
+        that is numeric in every row. Without a deterministic order, a truncated
+        cube shows whichever rows the warehouse happened to emit first."""
+        for key in (rows[0].keys() if rows and isinstance(rows[0], dict) else []):
+            if all(isinstance(r.get(key), (int, float)) and not isinstance(r.get(key), bool)
+                   for r in rows):
+                return str(key)
+        return ""
+
+    @classmethod
+    def _data_context(cls, rows: Optional[Sequence[Any]],
+                      columns: Optional[Sequence[str]] = None) -> str:
+        if not rows:
+            return ""
+        rows = list(rows)
+        col_line = f"\nColumns: {list(columns)}" if columns else ""
+        whole = f"\nData context -- COMPLETE result, all {len(rows)} row(s): {rows}{col_line}"
+        if len(whole) <= cls.SYNTHESIS_CONTEXT_CHARS:
+            return whole
+
+        ranked, key = rows, cls._measure_key(rows)
+        if key:
+            ranked = sorted(rows, key=lambda r: r.get(key) or 0, reverse=True)
+        shown = ranked
+        while shown and len(repr(shown)) > cls.SYNTHESIS_CONTEXT_CHARS:
+            shown = shown[:-max(1, len(shown) // 10)]
+        by = f" by {key}" if key else ""
+        omitted = len(rows) - len(shown)
+        return (f"\nData context -- PARTIAL. The result has {len(rows)} rows; the top "
+                f"{len(shown)}{by} are shown and {omitted} are NOT. Totals and shares "
+                f"cannot be computed from this, and it must not be described as the "
+                f"whole distribution: {shown}{col_line}")
+
     def _synthesize(self, llm: Any, question: str, category: str, data: Optional[Dict[str, Any]] = None) -> Tuple[str, Tuple[int, int], Optional[Dict[str, Any]]]:
         try:
-            data_context = ""
+            rows = None
+            columns: List[str] = []
             if data and isinstance(data, dict) and data.get("rows"):
-                data_context = f"\nData context (top 3 rows): {data['rows'][:3]}\nColumns: {data.get('columns', [])}"
+                rows = data["rows"]
+                columns = list(data.get("columns") or [])
             elif data and isinstance(data, list):
-                data_context = f"\nData context (top 3 rows): {data[:3]}"
+                rows = data
+            data_context = self._data_context(rows, columns)
 
             sys_prompt = (
                 "You are a cautious internal analytics assistant. State what you know and what data you would need. Do not invent figures. "
+                "The data context tells you whether it is the COMPLETE result or only part of one. "
+                "When it is complete and small, account for every row -- do not describe a "
+                "distribution while silently omitting categories. When it is partial, say so "
+                "and never present it as the whole picture. "
                 "You must respond with a strict JSON object with the following schema: "
                 "{\"answer\": \"Your 2-3 sentence answer text here\", "
                 "\"chart_config\": {\"type\": \"LineChart|BarChart|AreaChart|ScatterChart\", \"xKey\": \"col_name\", \"series\": [{\"key\": \"col_name\"}]} } "
