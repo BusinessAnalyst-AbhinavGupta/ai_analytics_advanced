@@ -23,8 +23,11 @@ def probe_payload(**overrides):
     return json.dumps(d)
 
 
-def exec_payload(ok=True, rows=None, cols=None, error=""):
-    return json.dumps({"ok": ok, "rows": rows or [], "cols": cols or [], "error": error})
+def exec_payload(ok=True, rows=None, cols=None, error="", rows_truncated=None):
+    d = {"ok": ok, "rows": rows or [], "cols": cols or [], "error": error}
+    if rows_truncated is not None:
+        d["rows_truncated"] = rows_truncated
+    return json.dumps(d)
 
 
 def make_runner(probe, exec_resp):
@@ -368,3 +371,47 @@ class TestOsascriptTargeting(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class TestMetabaseTruncationIsDetected(unittest.TestCase):
+    """Metabase caps /api/dataset itself -- 2,000 rows unaggregated and 10,000
+    aggregated by default -- well below anything this platform used to assume.
+    It caps SILENTLY: the response is a valid 200 with fewer rows than the query
+    matched. The only signal is `rows_truncated`, so dropping that field (which
+    this executor did) turns a partial result into a confidently wrong total.
+    """
+
+    def _run(self, payload):
+        ex = BrowserSessionExecutor(database_id=1, runner=make_runner(probe_payload(), payload))
+        return ex.execute("SELECT country, SUM(revenue) FROM t GROUP BY 1",
+                          ExecutionContext(tenant_id="t1", question="q"))
+
+    def test_a_truncated_response_is_flagged_truncated(self):
+        res = self._run(exec_payload(rows=[[1], [2]], cols=["x"], rows_truncated=2))
+        self.assertTrue(res.ok)
+        self.assertTrue(res.truncated)
+
+    def test_the_warning_names_metabase_as_the_cap(self):
+        """The reader has to know WHERE to raise the limit. Naming our own
+        row_limit here would send them to the wrong knob entirely."""
+        res = self._run(exec_payload(rows=[[1]], cols=["x"], rows_truncated=2000))
+        joined = " ".join(res.warnings)
+        self.assertIn("2000", joined)
+        self.assertIn("Metabase", joined)
+
+    def test_an_untruncated_response_is_not_flagged(self):
+        res = self._run(exec_payload(rows=[[1], [2]], cols=["x"]))
+        self.assertFalse(res.truncated)
+        self.assertEqual(res.warnings, [])
+
+    def test_our_own_memory_guard_still_flags_separately(self):
+        ex = BrowserSessionExecutor(
+            database_id=1, max_rows=1,
+            runner=make_runner(probe_payload(), exec_payload(rows=[[1], [2]], cols=["x"])))
+        res = ex.execute("SELECT 1", ExecutionContext(tenant_id="t1", question="q"))
+        self.assertTrue(res.truncated)
+        self.assertTrue(any("1 rows" in w for w in res.warnings), res.warnings)
+
+    def test_the_kick_js_actually_asks_for_rows_truncated(self):
+        """A field the browser never extracts cannot be reported on."""
+        from analytics_platform.execution.browser_session import _build_execute_kick_js
+        self.assertIn("rows_truncated", _build_execute_kick_js({"database": 1}))

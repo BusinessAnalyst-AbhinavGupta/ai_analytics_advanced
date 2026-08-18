@@ -73,24 +73,47 @@ class TestResolveTemplatePlaceholders(unittest.TestCase):
 
 
 class TestTransportCeiling(unittest.TestCase):
-    """Task 4 -- three independent 50k caps had to be made to agree, and one of
-    them turned out not to be a cap at all."""
+    """Task 4 -- three independent caps had to be made to agree, and one of them
+    turned out not to be a cap at all.
+
+    The number is read from PolicySettings rather than written in here: it moved
+    once already (50,000 was a guess about AppleScript; the real cap is
+    Metabase's own server-side limit) and a test that hardcodes it stops testing
+    the ceiling and starts testing a constant.
+    """
 
     def setUp(self):
-        self.policy = QueryPolicy(PolicySettings())
+        self.settings = PolicySettings()
+        self.ceiling = self.settings.max_transport_rows
+        self.policy = QueryPolicy(self.settings)
 
     def test_a_per_request_row_limit_is_injected(self):
         d = self.policy.validate(
             "SELECT session_id, revenue FROM orders WHERE dt >= '2026-01-01'",
-            row_limit=50_000, dialect="athena")
+            row_limit=self.ceiling, dialect="athena")
         self.assertTrue(d.allowed, d.reasons)
-        self.assertIn("LIMIT 50000", d.approved_sql)
+        self.assertIn(f"LIMIT {self.ceiling}", d.approved_sql)
 
-    def test_default_path_still_limits_to_50000(self):
+    def test_the_default_path_limits_to_the_configured_default(self):
         d = self.policy.validate(
             "SELECT country, SUM(revenue) FROM orders WHERE dt >= '2026-01-01' GROUP BY country",
             dialect="athena")
-        self.assertIn("LIMIT 50000", d.approved_sql)
+        self.assertIn(f"LIMIT {self.settings.default_row_limit}", d.approved_sql)
+
+    def test_the_default_row_limit_never_exceeds_the_ceiling(self):
+        """Otherwise every query that names no limit of its own is refused, and
+        the failure surfaces nowhere near the setting that caused it."""
+        self.assertLessEqual(PolicySettings().default_row_limit,
+                             PolicySettings().max_transport_rows)
+        clamped = PolicySettings(default_row_limit=999_999, max_transport_rows=1_000)
+        self.assertEqual(clamped.default_row_limit, 1_000)
+        self.assertEqual(clamped.extract_chunk_rows, 1_000)
+
+    def test_a_workspace_style_settings_object_is_not_clamped(self):
+        """max_transport_rows == 0 means there IS no transport -- the in-process
+        DuckDB workspace -- so the clamp must not fire there."""
+        ws = PolicySettings(max_transport_rows=0, default_row_limit=100_001)
+        self.assertEqual(ws.default_row_limit, 100_001)
 
     def test_a_request_above_the_transport_ceiling_is_refused(self):
         """No caller may ask a single round trip for more than the transport
@@ -107,7 +130,8 @@ class TestTransportCeiling(unittest.TestCase):
         self.assertTrue(policy.validate("SELECT a FROM orders", row_limit=1_000).allowed)
 
     def test_exactly_the_ceiling_is_allowed(self):
-        d = self.policy.validate("SELECT a FROM orders", row_limit=50_000, dialect="athena")
+        d = self.policy.validate("SELECT a FROM orders", row_limit=self.ceiling,
+                                 dialect="athena")
         self.assertTrue(d.allowed, d.reasons)
 
     def test_a_cte_query_still_gets_a_limit_injected(self):
@@ -116,9 +140,9 @@ class TestTransportCeiling(unittest.TestCase):
         CTEs the cube path would reach Athena completely unbounded."""
         sql = ("WITH base AS (SELECT session_id, country, revenue FROM orders)\n"
                "SELECT country, SUM(revenue) AS revenue FROM base GROUP BY 1")
-        d = self.policy.validate(sql, row_limit=50_000, dialect="athena")
+        d = self.policy.validate(sql, row_limit=self.ceiling, dialect="athena")
         self.assertTrue(d.allowed, d.reasons)
-        self.assertIn("LIMIT 50000", d.approved_sql)
+        self.assertIn(f"LIMIT {self.ceiling}", d.approved_sql)
 
     def test_a_cte_alias_is_not_treated_as_a_table(self):
         """Every composed cube is `WITH base AS (...) SELECT ... FROM base`. If
@@ -140,7 +164,7 @@ class TestTransportCeiling(unittest.TestCase):
     def test_a_cte_query_that_already_has_a_limit_is_left_alone(self):
         sql = ("WITH base AS (SELECT session_id FROM orders)\n"
                "SELECT session_id FROM base ORDER BY session_id LIMIT 100")
-        d = self.policy.validate(sql, row_limit=50_000, dialect="athena")
+        d = self.policy.validate(sql, row_limit=self.ceiling, dialect="athena")
         self.assertTrue(d.allowed, d.reasons)
         self.assertEqual(d.approved_sql.upper().count("LIMIT"), 1)
 

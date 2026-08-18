@@ -21,30 +21,55 @@ MAX_DIMENSION_CARDINALITY = 5_000   # a column above this is a key or free text,
 @dataclass
 class PolicySettings:
     allow_ddl_dml: bool = False       # hard default: read-only
-    default_row_limit: int = 50000
+    # The LIMIT injected when a caller names none. It is a PER-ROUND-TRIP limit,
+    # so it can never exceed max_transport_rows -- __post_init__ enforces that,
+    # because the two drifting apart silently rejects every un-limited query.
+    default_row_limit: int = 10_000
     require_date_filter_tables: List[str] = field(default_factory=list)
     block_multi_statement: bool = True
     forge_dialect: str = "athena"        # sqlglot dialect used for validation
     # -- what one round trip may carry -------------------------------------
-    # UNMEASURED. 50,000 is inherited, not observed. BrowserSessionExecutor
-    # returns a whole Metabase response as a single `osascript` string which
-    # Python then json.loads, and AppleScript's return-value limit *truncates a
-    # string rather than raising* -- so the dangerous failure is a successful
-    # parse of a truncated payload, not an exception. Before trusting this
-    # number, run the same SELECT at 25k / 50k / 100k / 200k rows against the
-    # real Metabase tab and record, for each: wall-clock, whether osascript
-    # returned at all, and whether the parsed row count matches the requested
-    # one. Set this to the largest size that round-tripped *intact*, with a
-    # margin, and replace this paragraph with the measured figures. Every cube
-    # size and page size in the platform is derived from it, so a wrong value
-    # here produces silent data loss everywhere else.
-    max_transport_rows: int = 50_000
-    # Keyset page size. Must be <= max_transport_rows: a page IS one round trip.
-    extract_chunk_rows: int = 50_000
+    # MEASURED, and not where it was assumed to be.
+    #
+    # The old comment here blamed AppleScript and guessed 50,000. Both were
+    # wrong. scripts/measure_applescript_ceiling.py carries 20,000,000 chars
+    # through Chrome -> AppleScript -> osascript intact, so the transport is not
+    # the binding constraint at all.
+    #
+    # The real cap is METABASE'S OWN, applied server-side to /api/dataset before
+    # anything reaches this process: 10,000 rows for an aggregated query and
+    # 2,000 for an unaggregated one, by default. It is applied SILENTLY -- a
+    # valid 200 carrying fewer rows than the query matched -- and no row_limit we
+    # send can lift it. (This is also why a Metabase CSV *export* returns far
+    # more: the export endpoints bypass these limits and use absolute-max-results
+    # of 1,048,575 instead.)
+    #
+    # 10,000 matches the aggregated default, which is what every composed cube
+    # is. If your server sets MB_AGGREGATED_QUERY_ROW_LIMIT higher, raise this to
+    # match it -- and only to match it. Anything above the server's value buys
+    # nothing and re-opens silent truncation. BrowserSessionExecutor now reads
+    # Metabase's `rows_truncated` field, so an overshoot is at least reported
+    # rather than absorbed.
+    max_transport_rows: int = 10_000
+    # Keyset page size. Must be <= max_transport_rows: a page IS one round trip,
+    # and a page above Metabase's own cap comes back silently short.
+    extract_chunk_rows: int = 10_000
     # The ceiling on a MATERIALISED cube or extract -- the sum across chunks,
     # never a single round trip. Deliberately far above max_transport_rows.
     raw_extract_row_limit: int = 1_000_000
     extract_retention_days: int = 30
+
+    def __post_init__(self) -> None:
+        # A default row limit above the transport ceiling is not a preference,
+        # it is a contradiction: every query that does not name its own limit
+        # would be rejected by the ceiling check, and the failure surfaces
+        # nowhere near the setting that caused it. max_transport_rows == 0 means
+        # "no transport" (the in-process DuckDB workspace), where no clamp
+        # applies.
+        if self.max_transport_rows and self.default_row_limit > self.max_transport_rows:
+            self.default_row_limit = self.max_transport_rows
+        if self.max_transport_rows and self.extract_chunk_rows > self.max_transport_rows:
+            self.extract_chunk_rows = self.max_transport_rows
 
 
 @dataclass

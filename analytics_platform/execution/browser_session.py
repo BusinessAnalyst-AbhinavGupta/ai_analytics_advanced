@@ -144,7 +144,12 @@ def _build_execute_kick_js(payload: Any, nonce: Optional[str] = None) -> str:
         "if(j.error){result=JSON.stringify({ok:false,error:j.error||'metabase_error'});}"
         "else{const cols=(j.data&&j.data.cols||[]).map(c=>c.name);"
         "const rows=(j.data&&j.data.rows||[]).map(r=>r.slice());"
-        "result=JSON.stringify({ok:true,cols:cols,rows:rows});}"
+        # `rows_truncated` is Metabase's ONLY signal that it applied its own row
+        # cap. It caps silently otherwise -- a valid 200 carrying fewer rows than
+        # the query matched -- so dropping this field (as this JS used to) turns
+        # a partial result into a confidently wrong total downstream.
+        "const trunc=(j.data&&j.data.rows_truncated)||null;"
+        "result=JSON.stringify({ok:true,cols:cols,rows:rows,rows_truncated:trunc});}"
         "if(window.__mbNonce===myNonce){window.__mb.payload=result;window.__mb.ready=true;}"
         "}catch(e){if(window.__mbNonce===myNonce){window.__mb.payload=JSON.stringify({ok:false,error:String(e)});window.__mb.ready=true;}}"
         "})();return 'kick';}catch(e){window.__mb={payload:JSON.stringify({ok:false,error:String(e)}),ready:true};return 'kick';}})();"
@@ -315,14 +320,32 @@ class BrowserSessionExecutor(QueryExecutor):
         bounds = [b for b in (self.config.max_rows, ctx.row_limit) if b]
         cap = min(bounds) if bounds else None
         warnings: List[str] = []
+        truncated = False
+
+        # Metabase's OWN cap, applied before anything reached this process.
+        # Unaggregated queries default to 2,000 rows and aggregated ones to
+        # 10,000 -- far below what this platform historically assumed, and
+        # applied without an error. This is the authoritative truncation signal;
+        # everything below is about what WE then discarded.
+        metabase_cap = res.get("rows_truncated")
+        if metabase_cap:
+            truncated = True
+            warnings.append(
+                f"Metabase truncated this result at {metabase_cap} rows before it "
+                f"reached us (its own MB_AGGREGATED_QUERY_ROW_LIMIT / "
+                f"MB_UNAGGREGATED_QUERY_ROW_LIMIT). Totals and rates over it are "
+                f"understated. Fetch it in keyset pages, or raise the limit on the "
+                f"Metabase server -- our row_limit cannot lift it.")
+
         if cap is not None and len(rows) > cap:
             rows = rows[:cap]
+            truncated = True
             # Callers set ExtractMeta.truncated off this. A silently shorter frame
             # is how a partial result becomes a confidently wrong total.
             warnings.append(f"result truncated at {cap} rows")
         df = pd.DataFrame(rows, columns=cols)
         return QueryResult(ok=True, data=df, row_count=len(df), columns=cols,
-                           warnings=warnings)
+                           warnings=warnings, truncated=truncated)
 
     def cancel(self, execution_id: str) -> bool:
         return True

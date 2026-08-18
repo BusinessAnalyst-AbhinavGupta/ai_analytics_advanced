@@ -373,11 +373,29 @@ class JuniorEngine:
                 out[table] = []
         return out
 
+    def _sample_rows(self) -> int:
+        """Rows to sample per table for profiling.
+
+        The sample is one round trip like any other, so it cannot exceed what
+        the transport carries. Without this clamp, a transport ceiling below
+        profile_sample_rows makes every profiling query policy-rejected -- and
+        since the cube guard fails closed on an unprofiled column, the symptom
+        is "no cube can ever be composed", nowhere near the cause.
+        """
+        sample_rows = int(getattr(self.settings, "profile_sample_rows", 50_000))
+        transport = int(getattr(getattr(self.settings, "policy", None),
+                                "max_transport_rows", 0) or 0)
+        return min(sample_rows, transport) if transport else sample_rows
+
     def _run_profiling_sql(self, tenant_id: str, sql: str, table: str):
         """Every profiling query goes through QueryPolicy like any other query --
         refresh_catalog's raw f-string bypass is a pattern to stop, not extend."""
         policy = QueryPolicy(self.settings.policy)
+        # State the sample bound explicitly rather than inheriting whatever the
+        # default happens to be: the sample size is already clamped to what one
+        # round trip carries, and the two must agree or the query is refused.
         decision = policy.validate(sql, allowed_tables=[table],
+                                   row_limit=self._sample_rows(),
                                    dialect=self.settings.source_dialect)
         if decision.denied:
             logger.warning("profiling SQL rejected by policy for %s: %s",
@@ -390,16 +408,7 @@ class JuniorEngine:
         return res if res.ok else None
 
     def _profile_one_table(self, tenant_id: str, table: str) -> List[ColumnProfile]:
-        sample_rows = int(getattr(self.settings, "profile_sample_rows", 50_000))
-        # The sample is one round trip like any other, so it cannot exceed what
-        # the transport carries. Without this clamp, measuring the ceiling down
-        # below profile_sample_rows makes every profiling query policy-rejected
-        # -- and since the cube guard fails closed on an unprofiled column, the
-        # symptom is "no cube can ever be composed", nowhere near the cause.
-        transport = int(getattr(getattr(self.settings, "policy", None),
-                                "max_transport_rows", 0) or 0)
-        if transport:
-            sample_rows = min(sample_rows, transport)
+        sample_rows = self._sample_rows()
         res = self._run_profiling_sql(
             tenant_id, f"SELECT * FROM {table} LIMIT {sample_rows}", table)
         if res is None or res.data is None:
