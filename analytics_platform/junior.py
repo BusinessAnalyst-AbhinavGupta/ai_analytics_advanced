@@ -391,6 +391,15 @@ class JuniorEngine:
 
     def _profile_one_table(self, tenant_id: str, table: str) -> List[ColumnProfile]:
         sample_rows = int(getattr(self.settings, "profile_sample_rows", 50_000))
+        # The sample is one round trip like any other, so it cannot exceed what
+        # the transport carries. Without this clamp, measuring the ceiling down
+        # below profile_sample_rows makes every profiling query policy-rejected
+        # -- and since the cube guard fails closed on an unprofiled column, the
+        # symptom is "no cube can ever be composed", nowhere near the cause.
+        transport = int(getattr(getattr(self.settings, "policy", None),
+                                "max_transport_rows", 0) or 0)
+        if transport:
+            sample_rows = min(sample_rows, transport)
         res = self._run_profiling_sql(
             tenant_id, f"SELECT * FROM {table} LIMIT {sample_rows}", table)
         if res is None or res.data is None:

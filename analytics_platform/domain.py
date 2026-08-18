@@ -350,6 +350,53 @@ class BaseView:
 
 
 @dataclass
+class AnalysisArtifact:
+    """The provenance record for one analytical turn.
+
+    This is what makes an answer *reproducible* rather than merely plausible:
+    which population it was computed over, which slice of it, what was reused,
+    what ran where, and what was assumed. Build it incrementally through the
+    turn rather than reconstructing it at the end from whatever happens to still
+    be in scope -- a field filled from a stale local is worse than an empty one.
+
+    `population_hash` is the field that has to be right. Everything else here is
+    documentation; that one is a claim, and the reconcile endpoint lets a user
+    act on it.
+    """
+
+    question: str = ""
+    plan_rationale: str = ""
+    # -- the population: what makes this answer comparable to another --------
+    base_view: str = ""              # "" on the aggregate path
+    population_hash: str = ""        # "" on the aggregate path: reconciles with nothing
+    projection_hash: str = ""
+    base_view_approved: bool = False       # False -> the figures are provisional
+    base_view_grain_verified: bool = False  # from the Task 13 probe
+    reconcilable: bool = False       # a population_hash exists AND the grain was verified
+    slice_filters: Dict[str, List[str]] = field(default_factory=dict)  # NOT hashed
+    dimensions: List[str] = field(default_factory=list)
+    non_additive: List[str] = field(default_factory=list)
+    supersedes: str = ""             # a narrower cube this turn replaced
+    # -- the rest of the turn ------------------------------------------------
+    semantics_used: List[str] = field(default_factory=list)
+    unresolved_terms: List[str] = field(default_factory=list)
+    requirement: Dict[str, Any] = field(default_factory=dict)
+    coverage: Dict[str, Any] = field(default_factory=dict)
+    datasets_used: List[str] = field(default_factory=list)
+    warehouse_sql: List[str] = field(default_factory=list)
+    workspace_sql: List[str] = field(default_factory=list)   # DuckDB, run locally
+    python_code: List[str] = field(default_factory=list)
+    result_summary: Any = None
+    chart_spec: Optional[Dict[str, Any]] = None
+    key_findings: List[str] = field(default_factory=list)
+    assumptions: List[str] = field(default_factory=list)
+    created_at: str = field(default_factory=now_iso)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class CubeMeasure:
     name: str            # "revenue"
     expr: str = ""       # what goes in the cube's SELECT: "SUM(revenue)"

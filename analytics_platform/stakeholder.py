@@ -13,6 +13,7 @@ cost per answer is tracked.
 from __future__ import annotations
 
 import logging
+from dataclasses import asdict
 from typing import Any, Dict, List, Optional, Tuple
 
 from .base_view import BaseViewRegistry
@@ -22,8 +23,8 @@ from .brain.store import CompanyBrain
 from .config import Settings
 from .database import Store, dump_json, load_json
 from .data_manager import CoverageVerdict, DataManager, DataRequirement
-from .domain import (AnswerMode, AttributionRule, BaseView, CubeMeasure, CubeSpec,
-                     NodeKind, TurnPlan, new_id, now_iso)
+from .domain import (AnalysisArtifact, AnswerMode, AttributionRule, BaseView, CubeMeasure,
+                     CubeSpec, NodeKind, TurnPlan, new_id, now_iso)
 from .execution.base import ExecutionContext
 from .execution.dataframe_cache import ConversationDataCache
 from .execution.extract_store import ExtractMeta, ExtractStore
@@ -64,6 +65,15 @@ def _permissive_profile(column: str):
     from .domain import ColumnProfile
     return ColumnProfile(column=column, dtype="object", distinct_count=1,
                          null_fraction=0.0, values=[], values_complete=False)
+
+
+def _extract_sql_block(text: str) -> str:
+    """The fenced SQL an LLM emitted, or bare text if it emitted no fence."""
+    if "```sql" in text:
+        return text.split("```sql")[1].split("```")[0].strip()
+    if "```" in text:
+        return text.split("```")[1].strip()
+    return (text or "").strip()
 
 
 def _parse_json_block(text: str, context: str = "") -> Optional[Dict[str, Any]]:
@@ -330,87 +340,17 @@ class StakeholderService:
                            meta={"category": category})
             return out
 
-        if self._llm_live(llm) and conversation_id:
-            plan = self._plan_turn(llm, tenant_id, conversation_id, question,
-                                   query_nodes, defn_nodes)
-            path, df_label = self._legacy_compute_path(plan)
-            if path == "python":
-                code, exec_res, toks = self._synthesize_and_execute_python(
-                    llm, tenant_id, conversation_id, question, df_label)
-                if exec_res is not None and exec_res.ok:
-                    rows_for_context = (exec_res.result_summary
-                                        if isinstance(exec_res.result_summary, list)
-                                        else [exec_res.result_summary])
-                    data_context = {"rows": rows_for_context}
-                    answer, syn_toks, chart_config = self._synthesize(llm, question, category, data_context)
-                    t_in = toks[0] + syn_toks[0]
-                    t_out = toks[1] + syn_toks[1]
-
-                    out = self._record(tenant_id, question, user_id, category, trace, answer,
-                                       AnswerMode.ADAPTED_APPROVED_QUERY, "ANSWERED", False, [],
-                                       facts=[f"computed via Python over cached data '{df_label}'"],
-                                       caveats=["dynamically generated Python over previously-fetched data"],
-                                       tokens_in=t_in, tokens_out=t_out,
-                                       python_cells=[{"code": code, "df_label": df_label,
-                                                      "result_summary": exec_res.result_summary}],
-                                       conversation_id=conversation_id)
-                    out["chart_config"] = chart_config
-                    out["chart_data"] = rows_for_context
-                    self.obs.event(tenant_id=tenant_id, trace_id=trace, stage="stakeholder.answer",
-                                   actor="stakeholder", resource=out["answer_id"], status="OK",
-                                   meta={"category": category,
-                                         "mode": AnswerMode.ADAPTED_APPROVED_QUERY.value,
-                                         "compute": "python"})
-                    return out
-                # Every Python synthesis/policy/execution attempt failed --
-                # fall through to the existing SQL path below exactly as if
-                # routing had chosen "sql" in the first place.
-
-        has_nodes = bool(query_nodes or defn_nodes)
-        if has_nodes and self._llm_live(llm):
-            sql, exec_res, toks = self._synthesize_and_execute_sql(
-                llm, tenant_id, question, query_nodes, defn_nodes)
-            if exec_res is not None and exec_res.ok:
-                label = ""
-                if exec_res.data is not None and conversation_id:
-                    label = self.data_cache.next_label(tenant_id, conversation_id)
-                    self.data_cache.put(tenant_id, conversation_id, label, question[:200], exec_res.data)
-                preview = []
-                if exec_res.data is not None:
-                    try:
-                        preview = exec_res.data.head(3).to_dict(orient="records")
-                    except Exception:  # noqa: BLE001 - non-DataFrame result
-                        preview = list(exec_res.data)[:3]
-                data_context = {"rows": preview}
-                answer, syn_toks, chart_config = self._synthesize(llm, question, category, data_context)
-                t_in = toks[0] + syn_toks[0]
-                t_out = toks[1] + syn_toks[1]
-
-                citations = [{
-                    "node_id": n.id,
-                    "title": n.title,
-                    "evidence_ref": n.evidence_ref,
-                    "freshness": n.confidence.get("freshness", 0.0),
-                } for n in (query_nodes + defn_nodes)]
-
-                out = self._record(tenant_id, question, user_id, category, trace, answer,
-                                   AnswerMode.ADAPTED_APPROVED_QUERY, "ANSWERED", False,
-                                   [n.id for n in (query_nodes + defn_nodes)],
-                                   citations=citations,
-                                   facts=["synthesized custom query based on approved knowledge"],
-                                   caveats=["dynamically generated SQL"],
-                                   tokens_in=t_in, tokens_out=t_out, queries_run=[sql],
-                                   produced_df_label=label,
-                                   conversation_id=conversation_id)
-                out["chart_config"] = chart_config
-                out["chart_data"] = preview
-                self.obs.event(tenant_id=tenant_id, trace_id=trace, stage="stakeholder.answer",
-                               actor="stakeholder", resource=out["answer_id"], status="OK",
-                               meta={"category": category, "mode": AnswerMode.ADAPTED_APPROVED_QUERY.value})
+        if self._llm_live(llm):
+            out = self._run_analyst_pipeline(
+                llm, tenant_id, conversation_id, question, user_id, category, trace,
+                query_nodes, defn_nodes)
+            if out is not None:
                 return out
-            # Every synthesis/repair attempt failed validation or execution —
-            # fall through to the verbatim-reuse path below rather than
-            # surfacing a raw SQL error.
+            # The pipeline owns the whole synthesis path now, including the
+            # aggregate one-off it falls back to internally. Re-running a
+            # standalone SQL block here would just re-bill the same three
+            # attempts, so the only thing left below is VERBATIM REUSE of an
+            # already-approved stored query.
 
         if query_nodes:
             all_details = []
@@ -590,24 +530,392 @@ class StakeholderService:
                        meta={"category": category, "mode": out["answer_mode"]})
         return out
 
+    # -- the analyst pipeline -------------------------------------------------
+    # One turn is: resolve semantics -> plan -> check the workspace -> retrieve
+    # only what is missing -> analyse -> interpret. Each stage is its own method
+    # returning its piece of the artifact, so the answer's provenance is built up
+    # as the turn happens rather than reconstructed at the end from whatever
+    # locals survived.
+
+    def _run_analyst_pipeline(self, llm: Any, tenant_id: str, conversation_id: str,
+                              question: str, user_id: str, category: str, trace: str,
+                              query_nodes: List[Any], defn_nodes: List[Any]
+                              ) -> Optional[Dict[str, Any]]:
+        """The whole turn. Returns None when nothing could be produced, which
+        leaves answer() free to fall through to the older paths."""
+        schema_ctx = self.schema_context.build(tenant_id, question, query_nodes, defn_nodes)
+        plan = self._plan_turn(llm, tenant_id, conversation_id, question,
+                               query_nodes, defn_nodes, schema_ctx=schema_ctx)
+
+        artifact = AnalysisArtifact(question=question, plan_rationale=plan.rationale)
+        self._record_semantics(artifact, schema_ctx)
+        caveats: List[str] = list(plan.caveats)
+        caveats.extend(self._uncertainty_caveats(schema_ctx))
+
+        label, meta = "", None
+        t_in_total, t_out_total = 0, 0
+
+        if plan.path in ("reuse", "widen"):
+            for existing in self._verdict_labels(plan):
+                self.workspace.register(tenant_id, conversation_id, existing)
+
+        # "aggregate" retrieves too -- it just retrieves an ungoverned one-off,
+        # which is exactly why it is marked unreconcilable below.
+        if plan.path in ("retrieve", "widen", "aggregate"):
+            label, meta, toks = self._retrieve_cube(
+                llm, tenant_id, conversation_id, question, plan, artifact, caveats,
+                schema_ctx)
+            t_in_total += toks[0]
+            t_out_total += toks[1]
+
+        self._record_population(artifact, plan, meta)
+        caveats.extend(self._population_caveats(plan, meta))
+
+        result, code, workspace_sql, toks = self._analyse(
+            llm, tenant_id, conversation_id, question, plan, artifact)
+        t_in_total += toks[0]
+        t_out_total += toks[1]
+        if result is None:
+            return None
+
+        rows = (result.result_summary if isinstance(result.result_summary, list)
+                else [result.result_summary])
+        answer, syn_toks, chart_config = self._synthesize(
+            llm, question, category, {"rows": rows})
+        t_in_total += syn_toks[0]
+        t_out_total += syn_toks[1]
+
+        artifact.result_summary = result.result_summary
+        artifact.chart_spec = getattr(result, "chart_spec", None) or chart_config
+        artifact.assumptions = list(caveats)
+
+        python_cells = [{"code": code, "df_label": artifact.datasets_used[0]
+                         if artifact.datasets_used else "",
+                         "result_summary": result.result_summary}] if code else []
+        out = self._record(
+            tenant_id, question, user_id, category, trace, answer,
+            AnswerMode.ADAPTED_APPROVED_QUERY, "ANSWERED", False,
+            [n.id for n in (query_nodes + defn_nodes)],
+            citations=[{"node_id": n.id, "title": n.title,
+                        "evidence_ref": n.evidence_ref,
+                        "freshness": n.confidence.get("freshness", 0.0)}
+                       for n in (query_nodes + defn_nodes)],
+            facts=self._pipeline_facts(plan, artifact),
+            caveats=caveats, tokens_in=t_in_total, tokens_out=t_out_total,
+            queries_run=list(artifact.warehouse_sql),
+            python_cells=python_cells, produced_df_label=label,
+            conversation_id=conversation_id,
+            extract_meta=asdict(meta) if meta is not None else {},
+            analysis=artifact.to_dict())
+        out["chart_config"] = artifact.chart_spec
+        out["chart_data"] = rows
+        self.obs.event(tenant_id=tenant_id, trace_id=trace, stage="stakeholder.answer",
+                       actor="stakeholder", resource=out["answer_id"], status="OK",
+                       meta={"category": category, "path": plan.path,
+                             "analysis": plan.analysis,
+                             "population_hash": artifact.population_hash})
+        return out
+
+    # -- stage: understanding --------------------------------------------------
+    @staticmethod
+    def _record_semantics(artifact: AnalysisArtifact, schema_ctx: SchemaContext) -> None:
+        resolution = schema_ctx.semantics
+        if resolution is None:
+            return
+        artifact.semantics_used = ([m.name for m in getattr(resolution, "metrics", [])]
+                                   + [d.name for d in getattr(resolution, "dimensions", [])])
+        artifact.unresolved_terms = list(getattr(resolution, "unresolved_terms", []) or [])
+
+    @staticmethod
+    def _uncertainty_caveats(schema_ctx: SchemaContext) -> List[str]:
+        """Say what was not known. A measure with no approved definition was
+        computed from raw events against somebody's guess at what it means, and
+        an unprofiled table means the filter literals were never checked against
+        the data -- both change how much weight the number deserves."""
+        out: List[str] = []
+        resolution = schema_ctx.semantics
+        for term in (getattr(resolution, "unresolved_terms", []) or []):
+            out.append(f"'{term}' is not a defined metric for this company -- this figure "
+                       f"was computed from raw events and has not been validated against "
+                       f"an approved definition.")
+        if schema_ctx.unprofiled:
+            out.append(f"tables {', '.join(sorted(schema_ctx.unprofiled))} could not be "
+                       f"profiled -- filter values were not verified against the data.")
+        for collision in schema_ctx.collisions:
+            out.append(collision)
+        return out
+
+    # -- stage: checking the workspace ----------------------------------------
+    @staticmethod
+    def _verdict_labels(plan: TurnPlan) -> List[str]:
+        labels = [plan.df_label] if plan.df_label else []
+        verdict = plan.verdict
+        if verdict is not None and getattr(verdict, "label", ""):
+            labels.append(verdict.label)
+        return list(dict.fromkeys(l for l in labels if l))
+
+    # -- stage: retrieving -----------------------------------------------------
+    def _retrieve_cube(self, llm: Any, tenant_id: str, conversation_id: str,
+                       question: str, plan: TurnPlan, artifact: AnalysisArtifact,
+                       caveats: List[str], schema_ctx: SchemaContext
+                       ) -> Tuple[str, Optional[ExtractMeta], Tuple[int, int]]:
+        sql, exec_res, toks = self._synthesize_and_execute_sql(
+            llm, tenant_id, question, [], [], plan=plan, schema_ctx=schema_ctx)
+        if sql:
+            artifact.warehouse_sql.append(sql)
+        if exec_res is None or not exec_res.ok or exec_res.data is None:
+            # A silent downgrade is the worst outcome here: the answer stops
+            # being reconcilable and nothing says so. (_population_caveats adds
+            # the "cannot be reconciled" line for the aggregate path itself; this
+            # one names the cube that was lost getting there.)
+            if plan.path == "aggregate":
+                return "", None, toks
+            # Downgrade, then actually retrieve on the downgraded path -- giving
+            # up here would abandon the turn to the older code paths, and the
+            # caveats explaining what was lost would go with it.
+            plan.path = "aggregate"
+            caveats.append(
+                f"the governed cube could not be retrieved "
+                f"({getattr(exec_res, 'error', 'no result')}), so this answer fell "
+                f"back to a one-off query.")
+            label, meta, retry_toks = self._retrieve_cube(
+                llm, tenant_id, conversation_id, question, plan, artifact, caveats,
+                schema_ctx)
+            return label, meta, (toks[0] + retry_toks[0], toks[1] + retry_toks[1])
+
+        label = self.data_cache.next_label(tenant_id, conversation_id)
+        meta = self._extract_meta(label, question, plan, exec_res, sql)
+        self.data_cache.put(tenant_id, conversation_id, label, question[:200],
+                            exec_res.data, meta=meta)
+        self.workspace.register(tenant_id, conversation_id, label)
+        artifact.datasets_used.append(label)
+        if plan.verdict is not None and getattr(plan.verdict, "supersedes", ""):
+            # Both stay on disk and both stay registered: they share a
+            # population_hash, so nothing already computed from the narrower cube
+            # is invalidated by the wider one arriving.
+            artifact.supersedes = plan.verdict.supersedes
+        return label, meta, toks
+
+    def _extract_meta(self, label: str, question: str, plan: TurnPlan,
+                      exec_res: Any, sql: str) -> ExtractMeta:
+        df = exec_res.data
+        # On the aggregate path there is no governed population, so there is no
+        # hash to carry. An empty population_hash reconciles with nothing, which
+        # is the truth about a one-off query and must not be papered over with
+        # whatever cube_sql happens to be lying around on the plan.
+        cube_sql = plan.cube_sql if plan.path != "aggregate" else None
+        time_column = plan.cube.time_column if plan.cube else ""
+        start, end = "", ""
+        if time_column and time_column in getattr(df, "columns", []):
+            # From the FRAME, never from the plan: what the SQL asked for and
+            # what the warehouse had are not the same thing, and coverage would
+            # otherwise happily reuse a cube for a window it never contained.
+            try:
+                start, end = str(df[time_column].min()), str(df[time_column].max())
+            except Exception:  # noqa: BLE001 - an unorderable column is not fatal
+                start, end = "", ""
+        ceiling = self.settings.policy.raw_extract_row_limit
+        truncated = bool(getattr(exec_res, "truncated", False)
+                         or len(df) >= ceiling
+                         or any("truncated" in w for w in (exec_res.warnings or [])))
+        return ExtractMeta(
+            label=label, description=question[:200],
+            grain=list(plan.base_view.grain) if plan.base_view else [],
+            columns=[str(c) for c in df.columns],
+            dtypes={str(c): str(t) for c, t in df.dtypes.items()},
+            row_count=len(df), truncated=truncated, sql=sql, created_at=now_iso(),
+            base_view=plan.base_view.name if plan.base_view else "",
+            population_hash=cube_sql.population_hash if cube_sql else "",
+            projection_hash=cube_sql.projection_hash if cube_sql else "",
+            dimensions=list(plan.cube.dimensions) if (plan.cube and cube_sql) else [],
+            non_additive=list(cube_sql.non_additive) if cube_sql else [],
+            filters=dict(plan.cube.filters) if (plan.cube and cube_sql) else {},
+            time_column=time_column, time_start=start, time_end=end,
+            grain_violated=bool(getattr(self, "_grain_violated", False)))
+
+    # -- the population, and what it obliges us to say -------------------------
+    def _record_population(self, artifact: AnalysisArtifact, plan: TurnPlan,
+                           meta: Optional[ExtractMeta]) -> None:
+        view = plan.base_view
+        aggregate = plan.path == "aggregate"
+        artifact.base_view = "" if aggregate or view is None else view.name
+        artifact.base_view_approved = bool(not aggregate and plan.base_view_approved)
+        artifact.base_view_grain_verified = bool(
+            not aggregate and view is not None and view.grain_verified)
+        if not aggregate and plan.cube_sql is not None:
+            artifact.population_hash = plan.cube_sql.population_hash
+            artifact.projection_hash = plan.cube_sql.projection_hash
+            artifact.non_additive = list(plan.cube_sql.non_additive)
+        if not aggregate and plan.cube is not None:
+            artifact.slice_filters = dict(plan.cube.filters)
+            artifact.dimensions = list(plan.cube.dimensions)
+        if plan.requirement is not None:
+            artifact.requirement = asdict(plan.requirement)
+        if plan.verdict is not None:
+            artifact.coverage = plan.verdict.to_dict()
+        # Reconcilable means: there IS a population to compare against, and it
+        # was verified to be at the grain it claims. Either one missing and a
+        # comparison with another answer proves nothing.
+        artifact.reconcilable = bool(artifact.population_hash
+                                     and artifact.base_view_grain_verified)
+        if meta is not None and meta.truncated:
+            artifact.assumptions.append("truncated")
+
+    def _population_caveats(self, plan: TurnPlan,
+                            meta: Optional[ExtractMeta]) -> List[str]:
+        """Four caveats, each attached to the condition that produces it. None of
+        these may be dropped for brevity -- they are what stops a provisional
+        number from reading like a settled one."""
+        out: List[str] = []
+        view = plan.base_view
+        if plan.path == "aggregate" or view is None:
+            out.append("dynamically generated SQL")
+            out.append("no base view governs this query, so this number cannot be "
+                       "reconciled against other answers in this conversation.")
+            return out
+        if not plan.base_view_approved:
+            out.append(f"this answer rests on an unreviewed base view definition "
+                       f"({view.name}); figures are provisional until it is approved.")
+        if not view.grain_verified:
+            # The cube guard refuses an unverified base, so reaching here means
+            # something bypassed it. Worth knowing about.
+            logger.error("answered over base view %s whose grain is unverified", view.name)
+            out.append(f"base view {view.name} is not verified to be at the grain it "
+                       f"claims, so every measure over it may be multiplied")
+        for rule in view.attributions or []:
+            out.append(self._attribution_caveat(rule))
+        if meta is not None and meta.truncated:
+            out.append(f"cube truncated at {meta.row_count} rows -- totals and rates "
+                       f"may be understated")
+        return out
+
+    @staticmethod
+    def _attribution_caveat(rule: AttributionRule) -> str:
+        """Rides along on EVERY turn over the base, including pure reuse turns
+        that ran no SQL at all -- the number still depends on the ranking."""
+        how = {"highest_intent": "highest intent", "most_frequent": "most frequent value",
+               "latest": "the latest value", "first": "the first value"}.get(
+                   rule.strategy, rule.strategy)
+        ranked = (f" ({' > '.join(rule.priority_values)})" if rule.priority_values else "")
+        grain = ", ".join(rule.grain) or "the grain"
+        return (f"{rule.column} attributed to each {grain} by {how}{ranked}; rows "
+                f"touching multiple {rule.column} values are counted once, under their "
+                f"highest-ranked one.")
+
+    # -- stage: analysing ------------------------------------------------------
+    def _analyse(self, llm: Any, tenant_id: str, conversation_id: str, question: str,
+                 plan: TurnPlan, artifact: AnalysisArtifact
+                 ) -> Tuple[Optional[Any], str, List[str], Tuple[int, int]]:
+        """Compute the answer over the local workspace. Returns
+        (result, python_code, workspace_sql, tokens); result None means nothing
+        worked and the caller should fall through."""
+        labels = self._analysis_labels(tenant_id, conversation_id, plan, artifact)
+        if not labels:
+            return None, "", [], (0, 0)
+        if plan.path == "aggregate":
+            # The one-off SQL already computed the answer; a second pass over its
+            # own output would be a wasted LLM call and a wasted round of code.
+            # (This is the pre-Task-14 behaviour, kept deliberately.)
+            preview = self._preview_result(tenant_id, conversation_id, labels[0])
+            return preview, "", [], (0, 0)
+        t_in, t_out = 0, 0
+
+        if plan.analysis == "workspace_sql":
+            sqls, ws_res, toks = self._synthesize_and_execute_workspace_sql(
+                llm, tenant_id, conversation_id, question, labels)
+            t_in, t_out = toks
+            artifact.workspace_sql.extend(sqls)
+            if ws_res is not None and ws_res.ok:
+                return self._workspace_result_as_analysis(ws_res), "", sqls, (t_in, t_out)
+            # Fall back to PYTHON, not to a new warehouse query: the data is
+            # already on this disk and a bad local query is not a reason to
+            # re-bill the warehouse.
+            logger.info("workspace SQL failed for tenant %s; falling back to Python",
+                        tenant_id)
+
+        code, py_res, toks = self._synthesize_and_execute_python(
+            llm, tenant_id, conversation_id, question, labels[0])
+        t_in += toks[0]
+        t_out += toks[1]
+        if py_res is None or not py_res.ok:
+            # The data was fetched and is on disk. Throwing the turn away over a
+            # failed analysis would re-bill the warehouse on the fallback path
+            # for rows we already have, so interpret a preview of the frame
+            # instead and say that is what happened.
+            preview = self._preview_result(tenant_id, conversation_id, labels[0])
+            if preview is None:
+                return None, "", list(artifact.workspace_sql), (t_in, t_out)
+            artifact.assumptions.append(
+                "the analysis code could not be produced; this answer reads the first "
+                "rows of the extract rather than a computed result")
+            return preview, "", list(artifact.workspace_sql), (t_in, t_out)
+        artifact.python_code.append(code)
+        return py_res, code, list(artifact.workspace_sql), (t_in, t_out)
+
+    def _preview_result(self, tenant_id: str, conversation_id: str,
+                        label: str) -> Optional[Any]:
+        from .execution.python_sandbox import PythonExecResult
+
+        df = self.data_cache.get(tenant_id, conversation_id, label)
+        if df is None:
+            return None
+        try:
+            rows = df.head(3).to_dict(orient="records")
+        except Exception:  # noqa: BLE001
+            return None
+        return PythonExecResult(ok=True, result_summary=rows,
+                                result_shape={"rows": len(df),
+                                              "columns": len(df.columns)})
+
+    def _analysis_labels(self, tenant_id: str, conversation_id: str, plan: TurnPlan,
+                         artifact: AnalysisArtifact) -> List[str]:
+        """What the analysis may read: this turn's extract first, then whatever
+        the coverage verdict named. Newest first, because a widen supersedes."""
+        labels = list(artifact.datasets_used) + self._verdict_labels(plan)
+        labels = list(dict.fromkeys(labels))
+        if labels:
+            artifact.datasets_used = labels
+            return labels
+        available = [f["label"] for f in
+                     self.data_cache.list_available(tenant_id, conversation_id)]
+        artifact.datasets_used = available[-1:] if available else []
+        return artifact.datasets_used
+
+    @staticmethod
+    def _workspace_result_as_analysis(ws_res: Any) -> Any:
+        """Present a WorkspaceResult the way the interpretation stage expects a
+        PythonExecResult: a small row list, capped the same way."""
+        from .execution.python_sandbox import MAX_RESULT_ROWS, PythonExecResult
+
+        df = ws_res.data
+        try:
+            rows = df.head(MAX_RESULT_ROWS).to_dict(orient="records")
+        except Exception:  # noqa: BLE001
+            rows = []
+        return PythonExecResult(ok=True, result_summary=rows,
+                                result_shape={"rows": int(ws_res.row_count),
+                                              "columns": len(getattr(df, "columns", []))})
+
+    @staticmethod
+    def _pipeline_facts(plan: TurnPlan, artifact: AnalysisArtifact) -> List[str]:
+        facts: List[str] = []
+        if artifact.base_view:
+            facts.append(f"computed over the governed base view {artifact.base_view!r} "
+                         f"(population {artifact.population_hash[:12]})")
+        if plan.path in ("reuse", "widen") and artifact.coverage.get("reason"):
+            facts.append(artifact.coverage["reason"])
+        if artifact.workspace_sql:
+            facts.append("re-cut locally in the analytical workspace; no warehouse query")
+        if artifact.python_code:
+            facts.append("analysed in Python over the materialised cube")
+        return facts
+
     # -- helpers -------------------------------------------------------------
     def _llm_live(self, llm: Optional[Any] = None) -> bool:
         client = llm if llm is not None else getattr(self, "llm", None)
         if client is None:
             return False
         return getattr(client, "name", "null") != "null"
-
-    def _legacy_compute_path(self, plan: TurnPlan) -> Tuple[str, str]:
-        """Bridge from TurnPlan to the pre-Task-14 two-way branch in answer().
-
-        answer() is restructured into the full analyst pipeline in Task 14; until
-        then a reuse verdict over a cached cube is the only case the old branch
-        can express, and everything else falls through to the SQL path exactly as
-        before.
-        """
-        if plan.path == "reuse" and plan.df_label:
-            return "python", plan.df_label
-        return "sql", ""
 
     # -- planning ------------------------------------------------------------
     # The old _choose_compute_path only ever picked between "python" and "sql",
@@ -1076,14 +1384,7 @@ what was asked."""
             res = llm.generate(prompt=prompt, system_prompt=sys_prompt, temperature=0.0)
             text = (res.text or "").strip() if res and hasattr(res, "text") else ""
 
-            if "```sql" in text:
-                sql = text.split("```sql")[1].split("```")[0].strip()
-            elif "```" in text:
-                sql = text.split("```")[1].strip()
-            else:
-                sql = text.strip()
-
-            return sql, (getattr(res, "tokens_in", 0), getattr(res, "tokens_out", 0))
+            return _extract_sql_block(text), (getattr(res, "tokens_in", 0), getattr(res, "tokens_out", 0))
         except Exception as exc:  # noqa: BLE001 - SQL synthesis is best-effort
             logger.warning("SQL synthesis failed for question %r: %s", question, exc,
                            exc_info=True)
@@ -1380,6 +1681,108 @@ what was asked."""
 
         return "", None, (t_in_total, t_out_total)
 
+    # Both analysis paths read the same cubes, so they get the same rules. A cube
+    # is not a row-per-event table, an averaged measure is stored decomposed, and
+    # a non-additive measure cannot be rolled up at all -- get any of these wrong
+    # and the number is wrong in a way that looks right.
+    CUBE_READING_RULES = (
+        "The DataFrame is a CUBE: one row per combination of {dimensions}, with "
+        "pre-aggregated measures. To answer at fewer dimensions, SUM over the ones "
+        "you are dropping -- never treat a row as a single event.\n"
+        "An averaged measure is stored as `<name>_sum` and `<name>_count`. To read "
+        "it, divide: SUM(x_sum) / NULLIF(SUM(x_count), 0). Never average `x_sum`, "
+        "and never average an average.\n"
+        "{non_additive}")
+
+    @classmethod
+    def _cube_rules(cls, dimensions: List[str], non_additive: List[str]) -> str:
+        if non_additive:
+            na = (f"These measures are NON-ADDITIVE: {non_additive}. Do not SUM them "
+                  f"and do not group them to fewer columns than the cube already "
+                  f"carries -- the numbers would be wrong in a way that looks right.")
+        else:
+            na = "Every measure in this cube is additive."
+        return cls.CUBE_READING_RULES.format(
+            dimensions=dimensions or "the cube's own columns", non_additive=na)
+
+    def _frame_cube_facts(self, desc: Dict[str, Any]) -> Tuple[List[str], List[str]]:
+        return (list(desc.get("dimensions") or []),
+                list(desc.get("non_additive") or []))
+
+    # -- the workspace-SQL analysis path -------------------------------------
+    def _workspace_prompt(self, question: str, frames: List[Dict[str, Any]],
+                          prior_sql: str = "", prior_error: str = "") -> Tuple[str, str]:
+        lines = [f"Question: {question}", "",
+                 "These views are registered in the local workspace:"]
+        dims: List[str] = []
+        non_additive: List[str] = []
+        for f in frames:
+            dims.extend(f.get("dimensions") or [])
+            non_additive.extend(f.get("non_additive") or [])
+            lines.append(
+                f"- {f['label']}: {f.get('description', '')}\n"
+                f"    columns={f.get('columns')}\n"
+                f"    dimensions={f.get('dimensions')} | non_additive="
+                f"{f.get('non_additive')} | rows={f.get('row_count')}\n"
+                f"    sample={f.get('sample')}")
+        if prior_sql:
+            lines.extend(["", f"Your previous query failed:\n{prior_sql}",
+                          f"\nError:\n{prior_error}",
+                          "\nWrite a corrected query that fixes this specific problem."])
+        system = (
+            "You are an expert data analyst. Answer the question with a single "
+            "DuckDB SELECT over the views listed -- they are already registered, "
+            "so do not create, attach, copy or install anything, and do not read "
+            "from any file or table not listed. The dialect is DuckDB.\n\n"
+            + self._cube_rules(sorted(set(dims)), sorted(set(non_additive)))
+            + "\n\nReturn ONLY the SQL in a ```sql block. If the question cannot be "
+              "answered from these views, output NOTHING.")
+        return "\n".join(lines), system
+
+    def _synthesize_and_execute_workspace_sql(
+            self, llm: Any, tenant_id: str, conversation_id: str, question: str,
+            labels: Optional[List[str]] = None,
+            max_attempts: int = 3) -> Tuple[List[str], Any, Tuple[int, int]]:
+        """Mirror of _synthesize_and_execute_python for local DuckDB.
+
+        On repeated failure the caller falls back to the PYTHON path, not to a
+        new warehouse query: the data is already on this disk, and a bad local
+        query is not a reason to re-bill the warehouse.
+
+        Returns (sql_attempts_run, WorkspaceResult_or_None, tokens).
+        """
+        frames = [f for f in self.data_cache.list_available(tenant_id, conversation_id)
+                  if not labels or f["label"] in labels]
+        if not frames:
+            return [], None, (0, 0)
+        for f in frames:
+            self.workspace.register(tenant_id, conversation_id, f["label"])
+
+        run: List[str] = []
+        prior_sql, prior_error = "", ""
+        t_in_total, t_out_total = 0, 0
+        for attempt in range(1, max_attempts + 1):
+            prompt, system = self._workspace_prompt(question, frames, prior_sql, prior_error)
+            try:
+                res = llm.generate(prompt=prompt, system_prompt=system, temperature=0.0)
+                text = (res.text or "").strip() if res and hasattr(res, "text") else ""
+                t_in_total += getattr(res, "tokens_in", 0)
+                t_out_total += getattr(res, "tokens_out", 0)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("workspace SQL synthesis failed: %s", exc, exc_info=True)
+                return run, None, (t_in_total, t_out_total)
+            sql = _extract_sql_block(text)
+            if not sql:
+                break                       # the model declined; retrying will not help
+            out = self.workspace.query(tenant_id, conversation_id, sql)
+            run.append(out.sql or sql)
+            if out.ok:
+                return run, out, (t_in_total, t_out_total)
+            logger.warning("workspace SQL failed for tenant %s (attempt %d/%d): %s",
+                           tenant_id, attempt, max_attempts, out.error)
+            prior_sql, prior_error = sql, out.error
+        return run, None, (t_in_total, t_out_total)
+
     def _synthesize_python(self, llm: Any, question: str, df_label: str,
                            frame_desc: Dict[str, Any], prior_code: str = "",
                            prior_error: str = "") -> Tuple[str, Tuple[int, int]]:
@@ -1394,6 +1797,7 @@ what was asked."""
                 f"\nYour previous attempt failed:\n{prior_code}\n\nError:\n{prior_error}\n\n"
                 "Write corrected code that fixes this specific problem."
             )
+        dimensions, non_additive = self._frame_cube_facts(frame_desc)
         sys_prompt = (
             "You are an expert data analyst. Write pandas Python code that computes the "
             f"answer to the question using the DataFrame `{df_label}` (already in scope -- "
@@ -1401,9 +1805,14 @@ what was asked."""
             "answer to a variable named `result` (a scalar, dict, list, or small DataFrame "
             "-- not the full raw DataFrame unmodified). Only `pandas` (as `pd`), `numpy`, "
             "`math`, `statistics`, `datetime`, `collections`, and `re` may be imported; no "
-            "file, network, or system access is available and will be rejected. Return "
-            "ONLY the Python code in a ```python block. If the question can't be answered "
-            "from this DataFrame, output NOTHING."
+            "file, network, or system access is available and will be rejected.\n\n"
+            + self._cube_rules(dimensions, non_additive) +
+            "\n\nIf a chart would make the finding clearer, also assign `chart = "
+            "{'kind': ..., 'x': ..., 'y': ..., 'series': ..., 'title': ...}` describing a "
+            "chart over the rows in `result`. It is a SPEC, not a drawing: do not attempt "
+            "to plot, render, or save an image.\n\n"
+            "Return ONLY the Python code in a ```python block. If the question can't be "
+            "answered from this DataFrame, output NOTHING."
         )
         try:
             res = llm.generate(prompt=prompt, system_prompt=sys_prompt, temperature=0.0)
@@ -1460,7 +1869,19 @@ what was asked."""
                 prior_code, prior_error = code, "; ".join(decision.reasons)
                 continue
 
-            exec_res = run_python_sandboxed(decision.approved_code, {df_label: df})
+            # Load from Parquet in the worker when the extract is on disk: a
+            # cube can be large, and pickling it across the process boundary
+            # costs a second full copy of it in this process.
+            path = self.extract_store.parquet_paths(
+                tenant_id, conversation_id).get(df_label, "")
+            if path:
+                exec_res = run_python_sandboxed(
+                    decision.approved_code, dataframe_paths={df_label: path},
+                    memory_mb=EXTRACT_MEMORY_MB, timeout_s=EXTRACT_TIMEOUT_S)
+            else:
+                exec_res = run_python_sandboxed(
+                    decision.approved_code, {df_label: df},
+                    memory_mb=EXTRACT_MEMORY_MB, timeout_s=EXTRACT_TIMEOUT_S)
             if exec_res.ok:
                 return decision.approved_code, exec_res, (t_in_total, t_out_total)
 
@@ -1517,7 +1938,9 @@ what was asked."""
                 queries_run: Optional[List[str]] = None,
                 python_cells: Optional[List[Dict[str, Any]]] = None,
                 produced_df_label: str = "",
-                conversation_id: str = "") -> Dict[str, Any]:
+                conversation_id: str = "",
+                extract_meta: Optional[Dict[str, Any]] = None,
+                analysis: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         answer_id = new_id("ans")
         cost = round((tokens_in / 1000.0) * self.cost_per_1k_input
                      + (tokens_out / 1000.0) * self.cost_per_1k_output, 6)
@@ -1528,20 +1951,22 @@ what was asked."""
             "INSERT INTO stakeholder_answers (id,tenant_id,question,user_id,category,answer,"
             "answer_mode,status,trace_id,created_at,source_node_ids,citations,facts,caveats,"
             "freshness,tokens_in,tokens_out,cost,escalated,queries_run,python_cells,"
-            "produced_df_label,conversation_id) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "produced_df_label,conversation_id,extract_meta,analysis) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (answer_id, tenant_id, question, user_id, category, answer, mode.value, status,
              trace, now_iso(), dump_json(source_ids), dump_json(citations or []),
              dump_json(facts or []), dump_json(caveats or []), freshness,
              tokens_in, tokens_out, cost, int(escalated), dump_json(queries_run or []),
-             dump_json(python_cells or []), produced_df_label, conversation_id))
+             dump_json(python_cells or []), produced_df_label, conversation_id,
+             dump_json(extract_meta or {}), dump_json(analysis or {})))
         return {"answer_id": answer_id, "tenant_id": tenant_id, "question": question,
                 "category": category, "answer": answer, "answer_mode": mode.value,
                 "status": status, "escalated": escalated, "citations": citations or [],
                 "caveats": caveats or [], "facts": facts or [], "freshness": freshness,
                 "cost": cost, "trace_id": trace, "queries_run": queries_run or [],
                 "python_cells": python_cells or [], "produced_df_label": produced_df_label,
-                "conversation_id": conversation_id}
+                "conversation_id": conversation_id,
+                "extract_meta": extract_meta or {}, "analysis": analysis or {}}
 
     # -- feedback + quality -------------------------------------------------
     def record_feedback(self, tenant_id: str, answer_id: str, user_id: str,

@@ -49,6 +49,10 @@ class PythonExecResult:
     ok: bool
     result_summary: Any = None
     result_shape: Optional[Dict[str, int]] = None
+    # A chart SPEC the cell optionally assigned -- data describing a chart, never
+    # an image. Sanitised on the way out of the sandbox like every other value
+    # that crosses this boundary.
+    chart_spec: Optional[Dict[str, Any]] = None
     stdout: str = ""
     error: str = ""
     execution_ms: float = 0.0
@@ -72,7 +76,8 @@ def _worker(code: str, dataframes: Dict[str, pd.DataFrame], memory_mb: int,
         try:
             loaded[label] = pd.read_parquet(path)
         except Exception as exc:  # noqa: BLE001
-            conn.send(("error", f"could not load DataFrame {label!r} from disk: {exc}", ""))
+            conn.send(("error", f"could not load DataFrame {label!r} from disk: {exc}",
+                       "", None))
             conn.close()
             return
 
@@ -82,13 +87,37 @@ def _worker(code: str, dataframes: Dict[str, pd.DataFrame], memory_mb: int,
         with contextlib.redirect_stdout(stdout_buf):
             exec(compile(code, "<python_cell>", "exec"), {"__builtins__": _SAFE_BUILTINS}, scope)
         if "result" not in scope:
-            conn.send(("error", "code did not assign a 'result' variable", stdout_buf.getvalue()))
+            conn.send(("error", "code did not assign a 'result' variable",
+                       stdout_buf.getvalue(), None))
             return
-        conn.send(("ok", scope["result"], stdout_buf.getvalue()))
+        conn.send(("ok", scope["result"], stdout_buf.getvalue(), scope.get("chart")))
     except Exception:
-        conn.send(("error", traceback.format_exc(limit=3), stdout_buf.getvalue()))
+        conn.send(("error", traceback.format_exc(limit=3), stdout_buf.getvalue(), None))
     finally:
         conn.close()
+
+
+CHART_KEYS = ("kind", "x", "y", "series", "title")
+CHART_VALUE_CHARS = 120
+
+
+def _sanitise_chart(chart: Any) -> Optional[Dict[str, Any]]:
+    """A chart spec is arbitrary output from user code, and it goes on to be
+    persisted and rendered. Keep only the known keys, and only as short strings
+    (or a list of them for `series`) -- never a DataFrame, an object, or a blob
+    that would smuggle raw rows past every other cap on this boundary."""
+    if not isinstance(chart, dict):
+        return None
+    out: Dict[str, Any] = {}
+    for key in CHART_KEYS:
+        if key not in chart:
+            continue
+        value = chart[key]
+        if isinstance(value, (list, tuple)):
+            out[key] = [str(v)[:CHART_VALUE_CHARS] for v in list(value)[:MAX_RESULT_ROWS]]
+        elif isinstance(value, (str, int, float, bool)):
+            out[key] = str(value)[:CHART_VALUE_CHARS]
+    return out or None
 
 
 def _cap_structured_summary(value: Any) -> Any:
@@ -156,7 +185,7 @@ def run_python_sandboxed(code: str, dataframes: Optional[Dict[str, pd.DataFrame]
                                     execution_ms=(time.monotonic() - start) * 1000)
 
         try:
-            status, payload, stdout = parent_conn.recv()
+            status, payload, stdout, chart = parent_conn.recv()
         except EOFError:
             proc.join(2)
             if proc.is_alive():
@@ -187,6 +216,7 @@ def run_python_sandboxed(code: str, dataframes: Optional[Dict[str, pd.DataFrame]
 
         summary, shape = _summarize(payload)
         return PythonExecResult(ok=True, result_summary=summary, result_shape=shape,
+                                chart_spec=_sanitise_chart(chart),
                                 stdout=capped_stdout, execution_ms=elapsed_ms)
     finally:
         parent_conn.close()
