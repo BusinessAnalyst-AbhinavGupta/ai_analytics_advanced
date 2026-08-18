@@ -1744,6 +1744,13 @@ what was asked."""
         "An averaged measure is stored as `<name>_sum` and `<name>_count`. To read "
         "it, divide: SUM(x_sum) / NULLIF(SUM(x_count), 0). Never average `x_sum`, "
         "and never average an average.\n"
+        "SELECT the measures your answer has to state, including any you ranked or "
+        "filtered by. A query that orders by a share and then selects only the "
+        "label returns a name with no number behind it, and the answer cannot "
+        "report the share it just computed.\n"
+        "Do not LIMIT away rows the answer needs to justify itself. A cube of a few "
+        "hundred rows or fewer should come back whole and ordered; `LIMIT 1` is only "
+        "right when the single row genuinely is the entire answer.\n"
         "{non_additive}")
 
     @classmethod

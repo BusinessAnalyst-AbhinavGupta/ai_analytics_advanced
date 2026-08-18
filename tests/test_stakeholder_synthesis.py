@@ -119,3 +119,28 @@ class TestTheWorkspaceInventoryShownToThePlanner(unittest.TestCase):
 
     def test_the_planner_is_told_to_reuse_the_exact_name(self):
         self.assertIn("name it EXACTLY as", self._prompt())
+
+
+class TestCubeReadingRules(unittest.TestCase):
+    """The workspace query has to keep the numbers the answer will quote. Live,
+    a "largest share" turn wrote `SELECT service_line ... ORDER BY
+    session_count / SUM(session_count) OVER () DESC LIMIT 1` -- it computed the
+    share, ranked by it, then selected only the label, so the answer had a name
+    and no number and could not state the share at all."""
+
+    def _rules(self):
+        return StakeholderService._cube_rules(["service_line"], [])
+
+    def test_measures_ranked_by_must_be_selected(self):
+        self.assertIn("including any you ranked or", self._rules())
+
+    def test_small_cubes_come_back_whole(self):
+        self.assertIn("whole and ordered", self._rules())
+
+    def test_the_additive_case_is_still_stated(self):
+        self.assertIn("Every measure in this cube is additive.", self._rules())
+
+    def test_non_additive_measures_still_win_the_slot(self):
+        rules = StakeholderService._cube_rules(["service_line"], ["uniques"])
+        self.assertIn("NON-ADDITIVE", rules)
+        self.assertIn("whole and ordered", rules)
