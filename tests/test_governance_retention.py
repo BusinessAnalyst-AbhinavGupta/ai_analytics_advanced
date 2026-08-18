@@ -72,3 +72,51 @@ class TestRetention(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class TestExtractRetention(unittest.TestCase):
+    """Extract Parquet at a 1,000,000-row ceiling accumulates fast, and unlike a
+    database row it does not disappear when its answer is purged. The sweep runs
+    inside the same purge job rather than on a scheduler of its own."""
+
+    def setUp(self):
+        import tempfile
+        import pandas as pd
+        from analytics_platform.execution.extract_store import ExtractMeta, ExtractStore
+
+        self.ctx, self.base = enabled_ctx()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tid = self.ctx.tenants.create_tenant("SweepCo", retention_days=90).id
+        self.store = ExtractStore(self._tmp.name)
+        self.ctx.retention.extract_store = self.store
+        self.ctx.settings.policy.extract_retention_days = 30
+
+        def put(conversation_id, created_at):
+            self.store.put(self.tid, conversation_id,
+                           ExtractMeta(label="df_1", created_at=created_at, row_count=1),
+                           pd.DataFrame({"a": [1]}))
+
+        put("old", "2020-01-01T00:00:00Z")
+        put("fresh", now_iso())
+
+    def tearDown(self):
+        self._tmp.cleanup()
+        self.base.close()
+
+    def _conversations(self):
+        return {c for c in ("old", "fresh")
+                if self.store.meta(self.tid, c, "df_1") is not None}
+
+    def test_a_dry_run_removes_no_parquet(self):
+        self.ctx.retention.purge_expired(dry_run=True)
+        self.assertEqual(self._conversations(), {"old", "fresh"})
+
+    def test_an_expired_conversation_directory_is_swept_and_a_fresh_one_kept(self):
+        out = self.ctx.retention.purge_expired(dry_run=False)
+        self.assertEqual(self._conversations(), {"fresh"})
+        self.assertEqual(out["removed"]["extracts"], 1)
+
+    def test_a_zero_retention_setting_sweeps_nothing(self):
+        """0 means 'no extract retention policy', not 'delete everything'."""
+        self.ctx.settings.policy.extract_retention_days = 0
+        self.ctx.retention.purge_expired(dry_run=False)
+        self.assertEqual(self._conversations(), {"old", "fresh"})

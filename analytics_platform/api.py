@@ -398,7 +398,8 @@ def make_context(settings: Optional[Settings] = None,
     research = ResearchService(stores, observability=obs, embedder=embedder)
     auth = AuthGate(settings)
     billing = BillingService(stores, settings=settings, observability=obs)
-    retention = RetentionService(stores, tenants=tenants, observability=obs)
+    retention = RetentionService(stores, tenants=tenants, observability=obs,
+                                 settings=settings)
     junior = JuniorEngine(stores, executor=executor, tenants=tenants,
                           observability=obs, settings=settings, embedder=embedder)
     junior_worker = _make_junior_worker(settings, stores, junior, obs, embedder)
@@ -467,7 +468,8 @@ def ensure_services(ctx: AppContext) -> AppContext:
                                      observability=ctx.observability)
     if ctx.retention is None:
         ctx.retention = RetentionService(ctx.stores, tenants=ctx.tenants,
-                                         observability=ctx.observability)
+                                         observability=ctx.observability,
+                                         settings=ctx.settings)
     if ctx.junior is None:
         from .junior import JuniorEngine
         ctx.junior = JuniorEngine(ctx.stores, executor=ctx.executor,
