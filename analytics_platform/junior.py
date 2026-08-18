@@ -432,7 +432,16 @@ class JuniorEngine:
         # The sample bounds what may be claimed. If it saturated, some values were
         # never seen -- so no column of this table may claim a complete value list,
         # whatever its distinct count looks like.
-        saturated = len(sample) >= sample_rows
+        #
+        # Counting rows alone cannot detect this. The warehouse may return FEWER
+        # rows than we asked for and still have cut the result short: Metabase
+        # caps unaggregated queries at 2,000 rows by default whatever LIMIT we
+        # send, so a 10,000-row sample request comes back as 2,000. Read by count
+        # that looks like "the table was smaller than the sample" -- the one
+        # reading under which completeness IS claimable -- and the profile would
+        # then assert a complete value list for a table it saw a millionth of.
+        # Those values go straight into the filter literals of generated SQL.
+        saturated = len(sample) >= sample_rows or bool(getattr(res, "truncated", False))
         stamp = now_iso()
         profiles = [self._profile_column(sample, col, saturated, stamp)
                     for col in sample.columns]

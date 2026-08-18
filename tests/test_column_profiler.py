@@ -40,6 +40,10 @@ class FakeExecutor:
     def execute(self, sql, ctx):
         self.call_count += 1
         self.sql_seen.append(sql)
+        if getattr(self, "truncate_sample", False) and not sql.lower().lstrip().startswith(
+                "select count(*)"):
+            return QueryResult(ok=True, data=self._df.copy(), row_count=len(self._df),
+                               columns=list(self._df.columns), truncated=True)
         if sql.lower().lstrip().startswith("select count(*)"):
             total = self.row_total if self.row_total is not None else len(self._df)
             return QueryResult(ok=True, data=pd.DataFrame({"row_count": [total]}),
@@ -287,3 +291,49 @@ class TestCatalogDuplicateBug(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestASaturatedSampleCannotClaimCompleteness(unittest.TestCase):
+    """The warehouse can return FEWER rows than the sample asked for and still
+    say the result was cut short -- Metabase caps unaggregated queries at 2,000
+    rows by default, whatever LIMIT we send.
+
+    Counting rows alone cannot see that: 2,000 < 10,000 reads as "the table was
+    smaller than the sample", which is the one interpretation under which a
+    complete value list IS claimable. So a truncated sample that happens to be
+    short would assert `values_complete=True` over a table it saw a millionth
+    of, and those values go straight into the filter literals of generated SQL.
+    """
+
+    def setUp(self):
+        self.ctx = make_ctx()
+        self.tid = self.ctx.tenants.create_tenant("TruncCo").id
+        self.fake = FakeExecutor()
+        self.fake.returns(pd.DataFrame({"status": ["a", "b"], "n": [1, 2]}))
+        self.fake.row_total = 628_358_776
+        self.engine = JuniorEngine(self.ctx.stores, executor=self.fake,
+                                   tenants=self.ctx.tenants, settings=self.ctx.settings)
+        self.ctx.tenants.add_datasource(self.tid, "t", DataSourceKind.DIRECT_DB,
+                                        dialect="athena", tables=["t"])
+
+    def tearDown(self):
+        self.ctx.close()
+
+    def test_a_short_but_truncated_sample_forfeits_completeness(self):
+        self.fake.truncate_sample = True
+        profiles = self.engine.profile_tables(self.tid, ["t"], force=True)["t"]
+        self.assertTrue(profiles, "expected profiles")
+        for p in profiles:
+            self.assertFalse(p.values_complete,
+                             f"{p.column} claimed a complete value list from a "
+                             f"truncated sample")
+
+    def test_the_payload_records_that_the_sample_saturated(self):
+        self.fake.truncate_sample = True
+        self.engine.profile_tables(self.tid, ["t"], force=True)
+        self.assertTrue(self.engine.get_profile_payload(self.tid, "t")["sample_saturated"])
+
+    def test_an_untruncated_short_sample_still_claims_completeness(self):
+        """The table really was smaller than the sample -- that IS complete."""
+        profiles = self.engine.profile_tables(self.tid, ["t"], force=True)["t"]
+        self.assertTrue(any(p.values_complete for p in profiles))
