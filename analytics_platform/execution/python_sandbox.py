@@ -26,6 +26,13 @@ import pandas as pd
 
 DEFAULT_TIMEOUT_S = 10.0
 DEFAULT_MEMORY_MB = 512
+# The extract path works over a materialised cube, which may run to the
+# raw_extract_row_limit ceiling. Reading that from Parquet does not fit in the
+# 512MB default, and the read itself is not instant -- so the cube-analysis
+# callers pass these instead. The defaults above are untouched: every other
+# caller depends on them.
+EXTRACT_MEMORY_MB = 4096
+EXTRACT_TIMEOUT_S = 30.0
 MAX_RESULT_ROWS = 20
 MAX_RESULT_CHARS = 4000
 
@@ -48,7 +55,7 @@ class PythonExecResult:
 
 
 def _worker(code: str, dataframes: Dict[str, pd.DataFrame], memory_mb: int,
-            timeout_s: float, conn) -> None:
+            timeout_s: float, conn, dataframe_paths: Optional[Dict[str, str]] = None) -> None:
     try:
         import resource
         cpu_limit = int(timeout_s) + 5
@@ -57,7 +64,19 @@ def _worker(code: str, dataframes: Dict[str, pd.DataFrame], memory_mb: int,
     except (ImportError, ValueError, OSError):
         pass  # best-effort: not all platforms support these rlimits
 
-    scope: Dict[str, Any] = {"pd": pd, **dataframes}
+    # Loaded AFTER the rlimits above, deliberately: a runaway read of a huge or
+    # corrupt Parquet file is then bounded by the same memory ceiling as the
+    # user's code. User code still just sees `df_1` -- it never learns the path.
+    loaded: Dict[str, Any] = {}
+    for label, path in (dataframe_paths or {}).items():
+        try:
+            loaded[label] = pd.read_parquet(path)
+        except Exception as exc:  # noqa: BLE001
+            conn.send(("error", f"could not load DataFrame {label!r} from disk: {exc}", ""))
+            conn.close()
+            return
+
+    scope: Dict[str, Any] = {"pd": pd, **loaded, **(dataframes or {})}
     stdout_buf = io.StringIO()
     try:
         with contextlib.redirect_stdout(stdout_buf):
@@ -110,12 +129,18 @@ def _summarize(value: Any):
         return str(value)[:MAX_RESULT_CHARS], None
 
 
-def run_python_sandboxed(code: str, dataframes: Dict[str, pd.DataFrame],
+def run_python_sandboxed(code: str, dataframes: Optional[Dict[str, pd.DataFrame]] = None,
                           timeout_s: float = DEFAULT_TIMEOUT_S,
-                          memory_mb: int = DEFAULT_MEMORY_MB) -> PythonExecResult:
+                          memory_mb: int = DEFAULT_MEMORY_MB,
+                          dataframe_paths: Optional[Dict[str, str]] = None) -> PythonExecResult:
+    """`dataframes` keeps its positional slot and semantics so every existing
+    caller is untouched. `dataframe_paths` labels are read with `pd.read_parquet`
+    inside the child, before `exec`, so a large frame never crosses the pipe."""
     ctx = mp.get_context("spawn")
     parent_conn, child_conn = ctx.Pipe(duplex=False)
-    proc = ctx.Process(target=_worker, args=(code, dataframes, memory_mb, timeout_s, child_conn))
+    proc = ctx.Process(target=_worker,
+                       args=(code, dataframes or {}, memory_mb, timeout_s, child_conn,
+                             dataframe_paths or {}))
     start = time.monotonic()
     proc.start()
     child_conn.close()  # only the child writes; parent must not hold this open
