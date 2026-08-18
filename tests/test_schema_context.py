@@ -47,6 +47,9 @@ class SpyJunior:
         self.profile_calls = []
         self.profile_result = None
 
+    def profiled_tables(self, tenant_id):
+        return [t for t, v in self._profiles.items() if v]
+
     def get_catalog(self, tenant_id):
         return {"tables": [{"table": t, "columns": c, "types": ["object"] * len(c)}
                            for t, c in self._catalog.items()]}

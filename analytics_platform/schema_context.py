@@ -125,7 +125,16 @@ class SchemaContextBuilder:
         and letting the miss be visible.
         """
         names = [e.get("table", "") for e in self._catalog(tenant_id)]
-        names = [n for n in names if n]
+        # The catalog node only exists once refresh_catalog has run, but a
+        # profile can be written by an inline call at any time -- and the
+        # profile's own spelling is precisely the one a lookup must match.
+        try:
+            names += list(self.junior.profiled_tables(tenant_id))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("could not list profiled tables for %s: %s", tenant_id, exc)
+        seen_lower = set()
+        names = [n for n in names
+                 if n and not (n.lower() in seen_lower or seen_lower.add(n.lower()))]
         bare_counts: Dict[str, int] = {}
         for n in names:
             bare = n.split(".")[-1].lower()

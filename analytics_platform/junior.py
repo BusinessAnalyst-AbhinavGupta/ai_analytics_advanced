@@ -335,6 +335,21 @@ class JuniorEngine:
     def profile_node_title(self, table: str) -> str:
         return f"Column Profile: {table}"
 
+    def profiled_tables(self, tenant_id: str) -> List[str]:
+        """Every table holding a stored profile, spelled exactly as the profile
+        is keyed by.
+
+        Callers that match a table to its profile need this and cannot get it
+        from the catalog: the catalog node only exists once refresh_catalog has
+        run, while a profile can be written by an inline profiling call at any
+        time. The name in a base view's SQL is also not always the name the
+        profile was written under -- the parser drops the schema qualifier.
+        """
+        prefix = self.profile_node_title("")
+        return [n.title[len(prefix):].strip()
+                for n in self.brain(tenant_id).all(kind=NodeKind.DEFINITION, limit=1000)
+                if n.title.startswith(prefix) and n.title[len(prefix):].strip()]
+
     def _profile_node(self, tenant_id: str, table: str) -> Optional[KnowledgeNode]:
         title = self.profile_node_title(table)
         return next((n for n in self.brain(tenant_id).all(kind=NodeKind.DEFINITION, limit=1000)
