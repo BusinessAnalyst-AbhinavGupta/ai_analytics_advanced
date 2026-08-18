@@ -78,6 +78,9 @@ class Settings:
     junior_llm_cache_ttl_minutes: int = 60  # LLM enrichment cached per tenant (bill guard)
     llm_daily_cap: int = 20         # at most N LLM generations per tenant per UTC day (persisted)
     junior_human_signoff_days: int = 7 # initial window: every analysis -> human review
+    # Column profiling: rows sampled per table. Bigger is a better measurement
+    # and a slower one; a saturated sample forfeits every completeness claim.
+    profile_sample_rows: int = 50_000
 
     def resolve_db_path(self) -> str:
         """DEPRECATED: the single shared database. Use resolve_control_db_path()
@@ -166,6 +169,8 @@ class Settings:
                 os.environ.get("ANALYTICS_LLM_DAILY_CAP", "20")),
             junior_human_signoff_days=int(
                 os.environ.get("ANALYTICS_JUNIOR_HUMAN_SIGNOFF_DAYS", "7")),
+            profile_sample_rows=int(
+                os.environ.get("ANALYTICS_PROFILE_SAMPLE_ROWS", "50000")),
         )
 
     def to_dict(self) -> Dict[str, Any]:

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import time
 import uuid
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field, fields
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -244,6 +244,42 @@ class KnowledgeNode:
         d["kind"] = d["kind"].value
         d["status"] = d["status"].value
         return d
+
+
+# -- the semantic + physical layer the analyst reads before writing SQL -------
+
+PROFILE_CARDINALITY_CAP = 50     # <= this many distinct values -> store them all
+PROFILE_TOP_VALUES = 20          # above the cap -> store this many, by frequency
+
+
+@dataclass
+class ColumnProfile:
+    """What a column actually contains, measured rather than assumed.
+
+    `distinct_count` is load-bearing beyond the prompt: it is the input to the
+    cube cell-count guard, so an *absent* profile must stay distinguishable from
+    one measured as low-cardinality. Absent profiles are absent, never defaulted
+    to zero.
+    """
+
+    column: str
+    dtype: str
+    distinct_count: int
+    null_fraction: float
+    values: List[str]            # complete when values_complete, else top-N by frequency
+    values_complete: bool        # distinct_count <= PROFILE_CARDINALITY_CAP AND sample not saturated
+    min_value: str = ""          # populated for numeric / date / datetime columns
+    max_value: str = ""
+    profiled_at: str = ""
+    # For each candidate grain key in this table, the share of keys carrying more
+    # than one distinct value of THIS column. 0.0 means it is safe to carry onto
+    # that grain as-is; anything above 0 means it needs an attribution rule.
+    fanout_by_key: Dict[str, float] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "ColumnProfile":
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in d.items() if k in known})
 
 
 @dataclass

@@ -25,9 +25,11 @@ from .brain.embedding import Embedder
 from .brain.index import BrainIndex
 from .brain.store import CompanyBrain
 from .config import Settings
-from .database import Store
-from .domain import KnowledgeNode, NodeKind, ReviewStatus, clamp_junior_depth
+from .database import Store, dump_json, load_json
+from .domain import (PROFILE_CARDINALITY_CAP, PROFILE_TOP_VALUES, ColumnProfile,
+                     KnowledgeNode, NodeKind, ReviewStatus, clamp_junior_depth, now_iso)
 from .execution.base import ExecutionContext, QueryExecutor
+from .execution.policy import QueryPolicy
 from .llm.client import make_role_client
 from .observability import Observability
 from .stores import TenantStoreProvider
@@ -291,27 +293,203 @@ class JuniorEngine:
             "tables": entries
         }
         
-        # Persist to Company Brain
+        # Persist to Company Brain. Update in place -- creating on both branches
+        # appended a duplicate "Database Catalog" node on every refresh, and
+        # get_catalog takes the first match from all(), which could be a stale one.
+        # update_field re-syncs the search index, which is what this was reaching for.
         if cat_node:
-            cat_node.payload = payload
-            cat_node.updated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            # We don't have update_node exposed simply in store, but we can recreate it or find the right API.
-            # Wait, how do we update? The BrainStore doesn't expose a raw update payload method.
-            # Let's check BrainStore methods in a moment. We'll use a hack if needed.
-            # Let's just create a new one and supersede the old one.
-            self.brain(tenant_id).create(
-                kind=NodeKind.DEFINITION, title="Database Catalog",
-                summary="Full database schema catalog, automatically maintained.",
-                payload=payload, status=ReviewStatus.APPROVED
-            )
+            self.brain(tenant_id).update_field(cat_node.id, "payload", dump_json(payload))
         else:
             self.brain(tenant_id).create(
                 kind=NodeKind.DEFINITION, title="Database Catalog",
                 summary="Full database schema catalog, automatically maintained.",
                 payload=payload, status=ReviewStatus.APPROVED
             )
-            
+
         return payload
+
+    # -- stage 1b: column value profiling (read-only) ------------------------
+    # The catalog says a column exists and what type it is. It does not say that
+    # `status` holds 'complete' and not 'COMPLETED', that `city` has ~300 distinct
+    # values so grouping by it costs a wide cube, or that `service_line` carries
+    # more than one value per session and therefore needs an attribution rule.
+    # This is where those facts are measured. Profiling is the junior's job: the
+    # stakeholder may trigger and read it, never grow its own copy.
+
+    PROFILE_VALUE_CHARS = 100      # values land in an LLM prompt; bound each one
+    MAX_GRAIN_KEYS = 5             # candidate grain keys per table, by distinct count
+
+    def profile_node_title(self, table: str) -> str:
+        return f"Column Profile: {table}"
+
+    def _profile_node(self, tenant_id: str, table: str) -> Optional[KnowledgeNode]:
+        title = self.profile_node_title(table)
+        return next((n for n in self.brain(tenant_id).all(kind=NodeKind.DEFINITION, limit=1000)
+                     if n.title == title), None)
+
+    def get_profile_payload(self, tenant_id: str, table: str) -> Dict[str, Any]:
+        node = self._profile_node(tenant_id, table)
+        return dict(node.payload) if node else {}
+
+    def get_column_profiles(self, tenant_id: str, table: str) -> List[ColumnProfile]:
+        """Read back what was measured. An empty list means NOT PROFILED -- callers
+        that size a query off distinct_count must fail closed on that, never treat
+        it as 'profiled and small'."""
+        payload = self.get_profile_payload(tenant_id, table)
+        return [ColumnProfile.from_dict(c) for c in payload.get("columns", [])]
+
+    def profile_tables(self, tenant_id: str, tables: Optional[List[str]] = None,
+                       force: bool = False) -> Dict[str, List[ColumnProfile]]:
+        """Measure every column of each table and write one node per table.
+
+        `tables=None` profiles every table in the catalog. `force=False` skips
+        tables already profiled, which is what makes the stakeholder's inline call
+        cheap on the second question.
+        """
+        targets = list(tables) if tables else self._tables(tenant_id)
+        out: Dict[str, List[ColumnProfile]] = {}
+        for table in targets:
+            if not force and self._profile_node(tenant_id, table) is not None:
+                out[table] = self.get_column_profiles(tenant_id, table)
+                continue
+            try:
+                out[table] = self._profile_one_table(tenant_id, table)
+            except Exception as exc:  # noqa: BLE001 - profiling must never take a turn down
+                logger.warning("could not profile table %s for tenant %s: %s",
+                               table, tenant_id, exc, exc_info=True)
+                out[table] = []
+        return out
+
+    def _run_profiling_sql(self, tenant_id: str, sql: str, table: str):
+        """Every profiling query goes through QueryPolicy like any other query --
+        refresh_catalog's raw f-string bypass is a pattern to stop, not extend."""
+        policy = QueryPolicy(self.settings.policy)
+        decision = policy.validate(sql, allowed_tables=[table],
+                                   dialect=self.settings.source_dialect)
+        if decision.denied:
+            logger.warning("profiling SQL rejected by policy for %s: %s",
+                           table, decision.reasons)
+            return None
+        res = self.executor.execute(
+            decision.approved_sql,
+            ExecutionContext(tenant_id=tenant_id, question=f"profile {table}",
+                             dialect=self.settings.source_dialect))
+        return res if res.ok else None
+
+    def _profile_one_table(self, tenant_id: str, table: str) -> List[ColumnProfile]:
+        sample_rows = int(getattr(self.settings, "profile_sample_rows", 50_000))
+        res = self._run_profiling_sql(
+            tenant_id, f"SELECT * FROM {table} LIMIT {sample_rows}", table)
+        if res is None or res.data is None:
+            return []
+        sample = res.data
+
+        # The real row count where it can be had cheaply. Task 7's cell guard
+        # divides by this; a sample size standing in for a 1.2M-row table would
+        # let it wave through a cube 24x larger than it believes.
+        count_res = self._run_profiling_sql(
+            tenant_id, f"SELECT COUNT(*) AS row_count FROM {table}", table)
+        row_count_is_estimate = True
+        row_count_estimate = len(sample)
+        if count_res is not None and count_res.data is not None and len(count_res.data):
+            try:
+                row_count_estimate = int(count_res.data.iloc[0, 0])
+                row_count_is_estimate = False
+            except (TypeError, ValueError):
+                pass
+
+        # The sample bounds what may be claimed. If it saturated, some values were
+        # never seen -- so no column of this table may claim a complete value list,
+        # whatever its distinct count looks like.
+        saturated = len(sample) >= sample_rows
+        stamp = now_iso()
+        profiles = [self._profile_column(sample, col, saturated, stamp)
+                    for col in sample.columns]
+        self._measure_fanout(sample, profiles)
+
+        payload = {"table": table,
+                   "columns": [self._profile_to_dict(p) for p in profiles],
+                   "profiled_at": stamp,
+                   "sample_rows": len(sample),
+                   "sample_saturated": saturated,
+                   "row_count_estimate": row_count_estimate,
+                   "row_count_is_estimate": row_count_is_estimate}
+        self._store_profile(tenant_id, table, payload, len(profiles))
+        return profiles
+
+    @staticmethod
+    def _profile_to_dict(p: ColumnProfile) -> Dict[str, Any]:
+        from dataclasses import asdict as _asdict
+        return _asdict(p)
+
+    def _clip(self, value: Any) -> str:
+        return str(value)[: self.PROFILE_VALUE_CHARS]
+
+    def _profile_column(self, sample, col: str, saturated: bool,
+                        stamp: str) -> ColumnProfile:
+        import pandas as pd
+
+        series = sample[col]
+        distinct = int(series.nunique(dropna=True))
+        null_fraction = float(series.isna().mean()) if len(series) else 0.0
+        complete = distinct <= PROFILE_CARDINALITY_CAP and not saturated
+        counts = series.value_counts(dropna=True)
+        keep = distinct if complete else PROFILE_TOP_VALUES
+        values = [self._clip(v) for v in counts.head(keep).index.tolist()]
+
+        min_value = max_value = ""
+        if pd.api.types.is_numeric_dtype(series) or pd.api.types.is_datetime64_any_dtype(series):
+            non_null = series.dropna()
+            if len(non_null):
+                min_value, max_value = self._clip(non_null.min()), self._clip(non_null.max())
+
+        return ColumnProfile(column=str(col), dtype=str(series.dtype),
+                             distinct_count=distinct, null_fraction=round(null_fraction, 6),
+                             values=values, values_complete=complete,
+                             min_value=min_value, max_value=max_value, profiled_at=stamp)
+
+    def _measure_fanout(self, sample, profiles: List[ColumnProfile]) -> None:
+        """For each candidate grain key, the share of keys carrying more than one
+        distinct value of each low-cardinality column. This is what turns 'some
+        sessions span multiple service lines' into a number the planner can read.
+        Only low-cardinality columns: fan-out on free text is noise."""
+        rows = len(sample)
+        if not rows:
+            return
+        keys = [p.column for p in profiles
+                if p.column.lower().endswith(("_id", "_key"))
+                or p.distinct_count >= 0.9 * rows]
+        keys = sorted(keys, key=lambda c: -next(
+            p.distinct_count for p in profiles if p.column == c))[: self.MAX_GRAIN_KEYS]
+        if not keys:
+            return
+        for p in profiles:
+            if p.distinct_count > PROFILE_CARDINALITY_CAP:
+                continue
+            for key in keys:
+                if key == p.column:
+                    continue
+                try:
+                    per_key = sample.groupby(key)[p.column].nunique()
+                except Exception:  # noqa: BLE001 - an unhashable key is not fatal
+                    continue
+                if not len(per_key):
+                    continue
+                p.fanout_by_key[key] = round(float((per_key > 1).mean()), 6)
+
+    def _store_profile(self, tenant_id: str, table: str, payload: Dict[str, Any],
+                       n_columns: int) -> None:
+        brain = self.brain(tenant_id)
+        node = self._profile_node(tenant_id, table)
+        summary = (f"Measured value profile for {table}: {n_columns} columns, "
+                   f"~{payload['row_count_estimate']:,} rows.")
+        if node is not None:
+            # In place, for the same reason refresh_catalog now updates in place.
+            brain.update_field(node.id, "payload", dump_json(payload))
+            brain.update_field(node.id, "summary", summary)
+            return
+        brain.create(kind=NodeKind.DEFINITION, title=self.profile_node_title(table),
+                     summary=summary, payload=payload, status=ReviewStatus.APPROVED)
 
     def datasets(self, tenant_id: str) -> List[str]:
         """Distinct column/schema names known across described tables (for EDA)."""
