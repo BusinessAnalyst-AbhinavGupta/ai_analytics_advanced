@@ -6,6 +6,18 @@ from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional
 
 
+# -- cube sizing -------------------------------------------------------------
+# MAX_CUBE_CELLS and PolicySettings.max_transport_rows are different numbers ON
+# PURPOSE and must not be reconciled to each other. The first answers "is this
+# cube worth composing at all"; the second answers "what fits in one round trip".
+# A cube between them is legal and is fetched in keyset pages. Lowering
+# MAX_CUBE_CELLS to the transport size would refuse cubes the system can
+# perfectly well retrieve, and push the analyst toward narrower, less reusable
+# cuts -- which is the behaviour this whole design exists to move away from.
+MAX_CUBE_CELLS = 200_000            # a composed cube may not exceed this many rows
+MAX_DIMENSION_CARDINALITY = 5_000   # a column above this is a key or free text, not a dimension
+
+
 @dataclass
 class PolicySettings:
     allow_ddl_dml: bool = False       # hard default: read-only

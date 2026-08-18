@@ -283,6 +283,112 @@ class ColumnProfile:
 
 
 @dataclass
+class AttributionRule:
+    """How a multi-valued categorical collapses onto a grain key.
+
+    This is a property of the base *population*, not of a question. Letting each
+    question re-derive it means two questions can apply two rankings to the same
+    sessions and produce two defensible-looking, mutually contradictory numbers
+    -- so it lives inside the base view and inside its population_hash.
+    """
+
+    column: str                  # the multi-valued categorical, e.g. "service_line"
+    grain: List[str] = field(default_factory=list)   # the key it collapses onto
+    strategy: str = "most_frequent"   # highest_intent | most_frequent | latest | first
+    priority_values: List[str] = field(default_factory=list)  # ranked, best first
+    tiebreakers: List[str] = field(default_factory=list)      # ["event_count DESC", ...]
+    source: str = ""             # "brain" (approved) | "llm" (proposed) | "default"
+    rationale: str = ""
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "AttributionRule":
+        return _typed_from_dict(cls, d)
+
+
+@dataclass
+class BaseView:
+    """A governed ID-grain row population, inlined verbatim as a CTE.
+
+    Athena here is read-only, so this is the client-side substitute for
+    CREATE VIEW. The grain is an *identifier* grain, never a dimensional one: at
+    session_id every question is a projection of one population, and a new
+    dimension is a column added above an unchanged base rather than a rewrite.
+    """
+
+    name: str                       # "checkout_sessions"
+    grain: List[str] = field(default_factory=list)   # ["session_id"] -- ID grain
+    source_sql: str = ""            # the population: FROM/JOIN/WHERE, one row per grain key
+    dimension_columns: List[str] = field(default_factory=list)  # legal GROUP BY columns
+    measure_columns: List[str] = field(default_factory=list)
+    attributions: List[AttributionRule] = field(default_factory=list)
+    time_column: str = ""
+    row_count_estimate: int = 0
+    description: str = ""
+    owner: str = ""
+    aliases: List[str] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "BaseView":
+        rules = d.get("attributions") or []
+        if not isinstance(rules, list):
+            raise ValueError("BaseView.attributions must be a list")
+        view = _typed_from_dict(cls, {k: v for k, v in d.items() if k != "attributions"})
+        view.attributions = [r if isinstance(r, AttributionRule) else AttributionRule.from_dict(r)
+                             for r in rules]
+        return view
+
+
+@dataclass
+class CubeMeasure:
+    name: str            # "revenue"
+    expr: str = ""       # what goes in the cube's SELECT: "SUM(revenue)"
+    additive: bool = True   # can this roll up from the cube to a coarser grain?
+    read_expr: str = ""  # how to read it back, when it differs from `name`
+
+
+@dataclass
+class CubeSpec:
+    """What cut of a base view a question needs. `filters` is the SLICE -- it is
+    recorded but deliberately NOT hashed, which is what makes 'question A
+    filtered to Germany' and 'question B unfiltered' reconcilable."""
+
+    base_name: str
+    dimensions: List[str] = field(default_factory=list)
+    measures: List[CubeMeasure] = field(default_factory=list)
+    filters: Dict[str, List[str]] = field(default_factory=dict)
+    time_column: str = ""
+    time_start: str = ""
+    time_end: str = ""
+
+
+@dataclass
+class CubeSQL:
+    ok: bool
+    sql: str = ""
+    population_hash: str = ""
+    projection_hash: str = ""
+    estimated_cells: int = 0
+    measures: List[CubeMeasure] = field(default_factory=list)   # after the AVG rewrite
+    columns: List[str] = field(default_factory=list)
+    non_additive: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+    error: str = ""                 # set when the guard refuses
+    offending_dimensions: List[str] = field(default_factory=list)
+
+
+@dataclass
+class ReconcileResult:
+    same_population: bool
+    population_hash_a: str = ""
+    population_hash_b: str = ""
+    measure: str = ""
+    value_a: Optional[float] = None
+    value_b: Optional[float] = None
+    agrees: bool = False
+    explanation: str = ""           # written for a human; lands in the API response
+
+
+@dataclass
 class SemanticMetric:
     """What a metric MEANS -- not where its columns live.
 

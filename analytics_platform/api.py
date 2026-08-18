@@ -50,8 +50,8 @@ from .brain.index import BrainIndex
 from .brain.store import CompanyBrain
 from .config import Settings
 from .database import Store
-from .domain import (AnswerMode, DataSourceKind, KnowledgeNode, NodeKind, ReviewStatus,
-                     RunStatus, SemanticDimension, SemanticMetric)
+from .domain import (AnswerMode, AttributionRule, BaseView, DataSourceKind, KnowledgeNode,
+                     NodeKind, ReviewStatus, RunStatus, SemanticDimension, SemanticMetric)
 from .execution.base import QueryExecutor
 from .execution.sampler import SamplerExecutor
 from .junior import JuniorEngine
@@ -64,6 +64,7 @@ from .research import ResearchService
 from .retention import RetentionService
 from .scheduler import Scheduler
 from .senior import SeniorService
+from .base_view import BaseViewRegistry
 from .semantic import SemanticLayer
 from .stakeholder import StakeholderService
 from .stores import TenantStoreProvider
@@ -147,6 +148,34 @@ class SemanticMetricIn(BaseModel):
     filters: List[str] = []          # ALWAYS applied to any query touching this metric
     caveats: List[str] = []
     freshness: str = ""
+    owner: str = ""
+    aliases: List[str] = []
+    by: str = "analyst"
+
+
+class AttributionRuleIn(BaseModel):
+    column: str
+    grain: List[str] = []
+    strategy: str = "most_frequent"   # highest_intent | most_frequent | latest | first
+    priority_values: List[str] = []   # ranked, highest business value first
+    tiebreakers: List[str] = []
+    source: str = ""
+    rationale: str = ""
+
+
+class BaseViewIn(BaseModel):
+    """An ID-grain row population. Created unapproved; promote it through the
+    existing review endpoint. Answers built on an unapproved base are marked
+    provisional."""
+    name: str
+    grain: List[str] = []
+    source_sql: str = ""
+    dimension_columns: List[str] = []
+    measure_columns: List[str] = []
+    attributions: List[AttributionRuleIn] = []
+    time_column: str = ""
+    row_count_estimate: int = 0
+    description: str = ""
     owner: str = ""
     aliases: List[str] = []
     by: str = "analyst"
@@ -824,6 +853,31 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
         node = SemanticLayer(C.pipeline.brain).upsert_dimension(
             tenant_id, SemanticDimension(**payload), by=by)
         C.observability.event(tenant_id=tenant_id, stage="knowledge.semantic.dimension",
+                              actor=by, resource=node.id, status="OK")
+        return node.to_dict()
+
+    # -- base views (Task 7) -------------------------------------------------
+    @app.get("/knowledge/{tenant_id}/base-views")
+    def list_base_views(tenant_id: str, approved_only: bool = True) -> List[Dict[str, Any]]:
+        tenant_or_404(tenant_id)
+        registry = BaseViewRegistry(C.pipeline.brain)
+        out = []
+        for v in registry.all(tenant_id, approved_only=approved_only):
+            d = asdict(v)
+            d["approved"] = registry.is_approved(tenant_id, v.name)
+            d["population_hash"] = registry.population_hash(v)
+            out.append(d)
+        return out
+
+    @app.post("/knowledge/{tenant_id}/base-views")
+    def upsert_base_view(tenant_id: str, body: BaseViewIn) -> Dict[str, Any]:
+        tenant_or_404(tenant_id)
+        payload = body.model_dump()
+        by = payload.pop("by", "analyst")
+        payload["attributions"] = [AttributionRule(**r) for r in payload.get("attributions", [])]
+        node = BaseViewRegistry(C.pipeline.brain).upsert(
+            tenant_id, BaseView(**payload), by=by)
+        C.observability.event(tenant_id=tenant_id, stage="knowledge.base_view",
                               actor=by, resource=node.id, status="OK")
         return node.to_dict()
 
