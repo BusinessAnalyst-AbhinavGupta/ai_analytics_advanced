@@ -57,6 +57,15 @@ HIGH_RISK_MARKERS: List[str] = [
 ]
 
 
+def _permissive_profile(column: str):
+    """A stand-in profile used only when RE-composing a cube whose dimensions the
+    guard has already approved. It must never be used for a first composition --
+    that is what makes the guard fail closed on unprofiled columns."""
+    from .domain import ColumnProfile
+    return ColumnProfile(column=column, dtype="object", distinct_count=1,
+                         null_fraction=0.0, values=[], values_complete=False)
+
+
 def _parse_json_block(text: str, context: str = "") -> Optional[Dict[str, Any]]:
     """Pull a JSON object out of an LLM response, tolerating ```json fences."""
     import json
@@ -870,7 +879,7 @@ WITH ranked_{rule.column} AS (
             analysis="workspace_sql" if parsed.get("analysis") == "workspace_sql" else "python",
             base_view=view, base_view_approved=approved, cube=cube, cube_sql=cube_sql,
             grain=list(view.grain), dimensions=list(cube.dimensions),
-            measures=list(cube_sql.measures),
+            measures=list(cube_sql.measures), profiles=dict(schema_ctx.profiles or {}),
             time_window=(f"{cube.time_start}..{cube.time_end}"
                          if cube.time_start and cube.time_end else ""),
             rationale=str(parsed.get("rationale") or ""), caveats=caveats,
@@ -954,9 +963,29 @@ WITH ranked_{rule.column} AS (
                     break
         return out
 
+    AGGREGATE_CONTEXT_PROMPT = """
+The BUSINESS SEMANTICS, BASE VIEWS, and DATABASE SCHEMA sections below are
+authoritative. Semantics describe what a metric MEANS -- its formula, the grain
+it is valid at, and the filters that must always be applied. Schema describes
+the real tables, the real columns, and the real values in this warehouse. The
+Example Queries are historical and may reference columns that no longer exist --
+where they disagree, semantics win over schema, and schema wins over the
+examples.
+
+Never invent a column name, and never invent a filter literal: use the exact
+values listed for that column, with their exact casing. Every filter listed
+under ALWAYS APPLY for a metric you are computing must appear in the WHERE
+clause, whether or not the user mentioned it.
+
+You are on the fallback path: no base view governs this query, so its result
+cannot be reconciled against any other answer. Keep it narrow and answer only
+what was asked."""
+
     def _synthesize_sql(self, llm: Any, question: str, query_nodes: List[Any],
                         defn_nodes: List[Any], prior_sql: str = "",
-                        prior_error: str = "") -> Tuple[str, Tuple[int, int]]:
+                        prior_error: str = "",
+                        plan: Optional[TurnPlan] = None,
+                        schema_ctx: Optional[SchemaContext] = None) -> Tuple[str, Tuple[int, int]]:
         """Let the analyst write ad-hoc SQL from approved context, instead of only
         reusing an approved query verbatim. Independent of the retrieval backend.
 
@@ -964,7 +993,10 @@ WITH ranked_{rule.column} AS (
         policy or failed execution), the prompt asks for a corrected query instead
         of a fresh one -- see _synthesize_and_execute_sql for the retry loop.
         """
-        prompt = f"Question: {question}\n\nContext:\n"
+        prompt = f"Question: {question}\n\n"
+        if schema_ctx is not None and schema_ctx.rendered:
+            prompt += schema_ctx.rendered + "\n"
+        prompt += "Context:\n"
         for d in defn_nodes:
             prompt += f"Definition - {d.title}: {d.summary}\n"
         for q in query_nodes:
@@ -987,6 +1019,8 @@ WITH ranked_{rule.column} AS (
             "need it) and never emit {{...}} syntax. Return ONLY the SQL query in a ```sql block. "
             "If the context is completely insufficient, output NOTHING."
         )
+        if schema_ctx is not None or plan is not None:
+            sys_prompt += "\n" + self.AGGREGATE_CONTEXT_PROMPT
         try:
             res = llm.generate(prompt=prompt, system_prompt=sys_prompt, temperature=0.0)
             text = (res.text or "").strip() if res and hasattr(res, "text") else ""
@@ -1004,9 +1038,239 @@ WITH ranked_{rule.column} AS (
                            exc_info=True)
             return "", (0, 0)
 
+    # -- executing what Task 7 composed ---------------------------------------
+    # On the cube paths there is no SQL to write: compose_cube already returned a
+    # complete, hashed, guarded statement with the approved source_sql inlined
+    # byte for byte. Asking a model to re-author it would break the one thing the
+    # base exists to guarantee, because a re-emitted base is a different string
+    # and therefore, correctly, a different population_hash. So `retrieve` and
+    # `widen` never reach the synthesis LLM at all.
+
+    def _allowed_tables(self, tenant_id: str) -> Optional[List[str]]:
+        sources = self.tenants.list_datasources(tenant_id)
+        return [t for s in sources for t in s.get("tables", [])] or None
+
+    def _run_composed(self, tenant_id: str, sql: str, question: str) -> Tuple[str, Any]:
+        """Validate through policy, then one round trip bounded by the transport
+        ceiling. No LIMIT of our own: compose_cube did not emit one and the
+        policy's injection is the single place that decides it."""
+        policy = QueryPolicy(self.settings.policy)
+        decision = policy.validate(sql, allowed_tables=self._allowed_tables(tenant_id),
+                                   row_limit=self.settings.policy.max_transport_rows,
+                                   dialect=self.settings.source_dialect)
+        if decision.denied:
+            from .execution.base import QueryResult
+            return sql, QueryResult(ok=False, error="; ".join(decision.reasons))
+        ctx = ExecutionContext(tenant_id=tenant_id, question=question,
+                               dialect=self.settings.source_dialect,
+                               row_limit=self.settings.policy.max_transport_rows)
+        return decision.approved_sql, self.executor.execute(decision.approved_sql, ctx)
+
+    def _cube_spec_to_run(self, plan: TurnPlan) -> CubeSpec:
+        """What actually goes to the warehouse for this plan.
+
+        A widen on a missing DIMENSION re-runs the whole cube over the union of
+        old and new dimensions -- adding `device` re-splits every existing country
+        cell, so there is no 'just the device part' to fetch. A widen on a TIME
+        gap only is different: cells over disjoint date ranges are disjoint and
+        every measure that survived the additivity gate sums across them, so that
+        one really is a gap fetch.
+        """
+        import dataclasses
+        spec = dataclasses.replace(plan.cube)
+        verdict = plan.verdict
+        if plan.path != "widen" or verdict is None:
+            return spec
+        if verdict.missing_dimensions:
+            union = list(dict.fromkeys(list(verdict.existing_dimensions)
+                                       + list(spec.dimensions)))
+            spec.dimensions = union
+            return spec
+        if verdict.missing_time_ranges:
+            start, end = verdict.missing_time_ranges[0]
+            spec.time_start, spec.time_end = start, end
+        return spec
+
+    def _execute_cube(self, tenant_id: str, plan: TurnPlan,
+                      question: str) -> Tuple[str, Any]:
+        """One round trip, or a keyset walk when the cube is bigger than one.
+
+        MAX_CUBE_CELLS and max_transport_rows are different numbers on purpose,
+        so a cube between them is legal and simply takes more than one trip.
+        """
+        spec = self._cube_spec_to_run(plan)
+        if spec == plan.cube and plan.cube_sql is not None and plan.cube_sql.ok:
+            # Nothing changed: run exactly what was composed, hashed and guarded.
+            recomposed = plan.cube_sql
+        else:
+            recomposed = self.base_views.compose_cube(
+                plan.base_view, spec, self._plan_profiles(plan))
+            if not recomposed.ok:
+                from .execution.base import QueryResult
+                return "", QueryResult(ok=False, error=recomposed.error)
+            plan.cube_sql = recomposed
+        transport = self.settings.policy.max_transport_rows
+        if recomposed.estimated_cells <= transport:
+            return self._run_composed(tenant_id, recomposed.sql, question)
+        return self._fetch_keyset_chunks(tenant_id, plan, question, spec=spec)
+
+    def _plan_profiles(self, plan: TurnPlan) -> Dict[str, Any]:
+        """Re-compose against the SAME real cardinalities the plan was sized
+        against. A permissive stand-in here would under-estimate the widened
+        cube's cell count and quietly skip the paging it needs."""
+        profiles = dict(plan.profiles or {})
+        for d in (set(plan.cube.dimensions) | set(plan.dimensions)
+                  | set(getattr(plan.verdict, "existing_dimensions", []) or [])):
+            profiles.setdefault(d, _permissive_profile(d))
+        return profiles
+
+    def _fetch_keyset_chunks(self, tenant_id: str, plan: TurnPlan, question: str,
+                             spec: Optional[CubeSpec] = None,
+                             keys: Optional[List[str]] = None) -> Tuple[str, Any]:
+        """Walk the result in keyset pages and concatenate.
+
+        Cube cells are disjoint by construction, so concatenation is exact -- no
+        dedupe, no re-aggregation. The stop condition is a SHORT PAGE, never the
+        cell estimate: a cube that estimated 40,000 and returns exactly 50,000
+        must page again rather than assume it is complete.
+        """
+        import pandas as pd
+        from .execution.base import QueryResult
+
+        spec = spec if spec is not None else plan.cube
+        page_keys = keys or (list(spec.dimensions) or list(plan.base_view.grain))
+        chunk = min(self.settings.policy.extract_chunk_rows,
+                    self.settings.policy.max_transport_rows)
+        ceiling = self.settings.policy.raw_extract_row_limit
+
+        pages: List[Any] = []
+        sql_run: List[str] = []
+        warnings: List[str] = []
+        cursor: Any = ""
+        total = 0
+        truncated = False
+
+        while True:
+            page_sql = self.base_views.compose_keyset_chunk(
+                plan.base_view, spec, cursor, chunk, keys=page_keys)
+            approved, res = self._run_composed(tenant_id, page_sql, question)
+            sql_run.append(approved or page_sql)
+            if not res.ok:
+                return (sql_run[-1], res)
+            df = res.data if res.data is not None else pd.DataFrame()
+            warnings.extend(res.warnings)
+            if len(df):
+                pages.append(df)
+                total += len(df)
+            if total >= ceiling:
+                # Stop paging and say so. Never keep going silently.
+                truncated = True
+                warnings.append(f"result truncated at {ceiling} rows")
+                break
+            if len(df) < chunk:
+                break
+            missing = [k for k in page_keys if k not in df.columns]
+            if missing:
+                # No cursor means no safe next page. Stopping here under-reports;
+                # guessing a cursor would silently skip or duplicate cells, which
+                # is worse. Say what happened rather than raising mid-turn.
+                truncated = True
+                warnings.append(
+                    f"result truncated at {total} rows: cannot page further because "
+                    f"the result is missing key column(s) {missing}")
+                break
+            cursor = [df.iloc[-1][k] for k in page_keys]
+            if len(cursor) == 1:
+                cursor = cursor[0]
+
+        combined = pd.concat(pages, ignore_index=True) if pages else pd.DataFrame()
+        if truncated and len(combined) > ceiling:
+            combined = combined.head(ceiling)
+        return (sql_run[-1] if sql_run else "",
+                QueryResult(ok=True, data=combined, row_count=len(combined),
+                            columns=list(combined.columns), warnings=warnings,
+                            truncated=truncated))
+
     def _synthesize_and_execute_sql(self, llm: Any, tenant_id: str, question: str,
                                     query_nodes: List[Any], defn_nodes: List[Any],
-                                    max_attempts: int = 3) -> Tuple[str, Any, Tuple[int, int]]:
+                                    max_attempts: int = 3,
+                                    plan: Optional[TurnPlan] = None,
+                                    schema_ctx: Optional[SchemaContext] = None
+                                    ) -> Tuple[str, Any, Tuple[int, int]]:
+        """Dispatch on the plan, then fall through to today's synthesis loop.
+
+        With `plan` None (or on the aggregate path) this behaves exactly as it
+        always has, which is what keeps every existing test green.
+        """
+        if plan is not None and plan.path in ("retrieve", "widen") and plan.cube_sql:
+            sql, res = self._execute_cube(tenant_id, plan, question)
+            if res is not None and res.ok:
+                return sql, res, (0, 0)
+            return self._own_the_cube_failure(llm, tenant_id, plan, question,
+                                              sql, res, schema_ctx)
+        return self._synthesize_sql_loop(llm, tenant_id, question, query_nodes,
+                                         defn_nodes, max_attempts, plan, schema_ctx)
+
+    def _own_the_cube_failure(self, llm: Any, tenant_id: str, plan: TurnPlan,
+                              question: str, sql: str, res: Any,
+                              schema_ctx: Optional[SchemaContext]
+                              ) -> Tuple[str, Any, Tuple[int, int]]:
+        """The failure is in one of two places, and they have different owners."""
+        error = getattr(res, "error", "") or "unknown warehouse error"
+        name = plan.base_view.name if plan.base_view else "?"
+
+        if plan.base_view_approved:
+            # A governance failure, not a prompt failure. Never let a model
+            # rewrite an approved base's source_sql: the review flow exists so a
+            # human owns that string, and an answer computed from a silently
+            # patched base carries a population_hash that no longer describes the
+            # SQL that ran.
+            logger.error("approved base view %r failed against the warehouse for "
+                         "tenant %s: %s", name, tenant_id, error)
+            plan.caveats.append(
+                f"base view `{name}` no longer executes against the warehouse "
+                f"({error}) -- it needs review. This answer fell back to an "
+                f"ungoverned query and cannot be reconciled with others.")
+            return sql, res, (0, 0)
+
+        # A DRAFT base proposed this same turn: the model authored that source_sql
+        # minutes ago and nobody reviewed it, so it may repair it. Once.
+        repaired = self._repair_draft_base(llm, tenant_id, plan, question, error,
+                                           schema_ctx)
+        if repaired is None:
+            plan.caveats.append(
+                f"the proposed base view `{name}` could not be made to run "
+                f"({error}); this answer is not reconcilable.")
+            return sql, res, (0, 0)
+        sql2, res2 = self._execute_cube(tenant_id, repaired, question)
+        if res2 is not None and res2.ok:
+            plan.base_view = repaired.base_view
+            plan.cube = repaired.cube
+            plan.cube_sql = repaired.cube_sql
+            return sql2, res2, (0, 0)
+        plan.caveats.append(
+            f"the proposed base view `{name}` still failed after one repair "
+            f"({getattr(res2, 'error', '')}); this answer is not reconcilable.")
+        return sql2, res2, (0, 0)
+
+    def _repair_draft_base(self, llm: Any, tenant_id: str, plan: TurnPlan,
+                           question: str, error: str,
+                           schema_ctx: Optional[SchemaContext]) -> Optional[TurnPlan]:
+        if schema_ctx is None:
+            schema_ctx = SchemaContext()
+        prompt = (f"Question: {question}\n\n{schema_ctx.rendered}\n\n"
+                  f"The base view you proposed failed to execute against the "
+                  f"warehouse:\n\n{plan.base_view.source_sql if plan.base_view else ''}"
+                  f"\n\nError:\n{error}\n\nRe-propose a corrected base view that "
+                  f"fixes this specific problem, using the same JSON shape.")
+        parsed = self._ask_planner(llm, prompt, schema_ctx)
+        return self._resolve_plan(tenant_id, parsed, schema_ctx)
+
+    def _synthesize_sql_loop(self, llm: Any, tenant_id: str, question: str,
+                             query_nodes: List[Any], defn_nodes: List[Any],
+                             max_attempts: int, plan: Optional[TurnPlan],
+                             schema_ctx: Optional[SchemaContext]
+                             ) -> Tuple[str, Any, Tuple[int, int]]:
         """Synthesize SQL and run it, retrying with the failure fed back to the LLM
         when policy rejects the query or execution fails -- e.g. a leftover
         {{Date}}-style Metabase placeholder, a typo'd column, wrong dialect syntax.
@@ -1024,7 +1288,8 @@ WITH ranked_{rule.column} AS (
         t_in_total, t_out_total = 0, 0
         for attempt in range(1, max_attempts + 1):
             sql, (t_in, t_out) = self._synthesize_sql(
-                llm, question, query_nodes, defn_nodes, prior_sql=prior_sql, prior_error=prior_error)
+                llm, question, query_nodes, defn_nodes, prior_sql=prior_sql,
+                prior_error=prior_error, plan=plan, schema_ctx=schema_ctx)
             t_in_total += t_in
             t_out_total += t_out
             if not sql:

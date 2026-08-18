@@ -398,6 +398,10 @@ class TurnPlan:
     grain: List[str] = field(default_factory=list)
     dimensions: List[str] = field(default_factory=list)
     measures: List[CubeMeasure] = field(default_factory=list)
+    # The profiles the cube was sized against. Carried so a widen can RE-compose
+    # against the same real cardinalities -- recomposing against a permissive
+    # stand-in would silently under-estimate the cell count and skip paging.
+    profiles: Dict[str, Any] = field(default_factory=dict)
     time_window: str = ""
     rationale: str = ""
     caveats: List[str] = field(default_factory=list)

@@ -1362,3 +1362,360 @@ class TestPlanTurn(unittest.TestCase):
                              population_hash=pop, base_view="checkout_sessions",
                              row_count=1, created_at="2026-08-15T00:00:00Z"))
         self.assertIn("df_1", self.plan(MockLLM([CUBE])).verdict.reason)
+
+
+# --------------------------------------------------------------------------- #
+# Task 12 -- execute the composed cube; LLM SQL only on the aggregate path
+# --------------------------------------------------------------------------- #
+class SpyExecutor:
+    """Records every round trip and can be scripted with per-page row counts."""
+
+    def __init__(self):
+        self.all_sql = []
+        self.all_ctx = []
+        self.pages = None
+        self.error = ""
+        self.fail_first = 0
+        self.columns = ["country", "device", "revenue"]
+
+    def returns_pages(self, *counts):
+        self.pages = list(counts)
+
+    def always_fails(self, error):
+        self.error = error
+
+    def fails_then_succeeds(self, error):
+        self.error = error
+        self.fail_first = 1
+
+    @property
+    def call_count(self):
+        return len(self.all_sql)
+
+    @property
+    def last_sql(self):
+        return self.all_sql[-1] if self.all_sql else ""
+
+    @property
+    def last_ctx(self):
+        return self.all_ctx[-1] if self.all_ctx else None
+
+    def supports(self, ctx):
+        return True
+
+    def session_status(self, tenant_id):
+        from analytics_platform.execution.base import SessionStatus
+        return SessionStatus(state="valid", tenant_id=tenant_id)
+
+    def execute(self, sql, ctx):
+        import pandas as pd
+        from analytics_platform.execution.base import QueryResult
+        self.all_sql.append(sql)
+        self.all_ctx.append(ctx)
+        if self.error:
+            if self.fail_first and len(self.all_sql) > self.fail_first:
+                pass
+            else:
+                return QueryResult(ok=False, error=self.error)
+        n = self.pages.pop(0) if self.pages else 1
+        # Return the columns the composed cube actually selected -- a keyset page
+        # cursors on them, so a fixture that hardcodes a different set tests
+        # nothing about paging.
+        cols = {}
+        for i, c in enumerate(self.columns):
+            cols[c] = (list(range(n)) if c == "revenue"
+                       else [f"{c[:2]}{j % (7 - i)}" for j in range(n)])
+        df = pd.DataFrame(cols, columns=list(self.columns))
+        return QueryResult(ok=True, data=df, row_count=n, columns=list(df.columns))
+
+    def cancel(self, execution_id):
+        return True
+
+
+class TestExecuteCube(unittest.TestCase):
+    def setUp(self):
+        from analytics_platform.domain import (BaseView, ColumnProfile, CubeMeasure,
+                                               CubeSpec, TurnPlan)
+        from analytics_platform.schema_context import SchemaContext
+
+        self.ctx, self.base = app_ctx()
+        self.tid = self.ctx.tenants.create_tenant("CubeCo").id
+        self.app = create_app(self.ctx)
+        self.svc = self.ctx.stakeholder
+        self.spy = SpyExecutor()
+        self.svc.executor = self.spy
+        self.ctx.tenants.add_datasource(self.tid, "Orders", DataSourceKind.DIRECT_DB,
+                                        dialect="athena", tables=["orders"])
+
+        self.view = BaseView(
+            name="checkout_sessions", grain=["session_id"],
+            source_sql="SELECT session_id, country, device, revenue FROM orders "
+                       "WHERE is_test_traffic = false",
+            dimension_columns=["country", "device", "date"], measure_columns=["revenue"],
+            time_column="date", row_count_estimate=1_200_000)
+        self.profiles = {c: ColumnProfile(column=c, dtype="object", distinct_count=n,
+                                          null_fraction=0.0, values=[], values_complete=False)
+                         for c, n in (("country", 30), ("device", 4), ("date", 400))}
+        self.schema_ctx = SchemaContext(profiles=self.profiles, rendered="RENDERED")
+
+    def tearDown(self):
+        self.svc.workspace.close_all()
+        self.base.close()
+
+    def _plan(self, path="retrieve", dimensions=("country",), approved=True,
+              verdict=None, **spec_kw):
+        from analytics_platform.domain import CubeMeasure, CubeSpec, TurnPlan
+        spec = CubeSpec(base_name=self.view.name, dimensions=list(dimensions),
+                        measures=[CubeMeasure("revenue", "SUM(revenue)", True)], **spec_kw)
+        cube_sql = self.svc.base_views.compose_cube(self.view, spec, self.profiles)
+        return TurnPlan(path=path, base_view=self.view, base_view_approved=approved,
+                        cube=spec, cube_sql=cube_sql, grain=["session_id"],
+                        dimensions=list(dimensions), profiles=dict(self.profiles),
+                        verdict=verdict)
+
+    def run_sql(self, plan, llm=None, **kw):
+        return self.svc._synthesize_and_execute_sql(
+            llm or MockLLM([]), self.tid, "q", [], [], plan=plan, **kw)
+
+    # -- the cube paths do not synthesize -------------------------------------
+    def test_a_retrieve_path_never_calls_the_sql_llm(self):
+        """The base is governed. Re-authoring it would change the population_hash,
+        which breaks the one thing the base exists to guarantee."""
+        llm = MockLLM([])            # any call raises
+        self.run_sql(self._plan(), llm=llm)
+        self.assertEqual(llm.calls, 0)
+
+    def test_the_executed_sql_is_the_composed_cube_byte_for_byte(self):
+        plan = self._plan()
+        self.run_sql(plan)
+        self.assertIn(self.view.source_sql, self.spy.last_sql)
+        self.assertTrue(self.spy.last_sql.startswith("WITH base AS ("))
+
+    def test_each_round_trip_is_bounded_by_the_transport_ceiling(self):
+        """Not raw_extract_row_limit -- the policy rejects that outright, rightly."""
+        self.run_sql(self._plan())
+        self.assertEqual(self.spy.last_ctx.row_limit,
+                         self.svc.settings.policy.max_transport_rows)
+
+    def test_the_composed_sql_still_goes_through_policy(self):
+        self.run_sql(self._plan())
+        self.assertIn("LIMIT", self.spy.last_sql.upper())
+
+    # -- paging ---------------------------------------------------------------
+    def _wide_plan(self):
+        """estimated_cells = 30 x 400 = 12,000 cells; force paging by lowering the
+        transport ceiling rather than by inventing a bigger fixture."""
+        self.svc.settings.policy.max_transport_rows = 50
+        self.svc.settings.policy.extract_chunk_rows = 50
+        self.spy.columns = ["country", "date", "revenue"]
+        return self._plan(dimensions=["country", "date"])
+
+    def test_a_cube_larger_than_the_transport_is_paged(self):
+        plan = self._wide_plan()
+        self.spy.returns_pages(50, 50, 20)
+        _, res, _ = self.run_sql(plan)
+        self.assertEqual(self.spy.call_count, 3)
+        self.assertEqual(len(res.data), 120)
+        self.assertFalse(res.truncated)
+
+    def test_paging_stops_on_a_short_page_not_on_the_estimate(self):
+        """The estimate is an estimate. The real stop condition is a short page."""
+        plan = self._wide_plan()
+        self.spy.returns_pages(50, 10)
+        _, res, _ = self.run_sql(plan)
+        self.assertEqual(self.spy.call_count, 2)
+        self.assertEqual(len(res.data), 60)
+
+    def test_a_full_final_page_forces_one_more_trip(self):
+        """A page exactly chunk_rows long is not evidence of completeness."""
+        plan = self._wide_plan()
+        self.spy.returns_pages(50, 50, 0)
+        self.run_sql(plan)
+        self.assertEqual(self.spy.call_count, 3)
+
+    def test_paging_stops_at_the_materialised_ceiling_and_says_so(self):
+        plan = self._wide_plan()
+        self.svc.settings.policy.raw_extract_row_limit = 100
+        self.spy.returns_pages(50, 50, 50)
+        _, res, _ = self.run_sql(plan)
+        self.assertEqual(len(res.data), 100)
+        self.assertTrue(res.truncated)
+        self.assertTrue(any("truncated" in w for w in res.warnings), res.warnings)
+
+    def test_no_page_ever_uses_offset(self):
+        """Athena rescans from the top on every OFFSET page: quadratic, and on a
+        changing table it silently skips and duplicates rows."""
+        plan = self._wide_plan()
+        self.spy.returns_pages(50, 10)
+        self.run_sql(plan)
+        self.assertTrue(all("OFFSET" not in s.upper() for s in self.spy.all_sql))
+        self.assertIn(">", self.spy.all_sql[1])          # the cursor predicate
+
+    def test_the_cursor_is_the_last_rows_dimension_tuple(self):
+        plan = self._wide_plan()
+        self.spy.returns_pages(50, 10)
+        self.run_sql(plan)
+        self.assertIn("(country, date)", self.spy.all_sql[1])
+
+    # -- widen ----------------------------------------------------------------
+    def test_a_widen_on_a_missing_dimension_re_runs_the_whole_cube(self):
+        """Adding `device` re-splits every existing country cell -- there is no
+        'just the device part' to fetch."""
+        from analytics_platform.data_manager import CoverageVerdict
+        plan = self._plan(path="widen", dimensions=["country", "device"],
+                          verdict=CoverageVerdict(decision="widen", label="df_1",
+                                                  missing_dimensions=["device"],
+                                                  supersedes="df_1"))
+        self.run_sql(plan)
+        self.assertIn("GROUP BY 1, 2", self.spy.last_sql)
+        self.assertNotIn("df_1", self.spy.last_sql)      # not a delta query
+
+    def test_a_widen_on_a_time_gap_only_fetches_the_missing_window(self):
+        """Cells over disjoint date ranges are disjoint and additive, so this one
+        IS a gap fetch."""
+        from analytics_platform.data_manager import CoverageVerdict
+        plan = self._plan(path="widen", dimensions=["country"], time_column="date",
+                          time_start="2026-08-01", time_end="2026-08-31",
+                          verdict=CoverageVerdict(
+                              decision="widen", label="df_1",
+                              missing_time_ranges=[("2026-07-01", "2026-07-31")]))
+        self.run_sql(plan)
+        sql = self.spy.last_sql
+        self.assertIn("2026-07-01", sql)
+        self.assertIn("2026-07-31", sql)
+        self.assertNotIn("2026-08", sql)                 # August is already on disk
+
+    # -- failure ownership ----------------------------------------------------
+    def test_a_failing_approved_base_is_surfaced_not_rewritten(self):
+        """An approved base is a human-owned artifact. Patching it silently would
+        make its population_hash describe SQL that never ran."""
+        plan = self._plan(approved=True)
+        self.spy.always_fails("COLUMN_NOT_FOUND: revenue")
+        _, res, _ = self.run_sql(plan)
+        self.assertTrue(res is None or not res.ok)
+        self.assertTrue(any("needs review" in c and "checkout_sessions" in c
+                            for c in plan.caveats), plan.caveats)
+        self.assertEqual(self.spy.call_count, 1)         # no blind retry
+
+    def test_a_failing_draft_base_may_be_repaired_once(self):
+        """The LLM authored this source_sql minutes ago and nobody reviewed it."""
+        plan = self._plan(approved=False)
+        self.spy.fails_then_succeeds("COLUMN_NOT_FOUND: revenu")
+        llm = MockLLM(['{"base_view":"checkout_sessions","propose_base_view":'
+                       '{"name":"checkout_sessions","grain":["session_id"],'
+                       '"source_sql":"SELECT session_id, country, revenue FROM orders",'
+                       '"dimension_columns":["country"],"measure_columns":["revenue"]},'
+                       '"cube":{"dimensions":["country"],'
+                       '"measures":[{"name":"revenue","expr":"SUM(revenue)"}]}}'])
+        _, res, _ = self.run_sql(plan, llm=llm, schema_ctx=self.schema_ctx)
+        self.assertTrue(res is not None and res.ok)
+        self.assertEqual(llm.calls, 1)
+        self.assertIn("COLUMN_NOT_FOUND", llm.prompts[0])   # fed back verbatim
+
+    def test_a_repair_that_fails_again_falls_back(self):
+        plan = self._plan(approved=False)
+        self.spy.always_fails("boom")
+        llm = MockLLM(['{"base_view":"checkout_sessions","propose_base_view":'
+                       '{"name":"checkout_sessions","grain":["session_id"],'
+                       '"source_sql":"SELECT session_id, country FROM orders",'
+                       '"dimension_columns":["country"],"measure_columns":["revenue"]},'
+                       '"cube":{"dimensions":["country"],'
+                       '"measures":[{"name":"revenue","expr":"SUM(revenue)"}]}}'])
+        _, res, _ = self.run_sql(plan, llm=llm, schema_ctx=self.schema_ctx)
+        self.assertTrue(res is None or not res.ok)
+        self.assertEqual(self.spy.call_count, 2)         # original + one repair
+
+    # -- the aggregate path ---------------------------------------------------
+    def test_the_aggregate_path_still_calls_the_llm(self):
+        from analytics_platform.domain import TurnPlan
+        llm = MockLLM(["```sql\nSELECT 1\n```"])
+        self.svc._synthesize_sql(llm, "q", [], [], plan=TurnPlan(path="aggregate"))
+        self.assertEqual(llm.calls, 1)
+
+    def test_mandatory_metric_filters_are_demanded_in_the_prompt(self):
+        from analytics_platform.domain import TurnPlan
+        from analytics_platform.schema_context import SchemaContext
+        llm = MockLLM(["```sql\nSELECT 1\n```"])
+        ctx = SchemaContext(rendered="ALWAYS APPLY: is_test_traffic = false")
+        self.svc._synthesize_sql(llm, "conversion by country", [], [],
+                                 plan=TurnPlan(path="aggregate"), schema_ctx=ctx)
+        self.assertIn("ALWAYS APPLY: is_test_traffic = false",
+                      llm.last_system_prompt + llm.last_prompt)
+
+    def test_the_aggregate_prompt_says_the_result_is_unreconcilable(self):
+        from analytics_platform.domain import TurnPlan
+        llm = MockLLM(["```sql\nSELECT 1\n```"])
+        self.svc._synthesize_sql(llm, "q", [], [], plan=TurnPlan(path="aggregate"),
+                                 schema_ctx=self.schema_ctx)
+        self.assertIn("cannot be reconciled", llm.last_system_prompt)
+
+    def test_the_aggregate_prompt_ranks_semantics_over_the_examples(self):
+        from analytics_platform.domain import TurnPlan
+        llm = MockLLM(["```sql\nSELECT 1\n```"])
+        self.svc._synthesize_sql(llm, "q", [], [], plan=TurnPlan(path="aggregate"),
+                                 schema_ctx=self.schema_ctx)
+        self.assertIn("semantics win over schema", llm.last_system_prompt)
+
+    def test_no_plan_and_no_schema_ctx_is_todays_prompt_exactly(self):
+        """The regression guard for every existing test in this module."""
+        llm = MockLLM(["```sql\nSELECT 1\n```"])
+        self.svc._synthesize_sql(llm, "q", [], [])
+        self.assertNotIn("BUSINESS SEMANTICS", llm.last_system_prompt)
+        self.assertNotIn("cannot be reconciled", llm.last_system_prompt)
+
+
+class TestAttributionPattern(unittest.TestCase):
+    """The only moment an LLM writes attribution SQL is when it is authoring a
+    proposed base view. Render the actual CTE -- a model copies structure far more
+    reliably than it follows prose."""
+
+    def setUp(self):
+        self.ctx, self.base = app_ctx()
+        self.app = create_app(self.ctx)
+        self.svc = self.ctx.stakeholder
+
+    def tearDown(self):
+        self.base.close()
+
+    def test_attribution_pattern_renders_a_ranked_case_and_row_number(self):
+        from analytics_platform.domain import AttributionRule
+        p = self.svc._render_attribution_pattern([AttributionRule(
+            column="service_line", grain=["session_id"], strategy="highest_intent",
+            priority_values=["mobile", "fixed", "ott"],
+            tiebreakers=["event_count DESC", "log_time DESC"])])
+        self.assertIn("ROW_NUMBER() OVER", p)
+        self.assertIn("PARTITION BY session_id", p)
+        self.assertIn("WHEN 'mobile' THEN 1", p)
+        self.assertIn("WHEN 'ott' THEN 3", p)
+
+    def test_most_frequent_strategy_omits_the_priority_case(self):
+        from analytics_platform.domain import AttributionRule
+        p = self.svc._render_attribution_pattern([AttributionRule(
+            column="category", grain=["session_id"], strategy="most_frequent")])
+        self.assertNotIn("CASE category", p)
+        self.assertIn("event_count DESC", p)
+
+    def test_the_pattern_demands_the_base_end_at_its_grain(self):
+        from analytics_platform.domain import AttributionRule
+        p = self.svc._render_attribution_pattern([AttributionRule(
+            column="category", grain=["session_id"], strategy="most_frequent")])
+        self.assertIn("rn = 1", p)
+        self.assertIn("distinct count of the grain", p)
+
+    def test_no_rules_means_no_pattern_block(self):
+        self.assertEqual(self.svc._render_attribution_pattern([]), "")
+
+    def test_the_proposal_prompt_carries_the_worked_pattern(self):
+        """A base view proposed over a fanned-out column must be told the shape,
+        not the theory."""
+        from analytics_platform.domain import ColumnProfile
+        from analytics_platform.schema_context import SchemaContext
+        tid = self.ctx.tenants.create_tenant("FanCo").id
+        ctx = SchemaContext(profiles={"service_line": ColumnProfile(
+            column="service_line", dtype="object", distinct_count=3, null_fraction=0.0,
+            values=["mobile"], values_complete=True,
+            fanout_by_key={"session_id": 0.06})}, rendered="R")
+        llm = MockLLM(['{"base_view":"x","cube":{"dimensions":[],"measures":[]}}'])
+        self.svc._plan_turn(llm, tid, "c1", "revenue by service line", [], [],
+                            schema_ctx=ctx)
+        self.assertIn("ROW_NUMBER() OVER", llm.last_system_prompt)

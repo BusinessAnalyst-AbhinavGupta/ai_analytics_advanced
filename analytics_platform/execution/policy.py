@@ -84,9 +84,17 @@ class QueryPolicy:
 
         tables: List[str] = []
         if ast is not None:
+            # CTE aliases are not real tables. Every composed cube is
+            # `WITH base AS (...) SELECT ... FROM base`, so counting `base` as a
+            # table made it fail every allow-list -- and the same is true of any
+            # hand-written CTE. brain/ingest.extract already excludes them; this
+            # does too.
+            ctes = {c.alias for c in ast.find_all(sqlglot.exp.CTE) if c.alias}
             for node in ast.walk():
                 if isinstance(node, sqlglot.exp.Table):
                     t = node.name
+                    if t in ctes:
+                        continue
                     if t and re.match(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$", t):
                         tables.append(t)
         self._tables = list(dict.fromkeys(tables))

@@ -120,6 +120,23 @@ class TestTransportCeiling(unittest.TestCase):
         self.assertTrue(d.allowed, d.reasons)
         self.assertIn("LIMIT 50000", d.approved_sql)
 
+    def test_a_cte_alias_is_not_treated_as_a_table(self):
+        """Every composed cube is `WITH base AS (...) SELECT ... FROM base`. If
+        `base` counted as a table it would fail every allow-list, which would
+        block the entire cube path."""
+        sql = ("WITH base AS (SELECT session_id, revenue FROM orders)\n"
+               "SELECT SUM(revenue) AS revenue FROM base")
+        d = self.policy.validate(sql, allowed_tables=["orders"], dialect="athena")
+        self.assertTrue(d.allowed, d.reasons)
+        self.assertEqual(self.policy.referenced_tables, ["orders"])
+
+    def test_a_real_table_inside_a_cte_is_still_checked(self):
+        sql = ("WITH base AS (SELECT * FROM secrets)\n"
+               "SELECT * FROM base")
+        d = self.policy.validate(sql, allowed_tables=["orders"], dialect="athena")
+        self.assertFalse(d.allowed)
+        self.assertTrue(any("secrets" in r for r in d.reasons), d.reasons)
+
     def test_a_cte_query_that_already_has_a_limit_is_left_alone(self):
         sql = ("WITH base AS (SELECT session_id FROM orders)\n"
                "SELECT session_id FROM base ORDER BY session_id LIMIT 100")
