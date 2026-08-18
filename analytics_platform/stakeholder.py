@@ -15,19 +15,28 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
+from .base_view import BaseViewRegistry
 from .brain.embedding import Embedder
 from .brain.index import BrainIndex
 from .brain.store import CompanyBrain
 from .config import Settings
 from .database import Store, dump_json, load_json
-from .domain import AnswerMode, NodeKind, new_id, now_iso
+from .data_manager import CoverageVerdict, DataManager, DataRequirement
+from .domain import (AnswerMode, AttributionRule, BaseView, CubeMeasure, CubeSpec,
+                     NodeKind, TurnPlan, new_id, now_iso)
 from .execution.base import ExecutionContext
 from .execution.dataframe_cache import ConversationDataCache
+from .execution.extract_store import ExtractMeta, ExtractStore
 from .execution.policy import QueryPolicy, resolve_template_placeholders
 from .execution.python_policy import PythonCodePolicy
-from .execution.python_sandbox import run_python_sandboxed
+from .execution.python_sandbox import (EXTRACT_MEMORY_MB, EXTRACT_TIMEOUT_S,
+                                       run_python_sandboxed)
+from .execution.workspace import AnalyticalWorkspace
 from .llm.client import make_role_client
+from .junior import JuniorEngine
 from .observability import Observability, new_trace
+from .schema_context import SchemaContext, SchemaContextBuilder
+from .semantic import SemanticLayer
 from .stores import TenantStoreProvider
 from .tenancy import TenantService
 from .skills import SkillRegistry, SkillEngine
@@ -48,6 +57,23 @@ HIGH_RISK_MARKERS: List[str] = [
 ]
 
 
+def _parse_json_block(text: str, context: str = "") -> Optional[Dict[str, Any]]:
+    """Pull a JSON object out of an LLM response, tolerating ```json fences."""
+    import json
+    body = (text or "").strip()
+    if "```json" in body:
+        body = body.split("```json")[1].split("```")[0].strip()
+    elif "```" in body:
+        body = body.split("```")[1].strip()
+    try:
+        parsed = json.loads(body)
+    except (ValueError, IndexError):
+        logger.warning("could not parse %s as JSON: %r", context or "LLM response",
+                       (text or "")[:400])
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 class StakeholderService:
     def __init__(self, stores: TenantStoreProvider, tenants: Optional[TenantService] = None,
                  executor: Optional[Any] = None,
@@ -60,9 +86,22 @@ class StakeholderService:
         self.stores = stores
         self.tenants = tenants or TenantService(stores)
         self.executor = executor or SamplerExecutor()
-        self.data_cache = ConversationDataCache()
         self.obs = observability or Observability(stores)
         self.settings = settings or Settings()
+        # The analytical workspace. Built once per service, not per turn: a
+        # per-turn ExtractStore would be harmless but a per-turn DuckDB
+        # connection would throw away every registered view between questions.
+        self.extract_store = ExtractStore(self.settings.resolve_tenants_root())
+        self.data_cache = ConversationDataCache(store=self.extract_store)
+        self.workspace = AnalyticalWorkspace(self.extract_store, self.settings.policy)
+        self.semantic = SemanticLayer(self.brain)
+        self.base_views = BaseViewRegistry(self.brain)
+        self.data_manager = DataManager(self.data_cache, self.workspace, self.settings)
+        self.junior = JuniorEngine(stores, executor=self.executor, tenants=self.tenants,
+                                   observability=self.obs, settings=self.settings,
+                                   embedder=embedder)
+        self.schema_context = SchemaContextBuilder(
+            self.junior, self.brain, self.settings, self.semantic, self.base_views)
         self.cost_per_1k_input = cost_per_1k_input
         self.cost_per_1k_output = cost_per_1k_output
         self.embedder = embedder
@@ -283,7 +322,9 @@ class StakeholderService:
             return out
 
         if self._llm_live(llm) and conversation_id:
-            path, df_label = self._choose_compute_path(llm, tenant_id, conversation_id, question)
+            plan = self._plan_turn(llm, tenant_id, conversation_id, question,
+                                   query_nodes, defn_nodes)
+            path, df_label = self._legacy_compute_path(plan)
             if path == "python":
                 code, exec_res, toks = self._synthesize_and_execute_python(
                     llm, tenant_id, conversation_id, question, df_label)
@@ -547,50 +588,371 @@ class StakeholderService:
             return False
         return getattr(client, "name", "null") != "null"
 
-    def _choose_compute_path(self, llm: Any, tenant_id: str, conversation_id: str,
-                             question: str) -> Tuple[str, str]:
-        """Decide whether this turn should re-run SQL or run Python against an
-        already-cached DataFrame from earlier in the same conversation.
-        Returns (path, df_label) where path is "python" or "sql"; df_label is
-        "" when path == "sql". Defaults to "sql" (the existing, well-tested
-        path) whenever nothing is cached, the LLM response doesn't parse, or
-        it names a label that isn't actually cached -- Python-over-cache is
-        only ever an optimization layered on the SQL path, never a
-        replacement for it.
-        """
-        available = self.data_cache.list_available(tenant_id, conversation_id)
-        if not available:
-            return "sql", ""
+    def _legacy_compute_path(self, plan: TurnPlan) -> Tuple[str, str]:
+        """Bridge from TurnPlan to the pre-Task-14 two-way branch in answer().
 
-        frames_desc = "\n".join(
-            f"- {f['label']}: {f['description']} (columns: {f['columns']})" for f in available)
-        sys_prompt = (
-            "You are deciding how to answer a follow-up analytics question. "
-            "You must respond with a strict JSON object: "
-            '{"path": "python"|"sql", "df_label": "the label to use, or empty string"}. '
-            "Choose \"python\" ONLY if the question can be fully answered by computing "
-            "over one of the DataFrames already available below (e.g. a follow-up "
-            "aggregation, filter, or reshape of data already fetched this conversation). "
-            "Choose \"sql\" if the question needs data that isn't in any available DataFrame."
-        )
-        prompt = f"Question: {question}\n\nAvailable DataFrames this conversation:\n{frames_desc}"
+        answer() is restructured into the full analyst pipeline in Task 14; until
+        then a reuse verdict over a cached cube is the only case the old branch
+        can express, and everything else falls through to the SQL path exactly as
+        before.
+        """
+        if plan.path == "reuse" and plan.df_label:
+            return "python", plan.df_label
+        return "sql", ""
+
+    # -- planning ------------------------------------------------------------
+    # The old _choose_compute_path only ever picked between "python" and "sql",
+    # saw nothing but column names, and short-circuited to "sql" whenever the
+    # cache was empty -- which is exactly why a real run produced two warehouse
+    # queries and no Python at all. It is replaced by a planning call that does
+    # the three things only a model can do (pick the population, state the cut,
+    # choose how to compute) and hands everything else to code.
+
+    PLAN_SYSTEM_PROMPT = """You are the planner for an analytical turn. You do NOT write SQL.
+
+Respond with STRICT JSON and nothing else:
+{"base_view": "<name from the list above>",
+ "propose_base_view": null,
+ "cube": {"dimensions": [], "measures": [{"name": "", "expr": ""}],
+          "filters": {}, "time_column": "", "time_start": "", "time_end": ""},
+ "analysis": "workspace_sql" | "python",
+ "aggregate_only": false,
+ "attributions": [],
+ "rationale": ""}
+
+- Name exactly ONE base_view from the list above. Every number in your answer comes
+  from that one population, which is what lets this answer be compared against
+  earlier ones. Prefer an [APPROVED] view over a [DRAFT] one.
+- propose_base_view: fill this in ONLY when no listed view can answer the question,
+  and set base_view to the name you are proposing. It must be at ID grain -- one row
+  per identifier (session_id, order_id, user_id), never one row per dimension
+  combination. A base at dimensional grain is useless for the next question. Say in
+  rationale why no existing view fits.
+- cube.dimensions: the columns to GROUP BY, drawn only from the chosen base's listed
+  dimension columns. Fewer is better: a cube is reusable for every question over a
+  SUBSET of its dimensions and cheap to widen later, but a cube that is too large is
+  refused outright. Do not add a dimension "in case it is useful".
+- cube.measures: prefer SUM, COUNT(*), MIN, MAX. Ask for AVG(x) as a plain AVG(x) and
+  it will be stored as a sum and a count for you. COUNT(DISTINCT x), medians and
+  percentiles DO NOT roll up -- a cube carrying one can answer only at its own
+  dimensions, so name them only when the question truly needs them, and say so in
+  rationale.
+- cube.filters are equality sets only, e.g. {"country": ["Germany"]}, taken from the
+  EXACT literals and casing in the schema block. These slice the population; they do
+  not change it. A metric's ALWAYS APPLY filters belong in the base view, not here --
+  if a matched metric has one and the chosen base does not enforce it, say so in
+  rationale rather than patching it in as a slice.
+- aggregate_only: true means no base view applies and none is worth proposing -- a
+  one-off scalar or an operational lookup. Justify it in rationale. The answer will
+  be marked as UNRECONCILABLE, so this is the exception, not the default.
+- analysis -- how to compute the answer once the data is in hand:
+    "workspace_sql" for set operations: filtering, grouping, joining two cubes,
+      aggregating, ranking, windows. This runs as DuckDB SQL against the cubes as
+      views and is the cheaper, more reliable path -- PREFER IT for any re-cut.
+    "python" for statistics, trend decomposition, significance tests, anomaly
+      detection, forecasting, clustering, correlation, and ANY turn that should
+      produce a chart -- the chart spec is built in Python.
+
+The cubes listed below carry base_view, dimensions, row_count, truncated and a
+3-row sample. They are context for stating the requirement well, NOT a menu to pick
+from -- code decides what actually gets reused."""
+
+    PROPOSAL_PROMPT = """You are proposing a NEW base view, so you must also say how each
+multi-valued column collapses onto the grain. The schema marks these FAN-OUT. Do NOT
+add such a column to GROUP BY -- that changes the grain and double-counts those keys.
+
+Prefer strategy "highest_intent": rank the column's values by business value and take
+the highest-ranked value the key touched. Approved attribution rules for this company
+are listed above -- reuse one verbatim when it covers the column, and set
+source="brain". Only propose your own (source="llm") when none applies, and explain
+the ranking in rationale.
+
+Fall back to "most_frequent" (with a latest-timestamp tiebreak) only when no value
+ordering is defensible. Never use "first" or "latest" alone for a column that drives
+conversion or revenue -- that misattributes exactly the multi-value keys that matter
+most."""
+
+    def _render_attribution_pattern(self, rules: List[AttributionRule]) -> str:
+        """Render the actual CTE, parameterised on the rule -- do not describe the
+        technique in prose and hope. A model copies structure far more reliably
+        than it follows instructions.
+
+        This is the only moment an LLM writes attribution SQL: when it is
+        authoring a proposed base view's source_sql. Once that base is approved
+        every cube inherits the collapse for free and no prompt can override it.
+
+        The shape is modeled on a production Athena query, with two deliberate
+        departures. That query re-joins each attributed level back to the
+        event-level base and filters on it, which keeps the output at *event*
+        grain -- right for a filtered event feed, wrong for a base view, which
+        must end at its own grain. And its ordering is pure most-frequent; the
+        business case is for ranking by value, so highest_intent is what gets
+        generated, with most-frequent as the documented fallback.
+        """
+        if not rules:
+            return ""
+        blocks = []
+        for rule in rules:
+            grain = ", ".join(rule.grain) or "<grain>"
+            if rule.strategy == "highest_intent" and rule.priority_values:
+                case = " ".join(f"WHEN '{v}' THEN {i + 1}"
+                                for i, v in enumerate(rule.priority_values))
+                order = (f"ORDER BY CASE {rule.column} {case} ELSE 99 END ASC\n"
+                         f"                      , event_count DESC\n"
+                         f"                      , latest_event DESC")
+                ranking = (f"Business ranking, highest value first: "
+                           f"{', '.join(rule.priority_values)}.")
+            else:
+                order = ("ORDER BY event_count DESC\n"
+                         "                      , latest_event DESC")
+                ranking = ("No defensible value ordering was supplied, so this "
+                           "collapses to the most frequent value.")
+            tiebreak = (f" Resolve ties with {', '.join(rule.tiebreakers)}."
+                        if rule.tiebreakers else "")
+            blocks.append(f"""The column `{rule.column}` holds more than one value per {grain}. Your base
+view must collapse it with a ranked attribution CTE, not GROUP BY. {ranking}{tiebreak}
+Use exactly this shape:
+
+WITH ranked_{rule.column} AS (
+    SELECT {grain}
+         , {rule.column}
+         , COUNT(*) AS event_count
+         , MAX(<timestamp_column>) AS latest_event
+    FROM <table>
+    WHERE <the population's filters>
+    GROUP BY {grain}, {rule.column}
+)
+, attributed_{rule.column} AS (
+    SELECT *
+         , ROW_NUMBER() OVER (
+               PARTITION BY {grain}
+               {order}
+           ) AS rn
+    FROM ranked_{rule.column}
+)
+-- then join back on {grain} AND rn = 1, exposing {rule.column} as the attributed value
+-- ATTRIBUTION: {rule.column} -> one value per {grain} by {rule.strategy}""")
+        blocks.append(
+            "Emit one such CTE per attributed column and chain them: attribute the\n"
+            "coarser level first, then the finer level within it. Every join back is ON\n"
+            "the grain key AND rn = 1 -- the row count of your base view must equal the\n"
+            "distinct count of the grain. That is what makes it an ID-grain base rather\n"
+            "than an event feed, and it is checked.")
+        return "\n\n".join(blocks)
+
+    def _plan_turn(self, llm: Any, tenant_id: str, conversation_id: str, question: str,
+                   query_nodes: List[Any], defn_nodes: List[Any],
+                   schema_ctx: Optional[SchemaContext] = None) -> TurnPlan:
+        """Resolve the population, compose and guard the cube, then ask the
+        DataManager whether the workspace already covers it.
+
+        Always calls the LLM, cached cubes or not.
+        """
+        if schema_ctx is None:
+            schema_ctx = self.schema_context.build(tenant_id, question, query_nodes,
+                                                   defn_nodes)
+        frames = self.data_cache.list_available(tenant_id, conversation_id)
+        prompt = self._plan_prompt(question, schema_ctx, frames)
+
+        parsed = self._ask_planner(llm, prompt, schema_ctx)
+        if parsed is None:
+            return TurnPlan(path="aggregate", analysis="python",
+                            rationale="the planner produced no usable plan")
+
+        plan = self._resolve_plan(tenant_id, parsed, schema_ctx)
+        if plan is None:
+            return TurnPlan(path="aggregate", analysis="python",
+                            rationale="the planner named a base view that does not exist")
+
+        # The guard refused: feed the culprit back once. Do not silently drop a
+        # dimension on the model's behalf -- the answer would then be to a
+        # question nobody asked.
+        if plan.cube_sql is not None and not plan.cube_sql.ok:
+            retry = self._ask_planner(
+                llm, prompt + "\n\n" + self._guard_feedback(plan.cube_sql), schema_ctx)
+            retried = self._resolve_plan(tenant_id, retry, schema_ctx) if retry else None
+            if retried is None or retried.cube_sql is None or not retried.cube_sql.ok:
+                reason = plan.cube_sql.error
+                return TurnPlan(path="aggregate", analysis=plan.analysis,
+                                rationale=f"no cube could be composed: {reason}",
+                                caveats=[f"the requested breakdown could not be sized: "
+                                         f"{reason}"])
+            plan = retried
+
+        if parsed.get("aggregate_only"):
+            plan.path = "aggregate"
+            return plan
+
+        plan.requirement = DataRequirement(
+            base_view=plan.base_view.name,
+            population_hash=plan.cube_sql.population_hash,   # from the base, never the LLM
+            grain=list(plan.base_view.grain),
+            dimensions=list(plan.cube.dimensions),
+            measures=list(plan.cube_sql.measures),
+            filters=dict(plan.cube.filters),
+            time_column=plan.cube.time_column,
+            time_start=plan.cube.time_start, time_end=plan.cube.time_end)
+        plan.verdict = self.data_manager.assess(tenant_id, conversation_id, plan.requirement)
+        plan.path = plan.verdict.decision
+        plan.df_label = plan.verdict.label
+        return plan
+
+    def _plan_prompt(self, question: str, schema_ctx: SchemaContext,
+                     frames: List[Dict[str, Any]]) -> str:
+        lines = [f"Question: {question}", ""]
+        if schema_ctx.rendered:
+            lines.extend([schema_ctx.rendered, ""])
+        if frames:
+            lines.append("Cubes already in this conversation's workspace:")
+            for f in frames:
+                lines.append(
+                    f"- {f['label']}: {f.get('description', '')} | base_view="
+                    f"{f.get('base_view') or 'none'} | dimensions={f.get('dimensions')} "
+                    f"| rows={f.get('row_count')} | truncated={f.get('truncated')} "
+                    f"| sample={f.get('sample')}")
+            lines.append("")
+        return "\n".join(lines)
+
+    def _ask_planner(self, llm: Any, prompt: str,
+                     schema_ctx: SchemaContext) -> Optional[Dict[str, Any]]:
+        system = self.PLAN_SYSTEM_PROMPT
+        if self._has_fanout(schema_ctx):
+            system += "\n\n" + self.PROPOSAL_PROMPT
+        system += "\n\n" + self._render_attribution_pattern(
+            self._fanout_rules(schema_ctx))
         try:
-            import json
-            res = llm.generate(prompt=prompt, system_prompt=sys_prompt, temperature=0.0)
+            res = llm.generate(prompt=prompt, system_prompt=system, temperature=0.0)
             text = (res.text or "").strip() if res and hasattr(res, "text") else ""
-            if "```json" in text:
-                text = text.split("```json")[1].split("```")[0].strip()
-            elif "```" in text:
-                text = text.split("```")[1].strip()
-            parsed = json.loads(text)
-            path = parsed.get("path", "sql")
-            df_label = parsed.get("df_label") or ""
-            if path == "python" and df_label in {f["label"] for f in available}:
-                return "python", df_label
-            return "sql", ""
-        except Exception as exc:  # noqa: BLE001 - routing is best-effort, default to the proven path
-            logger.warning("compute-path routing failed for question %r: %s", question, exc)
-            return "sql", ""
+        except Exception as exc:  # noqa: BLE001 - a dead gateway degrades, never raises
+            logger.warning("turn planning failed: %s", exc, exc_info=True)
+            return None
+        return _parse_json_block(text, context="turn plan")
+
+    @staticmethod
+    def _guard_feedback(cube_sql: Any) -> str:
+        return (f"Your previous cube was refused: {cube_sql.error} "
+                f"The largest dimensions are {cube_sql.offending_dimensions}. "
+                f"Drop or bucket one and answer again with the same JSON shape.")
+
+    # -- resolving what the planner said --------------------------------------
+    def _resolve_plan(self, tenant_id: str, parsed: Optional[Dict[str, Any]],
+                      schema_ctx: SchemaContext) -> Optional[TurnPlan]:
+        if not parsed:
+            return None
+        name = (parsed.get("base_view") or "").strip()
+        if not name:
+            return None
+
+        proposal = parsed.get("propose_base_view")
+        caveats: List[str] = []
+        if isinstance(proposal, dict) and proposal:
+            view = self._store_proposal(tenant_id, proposal, parsed, schema_ctx)
+            if view is None:
+                return None
+            approved = False
+            caveats.append(
+                f"this answer rests on an unreviewed base view definition "
+                f"({view.name}); figures are provisional until it is approved.")
+        else:
+            view = self.base_views.get(tenant_id, name, approved_only=False)
+            if view is None:
+                return None
+            approved = self.base_views.is_approved(tenant_id, name)
+            if not approved:
+                caveats.append(
+                    f"this answer rests on an unreviewed base view definition "
+                    f"({view.name}); figures are provisional until it is approved.")
+
+        cube = self._parse_cube(parsed.get("cube") or {}, view)
+        cube_sql = self.base_views.compose_cube(view, cube, schema_ctx.profiles or {})
+        return TurnPlan(
+            path="retrieve",
+            analysis="workspace_sql" if parsed.get("analysis") == "workspace_sql" else "python",
+            base_view=view, base_view_approved=approved, cube=cube, cube_sql=cube_sql,
+            grain=list(view.grain), dimensions=list(cube.dimensions),
+            measures=list(cube_sql.measures),
+            time_window=(f"{cube.time_start}..{cube.time_end}"
+                         if cube.time_start and cube.time_end else ""),
+            rationale=str(parsed.get("rationale") or ""), caveats=caveats,
+            # Attribution is a property of the population. On an existing base it
+            # is already baked in and inherited; the planner may not override it.
+            attributions=[])
+
+    def _store_proposal(self, tenant_id: str, proposal: Dict[str, Any],
+                        parsed: Dict[str, Any],
+                        schema_ctx: SchemaContext) -> Optional[BaseView]:
+        try:
+            rules = [AttributionRule(**r) for r in (parsed.get("attributions") or [])
+                     if isinstance(r, dict)]
+            payload = {k: v for k, v in proposal.items()
+                       if k in {"name", "grain", "source_sql", "dimension_columns",
+                                "measure_columns", "time_column", "row_count_estimate",
+                                "description", "owner", "aliases"}}
+            view = BaseView(**payload)
+            view.attributions = rules + self._default_attributions(
+                view, rules, schema_ctx)
+        except (TypeError, ValueError) as exc:
+            logger.warning("could not build the proposed base view: %s", exc)
+            return None
+        if not view.name or not view.source_sql or not view.grain:
+            return None
+        self.base_views.upsert(tenant_id, view, by="stakeholder")
+        return view
+
+    def _default_attributions(self, view: BaseView, existing: List[AttributionRule],
+                              schema_ctx: SchemaContext) -> List[AttributionRule]:
+        """A fanned-out column carried onto the grain with no rule would silently
+        double-count. Synthesize a most_frequent rule and mark it source="default"
+        so a reviewer can see the machine chose it, not the business."""
+        covered = {r.column for r in existing}
+        out = []
+        for column in view.dimension_columns:
+            if column in covered:
+                continue
+            profile = (schema_ctx.profiles or {}).get(column)
+            if profile is None:
+                continue
+            if any(share > 0 for key, share in profile.fanout_by_key.items()
+                   if key in view.grain):
+                out.append(AttributionRule(
+                    column=column, grain=list(view.grain), strategy="most_frequent",
+                    tiebreakers=["event_count DESC"], source="default",
+                    rationale="synthesized because this column fans out at the base "
+                              "grain and the proposal supplied no ranking; a human "
+                              "should replace it with a business ordering"))
+        return out
+
+    @staticmethod
+    def _parse_cube(raw: Dict[str, Any], view: BaseView) -> CubeSpec:
+        measures = []
+        for m in raw.get("measures") or []:
+            if isinstance(m, dict) and m.get("name"):
+                measures.append(CubeMeasure(name=str(m["name"]), expr=str(m.get("expr", ""))))
+        filters = {str(k): [str(x) for x in v] for k, v in (raw.get("filters") or {}).items()
+                   if isinstance(v, list)}
+        return CubeSpec(
+            base_name=view.name,
+            dimensions=[str(d) for d in (raw.get("dimensions") or [])],
+            measures=measures, filters=filters,
+            time_column=str(raw.get("time_column") or view.time_column or ""),
+            time_start=str(raw.get("time_start") or ""),
+            time_end=str(raw.get("time_end") or ""))
+
+    @staticmethod
+    def _has_fanout(schema_ctx: SchemaContext) -> bool:
+        return any(share > 0 for p in (schema_ctx.profiles or {}).values()
+                   for share in p.fanout_by_key.values())
+
+    @staticmethod
+    def _fanout_rules(schema_ctx: SchemaContext) -> List[AttributionRule]:
+        out = []
+        for p in (schema_ctx.profiles or {}).values():
+            for key, share in sorted(p.fanout_by_key.items()):
+                if share > 0:
+                    out.append(AttributionRule(column=p.column, grain=[key],
+                                               strategy="most_frequent"))
+                    break
+        return out
 
     def _synthesize_sql(self, llm: Any, question: str, query_nodes: List[Any],
                         defn_nodes: List[Any], prior_sql: str = "",

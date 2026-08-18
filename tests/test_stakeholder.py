@@ -16,6 +16,17 @@ from analytics_platform.fixtures import WEEKLY_ORDER_SQL, build_retail_warehouse
 from tests.test_api import app_ctx, call
 
 
+def plan_resp():
+    """The planning call _plan_turn makes on every turn (Task 11).
+
+    These fixtures define no base view, so there is no population to resolve:
+    the planner falls back to the aggregate path, which is exactly the behaviour
+    the tests below were written against. Returning unparseable text is the
+    honest way to say "no plan" without inventing a base view.
+    """
+    return MagicMock(text="", ok=True, tokens_in=0, tokens_out=0)
+
+
 class TestStakeholder(unittest.TestCase):
     def setUp(self):
         self.ctx, self.base = app_ctx(warehouse=build_retail_warehouse())
@@ -325,7 +336,7 @@ class TestStakeholder(unittest.TestCase):
 
         mock_llm = MagicMock()
         mock_llm.name = "mock_gateway"
-        mock_llm.generate.side_effect = [intent_resp, no_sql_resp, skill_null_resp, freeform_resp]
+        mock_llm.generate.side_effect = [intent_resp, plan_resp(), no_sql_resp, skill_null_resp, freeform_resp]
         mock_make_role_client.return_value = mock_llm
 
         self.ctx.tenants.set_analyst_config(self.tid, {
@@ -369,7 +380,7 @@ class TestStakeholder(unittest.TestCase):
 
         mock_llm = MagicMock()
         mock_llm.name = "mock_gateway"
-        mock_llm.generate.side_effect = [intent_resp, no_sql_resp, synth_resp]
+        mock_llm.generate.side_effect = [intent_resp, plan_resp(), no_sql_resp, synth_resp]
         mock_make_role_client.return_value = mock_llm
 
         self.ctx.tenants.set_analyst_config(self.tid, {
@@ -406,7 +417,7 @@ class TestStakeholder(unittest.TestCase):
 
         mock_llm = MagicMock()
         mock_llm.name = "mock_gateway"
-        mock_llm.generate.side_effect = [intent_resp, no_sql_resp, chart_resp]
+        mock_llm.generate.side_effect = [intent_resp, plan_resp(), no_sql_resp, chart_resp]
         mock_make_role_client.return_value = mock_llm
 
         self.ctx.tenants.set_analyst_config(self.tid, {
@@ -444,7 +455,7 @@ class TestStakeholder(unittest.TestCase):
 
         mock_llm = MagicMock()
         mock_llm.name = "mock_gateway"
-        mock_llm.generate.side_effect = [intent_resp, sql_resp, answer_resp]
+        mock_llm.generate.side_effect = [intent_resp, plan_resp(), sql_resp, answer_resp]
         mock_make_role_client.return_value = mock_llm
 
         self.ctx.tenants.set_analyst_config(self.tid, {
@@ -486,7 +497,7 @@ class TestStakeholder(unittest.TestCase):
 
         mock_llm = MagicMock()
         mock_llm.name = "mock_gateway"
-        mock_llm.generate.side_effect = [intent_resp, sql_resp, answer_resp]
+        mock_llm.generate.side_effect = [intent_resp, plan_resp(), sql_resp, answer_resp]
         mock_make_role_client.return_value = mock_llm
 
         self.ctx.tenants.set_analyst_config(self.tid, {
@@ -516,7 +527,7 @@ class TestStakeholder(unittest.TestCase):
 
         mock_llm = MagicMock()
         mock_llm.name = "mock_gateway"
-        mock_llm.generate.side_effect = [intent_resp, bad_sql_resp, fixed_sql_resp, answer_resp]
+        mock_llm.generate.side_effect = [intent_resp, plan_resp(), bad_sql_resp, fixed_sql_resp, answer_resp]
         mock_make_role_client.return_value = mock_llm
 
         self.ctx.tenants.set_analyst_config(self.tid, {
@@ -531,7 +542,7 @@ class TestStakeholder(unittest.TestCase):
                       res["queries_run"][0])
         # The repair prompt for attempt 2 must actually mention the rejection
         # reason, not just retry the same broken query blind.
-        second_call_kwargs = mock_llm.generate.call_args_list[2].kwargs
+        second_call_kwargs = mock_llm.generate.call_args_list[3].kwargs
         self.assertIn("{{Date}}", second_call_kwargs["prompt"])
 
     @patch("analytics_platform.stakeholder.make_role_client")
@@ -549,7 +560,7 @@ class TestStakeholder(unittest.TestCase):
 
         mock_llm = MagicMock()
         mock_llm.name = "mock_gateway"
-        mock_llm.generate.side_effect = [intent_resp, bad_table_resp, fixed_sql_resp, answer_resp]
+        mock_llm.generate.side_effect = [intent_resp, plan_resp(), bad_table_resp, fixed_sql_resp, answer_resp]
         mock_make_role_client.return_value = mock_llm
 
         self.ctx.tenants.set_analyst_config(self.tid, {
@@ -576,7 +587,7 @@ class TestStakeholder(unittest.TestCase):
         # intent + 3 synthesis attempts (all rejected) + final chart synthesis
         # on the verbatim-reuse fallback path
         mock_llm.generate.side_effect = [
-            intent_resp, always_bad_resp, always_bad_resp, always_bad_resp, answer_resp]
+            intent_resp, plan_resp(), always_bad_resp, always_bad_resp, always_bad_resp, answer_resp]
         mock_make_role_client.return_value = mock_llm
 
         self.ctx.tenants.set_analyst_config(self.tid, {
@@ -585,7 +596,7 @@ class TestStakeholder(unittest.TestCase):
 
         res = self.ctx.stakeholder.answer(self.tid, "how many retail orders per month")
         self.assertEqual(res["answer_mode"], AnswerMode.REFRESHED_APPROVED_QUERY.value)
-        self.assertEqual(mock_llm.generate.call_count, 5)
+        self.assertEqual(mock_llm.generate.call_count, 6)
 
     @patch("analytics_platform.stakeholder.make_role_client")
     def test_sql_synthesis_falls_back_when_llm_declines(self, mock_make_role_client):
@@ -598,7 +609,7 @@ class TestStakeholder(unittest.TestCase):
 
         mock_llm = MagicMock()
         mock_llm.name = "mock_gateway"
-        mock_llm.generate.side_effect = [intent_resp, no_sql_resp, answer_resp]
+        mock_llm.generate.side_effect = [intent_resp, plan_resp(), no_sql_resp, answer_resp]
         mock_make_role_client.return_value = mock_llm
 
         self.ctx.tenants.set_analyst_config(self.tid, {
@@ -624,7 +635,7 @@ class TestStakeholder(unittest.TestCase):
         # intent + 3 synthesis attempts (all the same unsafe write, all rejected)
         # + final chart synthesis on the verbatim-reuse fallback path
         mock_llm.generate.side_effect = [
-            intent_resp, unsafe_sql_resp, unsafe_sql_resp, unsafe_sql_resp, answer_resp]
+            intent_resp, plan_resp(), unsafe_sql_resp, unsafe_sql_resp, unsafe_sql_resp, answer_resp]
         mock_make_role_client.return_value = mock_llm
 
         self.ctx.tenants.set_analyst_config(self.tid, {
@@ -634,7 +645,7 @@ class TestStakeholder(unittest.TestCase):
         res = self.ctx.stakeholder.answer(self.tid, "how many retail orders per month")
         self.assertEqual(res["answer_mode"], AnswerMode.REFRESHED_APPROVED_QUERY.value)
         self.assertNotIn("DELETE", " ".join(res["queries_run"]))
-        self.assertEqual(mock_llm.generate.call_count, 5)
+        self.assertEqual(mock_llm.generate.call_count, 6)
 
     @patch("analytics_platform.stakeholder.make_role_client")
     def test_sql_synthesis_falls_back_when_generated_sql_fails_execution(self, mock_make_role_client):
@@ -651,7 +662,7 @@ class TestStakeholder(unittest.TestCase):
         mock_llm = MagicMock()
         mock_llm.name = "mock_gateway"
         mock_llm.generate.side_effect = [
-            intent_resp, bad_column_resp, bad_column_resp, bad_column_resp, answer_resp]
+            intent_resp, plan_resp(), bad_column_resp, bad_column_resp, bad_column_resp, answer_resp]
         mock_make_role_client.return_value = mock_llm
 
         self.ctx.tenants.set_analyst_config(self.tid, {
@@ -660,7 +671,7 @@ class TestStakeholder(unittest.TestCase):
 
         res = self.ctx.stakeholder.answer(self.tid, "how many retail orders per month")
         self.assertEqual(res["answer_mode"], AnswerMode.REFRESHED_APPROVED_QUERY.value)
-        self.assertEqual(mock_llm.generate.call_count, 5)
+        self.assertEqual(mock_llm.generate.call_count, 6)
 
     def test_ensure_conversation_creates_then_reuses(self):
         svc = self.ctx.stakeholder
@@ -702,54 +713,36 @@ class TestStakeholder(unittest.TestCase):
         self.assertIsNone(svc.get_conversation(self.tid, cid))
         self.assertFalse(svc.delete_conversation(self.tid, cid))
 
-    def test_choose_compute_path_defaults_to_sql_when_nothing_cached(self):
-        mock_llm = MagicMock()
-        path, label = self.ctx.stakeholder._choose_compute_path(
-            mock_llm, self.tid, "no-such-conversation", "how many orders")
-        self.assertEqual(path, "sql")
-        self.assertEqual(label, "")
-        mock_llm.generate.assert_not_called()  # no point asking if nothing's cached
+    def _seed_reusable_cube(self, conversation_id, label="df_1"):
+        """Approve a base view and cache a cube over it, so a follow-up turn can
+        legitimately be served from the workspace.
 
-    def test_choose_compute_path_returns_python_when_llm_says_so_and_label_exists(self):
+        Before Task 11 any cached frame was a reuse candidate. Now a candidate
+        must carry the same population_hash as the turn's plan, so a test that
+        wants reuse has to establish a population first.
+        """
         import pandas as pd
+        from analytics_platform.domain import BaseView
+        from analytics_platform.execution.extract_store import ExtractMeta
+
+        registry = self.ctx.stakeholder.base_views
+        view = BaseView(name="order_events", grain=["order_id"],
+                        source_sql="SELECT order_id, revenue FROM events",
+                        dimension_columns=[], measure_columns=["revenue"],
+                        row_count_estimate=1000)
+        node = registry.upsert(self.tid, view, by="senior")
+        brain = self.ctx.pipeline.brain(self.tid)
+        brain.submit(node.id, by="junior")
+        brain.approve(node.id, by="senior")
         self.ctx.stakeholder.data_cache.put(
-            self.tid, "conv-1", "df_1", "orders by month", pd.DataFrame({"a": [1, 2]}))
-        mock_llm = MagicMock()
-        mock_llm.generate.return_value = MagicMock(
-            text='{"path": "python", "df_label": "df_1"}', tokens_in=5, tokens_out=5)
-
-        path, label = self.ctx.stakeholder._choose_compute_path(
-            mock_llm, self.tid, "conv-1", "what's the total")
-
-        self.assertEqual(path, "python")
-        self.assertEqual(label, "df_1")
-
-    def test_choose_compute_path_falls_back_to_sql_on_unknown_label(self):
-        import pandas as pd
-        self.ctx.stakeholder.data_cache.put(
-            self.tid, "conv-1", "df_1", "orders by month", pd.DataFrame({"a": [1, 2]}))
-        mock_llm = MagicMock()
-        mock_llm.generate.return_value = MagicMock(
-            text='{"path": "python", "df_label": "df_does_not_exist"}', tokens_in=5, tokens_out=5)
-
-        path, label = self.ctx.stakeholder._choose_compute_path(
-            mock_llm, self.tid, "conv-1", "what's the total")
-
-        self.assertEqual(path, "sql")
-        self.assertEqual(label, "")
-
-    def test_choose_compute_path_falls_back_to_sql_on_malformed_llm_response(self):
-        import pandas as pd
-        self.ctx.stakeholder.data_cache.put(
-            self.tid, "conv-1", "df_1", "orders by month", pd.DataFrame({"a": [1, 2]}))
-        mock_llm = MagicMock()
-        mock_llm.generate.return_value = MagicMock(text="not json at all", tokens_in=0, tokens_out=0)
-
-        path, label = self.ctx.stakeholder._choose_compute_path(
-            mock_llm, self.tid, "conv-1", "what's the total")
-
-        self.assertEqual(path, "sql")
-        self.assertEqual(label, "")
+            self.tid, conversation_id, label, "orders",
+            pd.DataFrame({"amount": [1, 2, 3], "revenue": [1, 2, 3]}),
+            meta=ExtractMeta(label=label, grain=["order_id"],
+                             columns=["amount", "revenue"], dimensions=[],
+                             base_view="order_events",
+                             population_hash=registry.population_hash(view),
+                             row_count=3, created_at="2026-08-15T00:00:00Z"))
+        return view
 
     def test_python_synthesis_repairs_after_policy_rejection(self):
         import pandas as pd
@@ -817,15 +810,13 @@ class TestStakeholder(unittest.TestCase):
         # fresh conversation instead) -- create a real one first, same as
         # test_answer_creates_and_reuses_conversation does, then seed the
         # DataFrame cache under that real id.
-        import pandas as pd
         cid = self.ctx.stakeholder._ensure_conversation(self.tid, "", "seed conversation")
-        self.ctx.stakeholder.data_cache.put(
-            self.tid, cid, "df_1", "orders", pd.DataFrame({"amount": [1, 2, 3]}))
+        self._seed_reusable_cube(cid)
         mock_llm = MagicMock()
         mock_llm.name = "mock_gateway"
         mock_llm.generate.side_effect = [
             MagicMock(text='{"category": "metric_lookup"}', tokens_in=5, tokens_out=5),
-            MagicMock(text='{"path": "python", "df_label": "df_1"}', tokens_in=5, tokens_out=5),
+            MagicMock(text=REUSE_PLAN, tokens_in=5, tokens_out=5),
             MagicMock(text="```python\nresult = int(df_1['amount'].sum())\n```", tokens_in=10, tokens_out=5),
             MagicMock(text='{"answer": "the total is 6"}', tokens_in=10, tokens_out=5),
         ]
@@ -844,15 +835,13 @@ class TestStakeholder(unittest.TestCase):
 
     @patch("analytics_platform.stakeholder.make_role_client")
     def test_get_conversation_includes_python_cells_after_reload(self, mock_make_role_client):
-        import pandas as pd
         cid = self.ctx.stakeholder._ensure_conversation(self.tid, "", "seed conversation")
-        self.ctx.stakeholder.data_cache.put(
-            self.tid, cid, "df_1", "orders", pd.DataFrame({"amount": [1, 2, 3]}))
+        self._seed_reusable_cube(cid)
         mock_llm = MagicMock()
         mock_llm.name = "mock_gateway"
         mock_llm.generate.side_effect = [
             MagicMock(text='{"category": "metric_lookup"}', tokens_in=5, tokens_out=5),
-            MagicMock(text='{"path": "python", "df_label": "df_1"}', tokens_in=5, tokens_out=5),
+            MagicMock(text=REUSE_PLAN, tokens_in=5, tokens_out=5),
             MagicMock(text="```python\nresult = int(df_1['amount'].sum())\n```", tokens_in=10, tokens_out=5),
             MagicMock(text='{"answer": "the total is 6"}', tokens_in=10, tokens_out=5),
         ]
@@ -883,12 +872,13 @@ class TestStakeholder(unittest.TestCase):
             # Turn 1: search-intent extraction -> SQL synthesis -> answer synthesis
             # (same shape as test_successful_sql_synthesis_caches_the_resulting_dataframe).
             MagicMock(text="retail orders", ok=True, tokens_in=10, tokens_out=5),
+            plan_resp(),
             MagicMock(text="```sql\nSELECT revenue FROM events WHERE action = 'order' LIMIT 10\n```",
                       tokens_in=20, tokens_out=10),
             MagicMock(text='{"answer": "here is the order data"}', tokens_in=15, tokens_out=8),
-            # Turn 2: search-intent extraction -> routing(python) -> python synthesis -> answer synthesis.
+            # Turn 2: search-intent extraction -> planning(reuse) -> python synthesis -> answer synthesis.
             MagicMock(text='{"category": "metric_lookup"}', tokens_in=10, tokens_out=5),
-            MagicMock(text='{"path": "python", "df_label": "df_1"}', tokens_in=5, tokens_out=5),
+            MagicMock(text=REUSE_PLAN, tokens_in=5, tokens_out=5),
             MagicMock(text="```python\nresult = int(df_1['revenue'].sum())\n```", tokens_in=10, tokens_out=5),
             MagicMock(text='{"answer": "the total is computed from what we already fetched"}',
                      tokens_in=10, tokens_out=5),
@@ -900,6 +890,7 @@ class TestStakeholder(unittest.TestCase):
             turn1 = self.ctx.stakeholder.answer(self.tid, "show me order amounts", conversation_id="")
             conv_id = turn1["conversation_id"]
             self.assertEqual(len(turn1["queries_run"]), 1)
+            self._seed_reusable_cube(conv_id)   # see the note on that helper
 
             # Ground truth computed from the cache itself, not hard-coded --
             # this test must pass regardless of what the fixture warehouse's
@@ -938,7 +929,7 @@ class TestStakeholder(unittest.TestCase):
 
         mock_llm = MagicMock()
         mock_llm.name = "mock_gateway"
-        mock_llm.generate.side_effect = [intent_resp, sql_resp, answer_resp]
+        mock_llm.generate.side_effect = [intent_resp, plan_resp(), sql_resp, answer_resp]
         mock_make_role_client.return_value = mock_llm
 
         self.ctx.tenants.set_analyst_config(self.tid, {
@@ -958,15 +949,13 @@ class TestStakeholder(unittest.TestCase):
         test_answer_routes_to_python_when_cache_hit_and_records_python_cells)
         doesn't itself populate the DataFrame cache, so produced_df_label
         should stay empty."""
-        import pandas as pd
         cid = self.ctx.stakeholder._ensure_conversation(self.tid, "", "seed conversation")
-        self.ctx.stakeholder.data_cache.put(
-            self.tid, cid, "df_1", "orders", pd.DataFrame({"amount": [1, 2, 3]}))
+        self._seed_reusable_cube(cid)
         mock_llm = MagicMock()
         mock_llm.name = "mock_gateway"
         mock_llm.generate.side_effect = [
             MagicMock(text='{"category": "metric_lookup"}', tokens_in=5, tokens_out=5),
-            MagicMock(text='{"path": "python", "df_label": "df_1"}', tokens_in=5, tokens_out=5),
+            MagicMock(text=REUSE_PLAN, tokens_in=5, tokens_out=5),
             MagicMock(text="```python\nresult = int(df_1['amount'].sum())\n```", tokens_in=10, tokens_out=5),
             MagicMock(text='{"answer": "the total is 6"}', tokens_in=10, tokens_out=5),
         ]
@@ -1005,6 +994,7 @@ class TestStakeholder(unittest.TestCase):
         mock_llm.name = "mock_gateway"
         mock_llm.generate.side_effect = [
             MagicMock(text="retail orders", ok=True, tokens_in=10, tokens_out=5),
+            plan_resp(),
             MagicMock(text="```sql\nSELECT revenue FROM events WHERE action = 'order' LIMIT 10\n```",
                       tokens_in=20, tokens_out=10),
             MagicMock(text='{"answer": "here is the revenue"}', tokens_in=15, tokens_out=8),
@@ -1016,10 +1006,11 @@ class TestStakeholder(unittest.TestCase):
 
         conv_id = turn1["conversation_id"]
         self.assertEqual(turn1["produced_df_label"], "df_1")
+        self._seed_reusable_cube(conv_id)      # see the note on that helper
 
         mock_llm.generate.side_effect = [
             MagicMock(text='{"category": "metric_lookup"}', tokens_in=5, tokens_out=5),
-            MagicMock(text='{"path": "python", "df_label": "df_1"}', tokens_in=5, tokens_out=5),
+            MagicMock(text=REUSE_PLAN, tokens_in=5, tokens_out=5),
             MagicMock(text="```python\nresult = int(df_1['revenue'].sum())\n```",
                       tokens_in=10, tokens_out=5),
             MagicMock(text='{"answer": "the total is 6"}', tokens_in=10, tokens_out=5),
@@ -1062,3 +1053,312 @@ class TestConversationSchema(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# --------------------------------------------------------------------------- #
+# Task 11 -- _plan_turn: choose the population, state the cube
+# --------------------------------------------------------------------------- #
+class MockLLM:
+    """A live-looking client returning canned text, counting calls."""
+
+    name = "gateway"
+
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = 0
+        self.prompts = []
+        self.system_prompts = []
+
+    def generate(self, prompt="", system_prompt="", **kw):
+        from analytics_platform.llm.client import LLMResponse
+        self.calls += 1
+        self.prompts.append(prompt)
+        self.system_prompts.append(system_prompt)
+        if not self.responses:
+            raise AssertionError("the LLM was called more times than the test allows")
+        return LLMResponse(text=self.responses.pop(0), tokens_in=5, tokens_out=5)
+
+    @property
+    def last_prompt(self):
+        return self.prompts[-1] if self.prompts else ""
+
+    @property
+    def last_system_prompt(self):
+        return self.system_prompts[-1] if self.system_prompts else ""
+
+    @property
+    def exhausted(self):
+        return not self.responses
+
+
+REUSE_PLAN = ('{"base_view":"order_events","cube":{"dimensions":[],'
+              '"measures":[{"name":"revenue","expr":"SUM(revenue)"}],"filters":{}},'
+              '"analysis":"python"}')
+
+CUBE = ('{"base_view":"checkout_sessions","cube":{"dimensions":["device"],'
+        '"measures":[{"name":"revenue","expr":"SUM(revenue)"}],"filters":{}},'
+        '"analysis":"workspace_sql"}')
+
+TOO_WIDE = ('{"base_view":"checkout_sessions","cube":{"dimensions":["country","device","city"],'
+            '"measures":[{"name":"n","expr":"COUNT(*)"}]}}')
+
+
+class TestPlanTurn(unittest.TestCase):
+    def setUp(self):
+        from analytics_platform.domain import BaseView, ColumnProfile
+        from analytics_platform.schema_context import SchemaContext
+
+        self.ctx, self.base = app_ctx(warehouse=build_retail_warehouse())
+        self.tid = self.ctx.tenants.create_tenant("PlanCo").id
+        self.app = create_app(self.ctx)       # backfills ctx.stakeholder
+        self.svc = self.ctx.stakeholder
+        self.registry = self.svc.base_views
+
+        self.view = BaseView(
+            name="checkout_sessions", grain=["session_id"],
+            source_sql="SELECT session_id, country, device, city, service_line, revenue "
+                       "FROM orders WHERE is_test_traffic = false",
+            dimension_columns=["country", "device", "city", "service_line"],
+            measure_columns=["revenue"], row_count_estimate=1_200_000,
+            description="test traffic excluded")
+        self.profiles = {
+            c: ColumnProfile(column=c, dtype="object", distinct_count=n,
+                             null_fraction=0.0, values=[], values_complete=False)
+            for c, n in (("country", 30), ("device", 4), ("city", 4_000),
+                         ("service_line", 3))}
+        self.schema_ctx = SchemaContext(profiles=self.profiles, rendered="RENDERED")
+
+    def tearDown(self):
+        self.svc.workspace.close_all()
+        self.base.close()
+
+    def approve_view(self, view=None):
+        node = self.registry.upsert(self.tid, view or self.view, by="senior")
+        brain = self.ctx.pipeline.brain(self.tid)
+        brain.submit(node.id, by="junior")
+        brain.approve(node.id, by="senior")
+        return node
+
+    def plan(self, llm, question="q", conversation_id="c1", schema_ctx=None):
+        return self.svc._plan_turn(llm, self.tid, conversation_id, question, [], [],
+                                   schema_ctx=schema_ctx or self.schema_ctx)
+
+    # -- the division of labour ------------------------------------------------
+    def test_the_verdict_not_the_llm_sets_the_path(self):
+        """The LLM names the population and the cut; the DataManager decides
+        whether the workspace already covers it."""
+        import pandas as pd
+        from analytics_platform.execution.extract_store import ExtractMeta
+        self.approve_view()
+        pop = self.registry.population_hash(self.view)
+        self.svc.data_cache.put(
+            self.tid, "c1", "df_1", "sessions by device and country",
+            pd.DataFrame({"device": ["ios"], "country": ["DE"], "revenue": [1]}),
+            meta=ExtractMeta(label="df_1", grain=["session_id"],
+                             columns=["device", "country", "revenue"],
+                             dimensions=["device", "country"], population_hash=pop,
+                             base_view="checkout_sessions", row_count=1,
+                             created_at="2026-08-15T00:00:00Z"))
+        plan = self.plan(MockLLM([CUBE]), "break that down by device")
+        self.assertEqual(plan.path, "reuse")
+        self.assertEqual(plan.df_label, "df_1")
+        self.assertEqual(plan.analysis, "workspace_sql")
+
+    def test_the_population_hash_comes_from_the_base_not_the_llm(self):
+        """An LLM-supplied hash would let a bad plan claim a reconcilability it
+        does not have."""
+        self.approve_view()
+        plan = self.plan(MockLLM([CUBE]))
+        self.assertEqual(plan.requirement.population_hash,
+                         self.registry.population_hash(self.view))
+
+    def test_a_cube_the_workspace_cannot_cover_becomes_retrieve(self):
+        self.approve_view()
+        llm = MockLLM([CUBE])
+        plan = self.plan(llm, "how did revenue trend?")
+        self.assertEqual(plan.path, "retrieve")
+        self.assertEqual(plan.grain, ["session_id"])
+        self.assertEqual(llm.calls, 1)   # regression guard: the old router returned early
+
+    def test_the_planner_is_called_even_with_an_empty_workspace(self):
+        """The key difference from the old router, which short-circuited to 'sql'
+        whenever nothing was cached -- which is why two SQLs and zero Python
+        appeared in the reported run."""
+        self.approve_view()
+        llm = MockLLM([CUBE])
+        self.plan(llm)
+        self.assertEqual(llm.calls, 1)
+
+    def test_an_approved_base_is_not_marked_provisional(self):
+        self.approve_view()
+        self.assertTrue(self.plan(MockLLM([CUBE])).base_view_approved)
+
+    # -- failure handling ------------------------------------------------------
+    def test_an_unknown_base_view_name_is_a_parse_failure(self):
+        self.approve_view()
+        plan = self.plan(MockLLM(['{"base_view":"nope","cube":{"dimensions":[]}}']))
+        self.assertEqual(plan.path, "aggregate")
+        self.assertIsNone(plan.base_view)
+
+    def test_plan_turn_falls_back_to_aggregate_on_garbage(self):
+        """Deliberately NOT retrieve: with no resolved base there is no population
+        to retrieve over, and inventing one produces an unreconcilable number
+        silently. The aggregate path at least declares itself."""
+        p = self.plan(MockLLM(["not json at all"]))
+        self.assertEqual(p.path, "aggregate")
+        self.assertIsNone(p.base_view)
+
+    def test_plan_turn_falls_back_to_aggregate_when_the_llm_errors(self):
+        class Boom:
+            name = "gateway"
+
+            def generate(self, *a, **k):
+                raise RuntimeError("gateway down")
+
+        self.assertEqual(self.plan(Boom()).path, "aggregate")
+
+    def test_aggregate_only_overrides_the_verdict(self):
+        self.approve_view()
+        llm = MockLLM(['{"base_view":"checkout_sessions","cube":{"dimensions":[],'
+                       '"measures":[{"name":"revenue","expr":"SUM(revenue)"}]},'
+                       '"aggregate_only":true,"analysis":"python"}'])
+        self.assertEqual(self.plan(llm, "total revenue?").path, "aggregate")
+
+    # -- the cell guard --------------------------------------------------------
+    def test_a_cube_over_the_cell_limit_is_re_prompted_with_the_culprit(self):
+        """The guard refuses; the LLM is told which dimension is the problem, not
+        just 'no'. Silently dropping one on the model's behalf would answer a
+        question nobody asked."""
+        self.approve_view()
+        llm = MockLLM([TOO_WIDE,
+                       '{"base_view":"checkout_sessions","cube":{"dimensions":["country","device"],'
+                       '"measures":[{"name":"n","expr":"COUNT(*)"}]}}'])
+        plan = self.plan(llm)
+        self.assertEqual(llm.calls, 2)
+        self.assertIn("city", llm.prompts[1])
+        self.assertEqual(plan.cube.dimensions, ["country", "device"])
+        self.assertTrue(plan.cube_sql.ok)
+
+    def test_a_cube_that_cannot_be_shrunk_falls_back_to_aggregate(self):
+        self.approve_view()
+        self.assertEqual(self.plan(MockLLM([TOO_WIDE, TOO_WIDE])).path, "aggregate")
+
+    # -- proposing a base view -------------------------------------------------
+    def test_a_proposed_base_view_is_stored_as_draft_and_marked_provisional(self):
+        llm = MockLLM(['{"base_view":"guest_checkouts","propose_base_view":'
+                       '{"name":"guest_checkouts","grain":["guest_id"],'
+                       '"source_sql":"SELECT guest_id, country FROM guests",'
+                       '"dimension_columns":["country"],'
+                       '"measure_columns":["revenue"]},'
+                       '"cube":{"dimensions":["country"],"measures":[]}}'])
+        plan = self.plan(llm, "guest revenue by country")
+        self.assertEqual(plan.base_view.name, "guest_checkouts")
+        self.assertIs(plan.base_view_approved, False)
+        self.assertIsNotNone(
+            self.registry.get(self.tid, "guest_checkouts", approved_only=False))
+        self.assertIsNone(self.registry.get(self.tid, "guest_checkouts"))   # not approved
+
+    def test_a_proposal_carries_a_provisional_caveat(self):
+        llm = MockLLM(['{"base_view":"guest_checkouts","propose_base_view":'
+                       '{"name":"guest_checkouts","grain":["guest_id"],'
+                       '"source_sql":"SELECT guest_id, country FROM guests",'
+                       '"dimension_columns":["country"],"measure_columns":[]},'
+                       '"cube":{"dimensions":["country"],"measures":[]}}'])
+        plan = self.plan(llm, "guest revenue by country")
+        self.assertTrue(any("provisional" in c for c in plan.caveats), plan.caveats)
+
+    def test_an_approved_view_is_preferred_over_a_draft_of_the_same_name(self):
+        self.approve_view()
+        self.registry.upsert(self.tid, self.view, by="planner")   # touches the same node
+        self.assertTrue(self.plan(MockLLM([CUBE])).base_view_approved)
+
+    # -- measures --------------------------------------------------------------
+    def test_avg_is_accepted_and_arrives_additive(self):
+        self.approve_view()
+        llm = MockLLM(['{"base_view":"checkout_sessions","cube":{"dimensions":["country"],'
+                       '"measures":[{"name":"revenue","expr":"AVG(revenue)"}]}}'])
+        plan = self.plan(llm, "average revenue by country")
+        self.assertEqual(plan.cube_sql.non_additive, [])
+        self.assertIn("revenue_sum", plan.cube_sql.sql)
+        self.assertNotIn("AVG(", plan.cube_sql.sql)
+
+    def test_a_distinct_count_is_flagged_non_additive_on_the_plan(self):
+        self.approve_view()
+        llm = MockLLM(['{"base_view":"checkout_sessions","cube":{"dimensions":["country"],'
+                       '"measures":[{"name":"users","expr":"COUNT(DISTINCT user_id)"}]}}'])
+        self.assertEqual(self.plan(llm).cube_sql.non_additive, ["users"])
+
+    # -- attribution is inherited, never restated ------------------------------
+    def test_attribution_on_an_existing_base_is_inherited_not_restated(self):
+        """Two questions applying two rankings to the same sessions is exactly the
+        failure the base exists to prevent, so an attributions array the planner
+        emits over an existing base is ignored."""
+        from analytics_platform.domain import AttributionRule, BaseView
+        import dataclasses
+        attributed = dataclasses.replace(self.view, attributions=[AttributionRule(
+            column="service_line", grain=["session_id"], strategy="highest_intent",
+            priority_values=["mobile", "fixed", "ott"], source="brain")])
+        self.approve_view(attributed)
+        llm = MockLLM(['{"base_view":"checkout_sessions","cube":{"dimensions":["service_line"],'
+                       '"measures":[]},"attributions":[{"column":"service_line",'
+                       '"grain":["session_id"],"strategy":"latest"}]}'])
+        plan = self.plan(llm)
+        self.assertEqual(plan.attributions, [])                             # ignored
+        self.assertEqual(plan.base_view.attributions[0].strategy, "highest_intent")
+
+    def test_a_proposed_base_view_may_carry_attribution_rules(self):
+        llm = MockLLM(['''{"base_view":"events_by_session","propose_base_view":{
+            "name":"events_by_session","grain":["session_id"],
+            "source_sql":"SELECT session_id, service_line FROM events",
+            "dimension_columns":["service_line"],"measure_columns":[]},
+            "cube":{"dimensions":["service_line"],"measures":[]},
+            "attributions":[{"column":"service_line","grain":["session_id"],
+                             "strategy":"highest_intent",
+                             "priority_values":["mobile","fixed","ott"],
+                             "tiebreakers":["event_count DESC","log_time DESC"],
+                             "source":"brain"}]}'''])
+        plan = self.plan(llm)
+        self.assertEqual(plan.base_view.attributions[0].priority_values,
+                         ["mobile", "fixed", "ott"])
+
+    def test_a_proposed_base_with_a_fanned_out_column_and_no_rule_gets_a_default(self):
+        """service_line fans out and the proposal ignored it. Carrying it onto the
+        grain silently would double-count, so a most_frequent rule is synthesized
+        and marked as a default rather than a business decision."""
+        from analytics_platform.domain import ColumnProfile
+        from analytics_platform.schema_context import SchemaContext
+        profiles = dict(self.profiles)
+        profiles["service_line"] = ColumnProfile(
+            column="service_line", dtype="object", distinct_count=3, null_fraction=0.0,
+            values=["mobile", "fixed", "ott"], values_complete=True,
+            fanout_by_key={"session_id": 0.06})
+        ctx = SchemaContext(profiles=profiles, rendered="RENDERED")
+        llm = MockLLM(['{"base_view":"events_by_session","propose_base_view":{'
+                       '"name":"events_by_session","grain":["session_id"],'
+                       '"source_sql":"SELECT session_id, service_line FROM events",'
+                       '"dimension_columns":["service_line"],"measure_columns":[]},'
+                       '"cube":{"dimensions":["service_line"],"measures":[]}}'])
+        plan = self.plan(llm, schema_ctx=ctx)
+        rule = next(a for a in plan.base_view.attributions if a.column == "service_line")
+        self.assertEqual(rule.strategy, "most_frequent")
+        self.assertEqual(rule.source, "default")
+
+    # -- the prompt ------------------------------------------------------------
+    def test_plan_turn_prompt_carries_the_rendered_context(self):
+        self.approve_view()
+        llm = MockLLM([CUBE])
+        self.plan(llm)
+        self.assertIn("RENDERED", llm.last_system_prompt + llm.last_prompt)
+
+    def test_the_verdict_reason_survives_onto_the_plan(self):
+        import pandas as pd
+        from analytics_platform.execution.extract_store import ExtractMeta
+        self.approve_view()
+        pop = self.registry.population_hash(self.view)
+        self.svc.data_cache.put(
+            self.tid, "c1", "df_1", "by device",
+            pd.DataFrame({"device": ["ios"], "revenue": [1]}),
+            meta=ExtractMeta(label="df_1", grain=["session_id"],
+                             columns=["device", "revenue"], dimensions=["device"],
+                             population_hash=pop, base_view="checkout_sessions",
+                             row_count=1, created_at="2026-08-15T00:00:00Z"))
+        self.assertIn("df_1", self.plan(MockLLM([CUBE])).verdict.reason)

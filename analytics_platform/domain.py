@@ -377,6 +377,36 @@ class CubeSQL:
 
 
 @dataclass
+class TurnPlan:
+    """What this turn decided, and who decided each part.
+
+    The LLM picks the population and states the cut it needs. Everything else --
+    whether the base is valid, what its population_hash is, whether the cube
+    fits, whether the workspace already covers it -- is decided in code. `path`
+    comes from the DataManager's verdict, never from the model.
+    """
+
+    path: str = "aggregate"       # reuse | widen | retrieve | aggregate
+    analysis: str = "python"      # workspace_sql | python -- how to compute, LLM's choice
+    df_label: str = ""            # the cube to compute over, from the verdict
+    base_view: Optional["BaseView"] = None
+    base_view_approved: bool = False      # False -> the answer is provisional
+    cube: Optional["CubeSpec"] = None     # what the LLM asked for
+    cube_sql: Optional["CubeSQL"] = None  # composed + hashed + guarded
+    requirement: Optional[Any] = None     # DataRequirement handed to the DataManager
+    verdict: Optional[Any] = None         # CoverageVerdict it returned
+    grain: List[str] = field(default_factory=list)
+    dimensions: List[str] = field(default_factory=list)
+    measures: List[CubeMeasure] = field(default_factory=list)
+    time_window: str = ""
+    rationale: str = ""
+    caveats: List[str] = field(default_factory=list)
+    # Proposed only when the planner is authoring a NEW base view this turn; on an
+    # existing base these are already baked in and inherited.
+    attributions: List[AttributionRule] = field(default_factory=list)
+
+
+@dataclass
 class ReconcileResult:
     same_population: bool
     population_hash_a: str = ""
