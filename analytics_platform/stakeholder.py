@@ -613,8 +613,11 @@ class StakeholderService:
             # (the cube the plan meant to reuse) is empty and only the label
             # retrieval just issued names it. Without this, a first turn reads
             # its own complete cube and still disclaims it as possibly filtered.
-            {"rows": rows, "frame_rows": self._frame_rows(tenant_id, conversation_id,
-                                                          plan.df_label or label)})
+            {"rows": rows,
+             "frame_rows": self._frame_rows(tenant_id, conversation_id,
+                                            plan.df_label or label),
+             "full_cube": self._full_cube(tenant_id, conversation_id,
+                                          plan.df_label or label)})
         t_in_total += syn_toks[0]
         t_out_total += syn_toks[1]
 
@@ -694,7 +697,10 @@ class StakeholderService:
                        ) -> Tuple[str, Optional[ExtractMeta], Tuple[int, int]]:
         sql, exec_res, toks = self._synthesize_and_execute_sql(
             llm, tenant_id, question, [], [], plan=plan, schema_ctx=schema_ctx)
-        if sql:
+        pages = list(getattr(self, "_sql_pages", []) or [])
+        if len(pages) > 1:
+            artifact.warehouse_sql.extend(pages)
+        elif sql:
             artifact.warehouse_sql.append(sql)
         if exec_res is None or not exec_res.ok or exec_res.data is None:
             # A silent downgrade is the worst outcome here: the answer stops
@@ -1553,6 +1559,11 @@ what was asked."""
         ceiling = self.settings.policy.raw_extract_row_limit
 
         self._grain_violated = False
+        # Every page's SQL, not just the survivor. The return signature carries
+        # one string, so a 12-trip fetch used to be indistinguishable from a
+        # 1-trip fetch in the audit trail -- you could not tell from the record
+        # how much was pulled, or whether paging stopped early.
+        self._sql_pages: List[str] = []
         pages: List[Any] = []
         sql_run: List[str] = []
         warnings: List[str] = []
@@ -1565,6 +1576,7 @@ what was asked."""
                 plan.base_view, spec, cursor, chunk, keys=page_keys)
             approved, res = self._run_composed(tenant_id, page_sql, question)
             sql_run.append(approved or page_sql)
+            self._sql_pages = list(sql_run)
             if not res.ok:
                 return (sql_run[-1], res)
             df = res.data if res.data is not None else pd.DataFrame()
@@ -1593,6 +1605,11 @@ what was asked."""
             if len(cursor) == 1:
                 cursor = cursor[0]
 
+        self._sql_pages = list(sql_run)
+        if len(sql_run) > 1:
+            warnings.append(
+                f"this cube arrived in {len(sql_run)} keyset pages ({total} rows "
+                f"total); every page's SQL is recorded")
         combined = pd.concat(pages, ignore_index=True) if pages else pd.DataFrame()
         if truncated and len(combined) > ceiling:
             combined = combined.head(ceiling)
@@ -1955,6 +1972,36 @@ what was asked."""
 
         return "", None, (t_in_total, t_out_total)
 
+    # A cube small enough to show whole is shown whole. The analysis step
+    # sometimes writes a query that ranks by a measure and then selects only the
+    # label, leaving synthesis a name with no number behind it -- live, that
+    # produced "I cannot determine which service line has the largest share"
+    # from a cube that held every figure needed. Reading the cube again costs
+    # nothing: it is already fetched, population-hashed and registered in the
+    # in-process DuckDB workspace, so this is not another warehouse trip.
+    FULL_CUBE_MAX_ROWS = 200
+
+    def _full_cube(self, tenant_id: str, conversation_id: str,
+                   label: str) -> Optional[List[Dict[str, Any]]]:
+        if not label or not self.workspace:
+            return None
+        if not (0 < self._frame_rows(tenant_id, conversation_id, label)
+                <= self.FULL_CUBE_MAX_ROWS):
+            return None
+        try:
+            res = self.workspace.query(
+                tenant_id, conversation_id,
+                f"SELECT * FROM {label} LIMIT {self.FULL_CUBE_MAX_ROWS + 1}")
+        except Exception as exc:  # noqa: BLE001 - context is best-effort
+            logger.warning("could not read cube %s whole: %s", label, exc)
+            return None
+        df = getattr(res, "data", None)
+        if df is None or not len(df) or len(df) > self.FULL_CUBE_MAX_ROWS:
+            return None
+        from .execution.dataframe_cache import _json_safe
+        return [{k: _json_safe(v) for k, v in row.items()}
+                for row in df.to_dict(orient="records")]
+
     def _frame_rows(self, tenant_id: str, conversation_id: str, label: str) -> int:
         """Rows in the cube a turn read, so synthesis can tell a whole cube from
         a slice of one. Unknown label -> 0, which degrades to the cautious
@@ -1991,7 +2038,8 @@ what was asked."""
     @classmethod
     def _data_context(cls, rows: Optional[Sequence[Any]],
                       columns: Optional[Sequence[str]] = None,
-                      frame_rows: int = 0) -> str:
+                      frame_rows: int = 0,
+                      full_cube: Optional[Sequence[Any]] = None) -> str:
         """`frame_rows` is how many rows the cube being read actually holds.
 
         Without it there is no way to tell a full cube read from an
@@ -2006,6 +2054,15 @@ what was asked."""
         rows = list(rows)
         col_line = f"\nColumns: {list(columns)}" if columns else ""
         if frame_rows and len(rows) < frame_rows:
+            if full_cube and len(full_cube) == frame_rows:
+                # The query returned a slice, but the cube it came from is small
+                # enough to show whole -- so show it, and the answer can quote
+                # figures the slice dropped instead of declining for want of them.
+                return (f"\nData context -- the analysis step returned {len(rows)} row(s): "
+                        f"{rows}\nThat is a ranked or filtered slice. The COMPLETE cube it "
+                        f"came from, all {frame_rows} row(s) over this population, is below "
+                        f"-- use it for anything the slice cannot support, and account for "
+                        f"every row when describing the whole: {list(full_cube)}{col_line}")
             head = (f"\nData context -- a RANKED OR FILTERED SUBSET: {len(rows)} of the "
                     f"{frame_rows} rows in the cube. The rows not shown still exist, so "
                     f"do not say these are the only ones, and do not compute a share or "
@@ -2040,13 +2097,15 @@ what was asked."""
             rows = None
             columns: List[str] = []
             frame_rows = 0
+            full_cube = None
             if data and isinstance(data, dict) and data.get("rows"):
                 rows = data["rows"]
                 columns = list(data.get("columns") or [])
                 frame_rows = int(data.get("frame_rows") or 0)
+                full_cube = data.get("full_cube")
             elif data and isinstance(data, list):
                 rows = data
-            data_context = self._data_context(rows, columns, frame_rows)
+            data_context = self._data_context(rows, columns, frame_rows, full_cube)
 
             sys_prompt = (
                 "You are a cautious internal analytics assistant. State what you know and what data you would need. Do not invent figures. "

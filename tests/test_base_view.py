@@ -500,3 +500,18 @@ class TestReconcile(_RegistryCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheRegistryScanLimit(unittest.TestCase):
+    """Base views are found by scanning DEFINITION nodes. A base view past the
+    end of that scan does not raise -- it silently stops existing, and a
+    governed population quietly becomes an ungoverned one-off. The live tenant
+    already holds 634 DEFINITION nodes against the old limit of 1000."""
+
+    def test_the_limit_is_well_above_a_real_tenants_node_count(self):
+        self.assertGreaterEqual(BaseViewRegistry.SCAN_LIMIT, 100_000)
+
+    def test_no_scan_still_hardcodes_the_old_thousand(self):
+        import inspect
+        src = inspect.getsource(BaseViewRegistry)
+        self.assertNotIn("limit=1000", src)

@@ -144,3 +144,35 @@ class TestCubeReadingRules(unittest.TestCase):
         rules = StakeholderService._cube_rules(["service_line"], ["uniques"])
         self.assertIn("NON-ADDITIVE", rules)
         self.assertIn("whole and ordered", rules)
+
+
+class TestASliceOfASmallCubeIsShownWithTheWholeCube(unittest.TestCase):
+    """The analysis step sometimes ranks by a measure and then selects only the
+    label. Live that produced "I cannot determine which service line has the
+    largest share" from a cube that held every figure needed. When the cube is
+    small it is handed over whole, so the slice's omissions stop mattering."""
+
+    SLICE = [{"service_line": "NA"}]
+
+    def test_the_whole_cube_is_included(self):
+        ctx = StakeholderService._data_context(self.SLICE, frame_rows=5, full_cube=CUBE)
+        for row in CUBE:
+            self.assertIn(str(row["sessions"]), ctx)
+
+    def test_the_slice_is_still_identified_as_a_slice(self):
+        ctx = StakeholderService._data_context(self.SLICE, frame_rows=5, full_cube=CUBE)
+        self.assertIn("ranked or filtered slice", ctx)
+        self.assertIn("COMPLETE cube", ctx)
+
+    def test_a_cube_too_big_to_show_falls_back_to_the_subset_warning(self):
+        """No full cube available -> the honest subset wording, not a claim that
+        the slice is everything."""
+        ctx = StakeholderService._data_context(self.SLICE, frame_rows=90000, full_cube=None)
+        self.assertIn("SUBSET", ctx)
+        self.assertIn("do not compute a share", ctx)
+
+    def test_a_partial_cube_is_not_passed_off_as_complete(self):
+        """full_cube must match frame_rows exactly; a short read is not the cube."""
+        ctx = StakeholderService._data_context(self.SLICE, frame_rows=5, full_cube=CUBE[:3])
+        self.assertIn("SUBSET", ctx)
+        self.assertNotIn("COMPLETE cube", ctx)

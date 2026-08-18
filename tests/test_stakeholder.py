@@ -1565,6 +1565,36 @@ class TestExecuteCube(unittest.TestCase):
         self.assertTrue(res.truncated)
         self.assertTrue(any("truncated" in w for w in res.warnings), res.warnings)
 
+    def test_every_page_is_recorded_not_just_the_last(self):
+        """The return signature carries one SQL string, so a 12-trip fetch used
+        to look exactly like a 1-trip fetch in the audit trail -- nothing in the
+        record said how much had been pulled, or that paging happened at all."""
+        plan = self._wide_plan()
+        self.spy.returns_pages(50, 50, 20)
+        _, res, _ = self.run_sql(plan)
+        self.assertEqual(len(self.svc._sql_pages), 3)
+        # The spy replays identical rows, so pages 2 and 3 resume from the same
+        # cursor. What must hold is that the first page carries no cursor and
+        # the later ones do -- i.e. real paging SQL was recorded, not one query
+        # repeated three times.
+        first, second = self.svc._sql_pages[0], self.svc._sql_pages[1]
+        self.assertNotEqual(first, second)
+        self.assertNotIn(">", first.split("WHERE")[-1] if "WHERE" in first else "")
+        self.assertIn(">", second)
+
+    def test_a_paged_fetch_says_how_many_trips_it_took(self):
+        plan = self._wide_plan()
+        self.spy.returns_pages(50, 50, 20)
+        _, res, _ = self.run_sql(plan)
+        self.assertTrue(any("3 keyset pages" in w for w in res.warnings), res.warnings)
+
+    def test_a_single_page_fetch_is_not_announced_as_paged(self):
+        plan = self._wide_plan()
+        self.spy.returns_pages(10)
+        _, res, _ = self.run_sql(plan)
+        self.assertEqual(len(self.svc._sql_pages), 1)
+        self.assertFalse(any("keyset pages" in w for w in res.warnings), res.warnings)
+
     def test_no_page_ever_uses_offset(self):
         """Athena rescans from the top on every OFFSET page: quadratic, and on a
         changing table it silently skips and duplicates rows."""

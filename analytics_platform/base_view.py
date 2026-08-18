@@ -137,6 +137,13 @@ def reconcile(population_hash_a: str, value_a: float,
 
 
 class BaseViewRegistry:
+
+    # Base views are found by scanning DEFINITION nodes, and a base view that
+    # falls off the end of that scan does not error -- it silently stops
+    # existing, so a governed population quietly becomes an ungoverned one-off.
+    # The live tenant already holds 634 DEFINITION nodes against the old 1000.
+    SCAN_LIMIT = 100_000
+
     def __init__(self, brain_for: Callable[[str], Any]) -> None:
         self.brain_for = brain_for
 
@@ -154,12 +161,12 @@ class BaseViewRegistry:
     # -- storage -------------------------------------------------------------
     def _node(self, tenant_id: str, name: str) -> Optional[KnowledgeNode]:
         title = f"{BASE_VIEW_TITLE_PREFIX}{name}"
-        return next((n for n in self.brain_for(tenant_id).all(kind=NodeKind.DEFINITION, limit=1000)
+        return next((n for n in self.brain_for(tenant_id).all(kind=NodeKind.DEFINITION, limit=self.SCAN_LIMIT)
                      if n.title == title), None)
 
     def all(self, tenant_id: str, approved_only: bool = True) -> List[BaseView]:
         out: List[BaseView] = []
-        for node in self.brain_for(tenant_id).all(kind=NodeKind.DEFINITION, limit=1000):
+        for node in self.brain_for(tenant_id).all(kind=NodeKind.DEFINITION, limit=self.SCAN_LIMIT):
             if not node.title.startswith(BASE_VIEW_TITLE_PREFIX):
                 continue
             if approved_only and not node.status.is_usable():
