@@ -201,8 +201,21 @@ class BaseViewRegistry:
                    f"~{view.row_count_estimate:,} rows. {view.description}".strip())
         node = self._node(tenant_id, view.name)
         if node is not None:
+            # A human approved SPECIFIC SQL. If the population changed, that
+            # approval no longer describes what would run, and the APPROVED badge
+            # is precisely what tells a reader the figure is not provisional --
+            # so the review is withdrawn and has to be earned again. Cosmetic
+            # edits (description, aliases) leave the hash alone and keep it:
+            # re-reviewing a base over a typo fix trains people to rubber-stamp.
+            previous = (node.payload or {}).get("population_hash", "")
             brain.update_field(node.id, "payload", dump_json(payload))
-            return brain.update_field(node.id, "summary", summary)
+            node = brain.update_field(node.id, "summary", summary)
+            if previous and previous != payload["population_hash"] and node.status.is_usable():
+                logger.info("base view %s changed population (%s -> %s); withdrawing "
+                            "approval pending re-review", view.name, previous[:8],
+                            payload["population_hash"][:8])
+                node = brain.update_field(node.id, "status", ReviewStatus.CANDIDATE.value)
+            return node
         return brain.create(kind=NodeKind.DEFINITION,
                             title=f"{BASE_VIEW_TITLE_PREFIX}{view.name}",
                             summary=summary, payload=payload, created_by=by,

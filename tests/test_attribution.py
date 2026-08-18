@@ -314,6 +314,31 @@ class TestGrainProbe(unittest.TestCase):
                                          rows=10, keys=10)
         self.assertTrue(self.registry.is_approved(self.tid, "checkout_sessions"))
 
+    def test_editing_an_approved_bases_sql_withdraws_its_approval(self):
+        """A human approved SPECIFIC SQL. Swapping the SQL underneath and keeping
+        the APPROVED badge makes every answer over it claim a review that never
+        happened -- and the badge is exactly what tells the reader the figure is
+        not provisional."""
+        node = self.registry.upsert(self.tid, _view(), by="analyst")
+        brain = self.ctx.pipeline.brain(self.tid)
+        brain.submit(node.id, by="junior")
+        brain.approve(node.id, by="senior")
+        self.assertTrue(self.registry.is_approved(self.tid, "checkout_sessions"))
+
+        self.registry.upsert(
+            self.tid, _view(source_sql="SELECT session_id FROM orders_v2"), by="analyst")
+        self.assertFalse(self.registry.is_approved(self.tid, "checkout_sessions"))
+
+    def test_a_cosmetic_edit_keeps_its_approval(self):
+        """Only the POPULATION matters. Re-reviewing a base because someone fixed
+        a typo in its description trains people to rubber-stamp."""
+        node = self.registry.upsert(self.tid, _view(), by="analyst")
+        brain = self.ctx.pipeline.brain(self.tid)
+        brain.submit(node.id, by="junior")
+        brain.approve(node.id, by="senior")
+        self.registry.upsert(self.tid, _view(description="clearer wording"), by="analyst")
+        self.assertTrue(self.registry.is_approved(self.tid, "checkout_sessions"))
+
     def test_a_verified_base_is_not_re_probed(self):
         v = self.registry.record_grain_check(self.tid, _view(), rows=10, keys=10)
         self.assertFalse(self.registry.needs_grain_check(v))
