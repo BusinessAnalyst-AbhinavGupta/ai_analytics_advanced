@@ -574,6 +574,21 @@ class StakeholderService:
         plan = self._plan_turn(llm, tenant_id, conversation_id, question,
                                query_nodes, defn_nodes, schema_ctx=schema_ctx)
 
+        clarification = self._timeframe_clarification(tenant_id, conversation_id, plan,
+                                                      schema_ctx)
+        if clarification:
+            out = self._record(
+                tenant_id, question, user_id, category, trace, clarification,
+                AnswerMode.NEEDS_CLARIFICATION, "NEEDS_CLARIFICATION", False,
+                [n.id for n in (query_nodes + defn_nodes)],
+                caveats=["no timeframe was given, and none was assumed"],
+                conversation_id=conversation_id)
+            self.obs.event(tenant_id=tenant_id, trace_id=trace,
+                           stage="stakeholder.clarify", actor="stakeholder",
+                           resource=out["answer_id"], status="OK",
+                           meta={"category": category, "reason": "timeframe"})
+            return out
+
         artifact = AnalysisArtifact(question=question, plan_rationale=plan.rationale)
         self._record_semantics(artifact, schema_ctx)
         caveats: List[str] = list(plan.caveats)
@@ -652,6 +667,51 @@ class StakeholderService:
                              "analysis": plan.analysis,
                              "population_hash": artifact.population_hash})
         return out
+
+    # -- stage: is the question even answerable as asked? ----------------------
+    def _timeframe_clarification(self, tenant_id: str, conversation_id: str,
+                                 plan: TurnPlan, schema_ctx: SchemaContext) -> str:
+        """The question to put back to the user, or "" to carry on.
+
+        A base view carries no date filter on purpose: a window baked into one is
+        inlined verbatim into every derived query, and nothing above it can reach
+        past it. The consequence is that an unstated timeframe does not quietly
+        mean "recently" -- it means the whole of history. Until now the planner
+        simply proceeded on whatever window the model inferred, so a question that
+        named no period got a default nobody chose and the answer read as though
+        that period had been asked for. Ask instead, once, before the scan is
+        spent.
+        """
+        if plan.timeframe_stated:
+            return ""
+        view = plan.base_view
+        if view is None or not view.time_column:
+            # No population, or a population with no time in it. There is nothing
+            # to slice by, so there is nothing to ask about.
+            return ""
+        # A follow-up re-cutting a cube that already carries a window inherits it.
+        # Asking again would interrogate the user about a decision they made one
+        # turn ago.
+        for frame in self.data_cache.list_available(tenant_id, conversation_id):
+            if frame.get("time_start") and frame.get("time_end"):
+                return ""
+
+        column = view.time_column
+        extent = ""
+        profile = (schema_ctx.profiles or {}).get(column)
+        if profile is not None and profile.min_value and profile.max_value:
+            # Attributed to profiling rather than stated as fact: a profile can be
+            # stale or sampled, and a range presented as ground truth would be
+            # believed.
+            extent = (f" Profiling puts {column} between {profile.min_value} and "
+                      f"{profile.max_value}.")
+        return (
+            f"Which period should this cover? The question does not say, and I would "
+            f"rather ask than choose for you: the {view.name} population carries no "
+            f"date filter, so with nothing specified this would be answered over the "
+            f"whole of its history rather than over any recent window -- and the "
+            f"answer would not look any different for it. Name a range and I will "
+            f"slice on {column}.{extent}")
 
     # -- stage: understanding --------------------------------------------------
     @staticmethod
@@ -973,6 +1033,7 @@ Respond with STRICT JSON and nothing else:
  "cube": {"dimensions": [], "measures": [{"name": "", "expr": ""}],
           "filters": {}, "time_column": "", "time_start": "", "time_end": ""},
  "analysis": "workspace_sql" | "python",
+ "timeframe_stated": true | false,
  "aggregate_only": false,
  "attributions": [],
  "rationale": ""}
@@ -999,6 +1060,14 @@ Respond with STRICT JSON and nothing else:
   not change it. A metric's ALWAYS APPLY filters belong in the base view, not here --
   if a matched metric has one and the chosen base does not enforce it, say so in
   rationale rather than patching it in as a slice.
+- timeframe_stated: false when the QUESTION names no time window at all -- no dates,
+  no "last 30 days", no "this quarter", no "since launch". Report it honestly and leave
+  cube.time_start / cube.time_end EMPTY; do NOT invent a window to fill the gap. Base
+  views carry no date filter, so an unstated window silently means the whole of history,
+  and the user gets an answer about a period nobody chose. Saying false costs nothing:
+  the user is simply asked which period they meant. Set it true when the question names
+  a window, and also when it is a follow-up plainly re-cutting an earlier cube, which
+  already carries one.
 - aggregate_only: true means no base view applies and none is worth proposing -- a
   one-off scalar or an operational lookup. Justify it in rationale. The answer will
   be marked as UNRECONCILABLE, so this is the exception, not the default.
@@ -1247,6 +1316,7 @@ WITH ranked_{rule.column} AS (
             measures=list(cube_sql.measures), profiles=dict(schema_ctx.profiles or {}),
             time_window=(f"{cube.time_start}..{cube.time_end}"
                          if cube.time_start and cube.time_end else ""),
+            timeframe_stated=bool(parsed.get("timeframe_stated", True)),
             rationale=str(parsed.get("rationale") or ""), caveats=caveats,
             # Attribution is a property of the population. On an existing base it
             # is already baked in and inherited; the planner may not override it.

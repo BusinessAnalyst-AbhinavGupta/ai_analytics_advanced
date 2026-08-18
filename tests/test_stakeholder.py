@@ -1772,3 +1772,176 @@ class TestAttributionPattern(unittest.TestCase):
         self.svc._plan_turn(llm, tid, "c1", "revenue by service line", [], [],
                             schema_ctx=ctx)
         self.assertIn("ROW_NUMBER() OVER", llm.last_system_prompt)
+
+
+# --------------------------------------------------------------------------- #
+# Ask when no timeframe is given
+#
+# The planner used to proceed on whatever window the LLM inferred, so a question
+# that named no timeframe silently got a default nobody chose -- and the answer
+# read as though the user had asked for exactly that period. The base view
+# deliberately carries no date filter, which makes this worse rather than
+# better: with no window baked in anywhere, an unstated timeframe means the
+# whole of history unless somebody says otherwise.
+# --------------------------------------------------------------------------- #
+NO_TIMEFRAME_PLAN = (
+    '{"base_view":"checkout_sessions","timeframe_stated":false,'
+    '"cube":{"dimensions":[],"measures":[{"name":"n","expr":"COUNT(*)"}],'
+    '"filters":{},"time_column":"date"},"analysis":"python"}')
+
+STATED_TIMEFRAME_PLAN = (
+    '{"base_view":"checkout_sessions","timeframe_stated":true,'
+    '"cube":{"dimensions":[],"measures":[{"name":"n","expr":"COUNT(*)"}],'
+    '"filters":{},"time_column":"date","time_start":"2026-07-19",'
+    '"time_end":"2026-08-17"},"analysis":"python"}')
+
+SILENT_TIMEFRAME_PLAN = (
+    '{"base_view":"checkout_sessions",'
+    '"cube":{"dimensions":[],"measures":[{"name":"n","expr":"COUNT(*)"}],'
+    '"filters":{},"time_column":"date"},"analysis":"python"}')
+
+
+class TestTimeframeClarification(unittest.TestCase):
+    def setUp(self):
+        from analytics_platform.domain import BaseView, ColumnProfile
+        from analytics_platform.schema_context import SchemaContext
+
+        self.ctx, self.base = app_ctx()
+        self.tid = self.ctx.tenants.create_tenant("ClarifyCo").id
+        self.app = create_app(self.ctx)
+        self.svc = self.ctx.stakeholder
+        self.spy = SpyExecutor()
+        self.svc.executor = self.spy
+        self.ctx.tenants.add_datasource(self.tid, "Orders", DataSourceKind.DIRECT_DB,
+                                        dialect="athena", tables=["orders"])
+
+        self.view = BaseView(
+            grain_verified=True, name="checkout_sessions", grain=["session_id"],
+            source_sql="SELECT session_id, country, date, revenue FROM orders",
+            dimension_columns=["country"], measure_columns=["revenue"],
+            time_column="date", row_count_estimate=1_200_000)
+        self.view.grain_checked_hash = self.svc.base_views.population_hash(self.view)
+        self.profiles = {
+            "country": ColumnProfile(column="country", dtype="object", distinct_count=30,
+                                     null_fraction=0.0, values=[], values_complete=False),
+            "date": ColumnProfile(column="date", dtype="date", distinct_count=443,
+                                  null_fraction=0.0, values=[], values_complete=False,
+                                  min_value="2025-06-01", max_value="2026-08-17"),
+        }
+        self.schema_ctx = SchemaContext(profiles=self.profiles, rendered="RENDERED")
+        self.approve_view()
+
+    def tearDown(self):
+        self.svc.workspace.close_all()
+        self.base.close()
+
+    def approve_view(self):
+        node = self.svc.base_views.upsert(self.tid, self.view, by="senior")
+        if node.status.is_usable():
+            # time_column is not part of the population_hash, so editing it
+            # leaves the approval standing and re-submitting would be illegal.
+            return node
+        brain = self.ctx.pipeline.brain(self.tid)
+        brain.submit(node.id, by="junior")
+        brain.approve(node.id, by="senior")
+        return node
+
+    def plan(self, response, question="how many sessions converted?"):
+        return self.svc._plan_turn(MockLLM([response]), self.tid, "c1", question,
+                                   [], [], schema_ctx=self.schema_ctx)
+
+    def clarification(self, response, conversation_id="c1",
+                      question="how many sessions converted?"):
+        plan = self.svc._plan_turn(MockLLM([response]), self.tid, conversation_id,
+                                   question, [], [], schema_ctx=self.schema_ctx)
+        return self.svc._timeframe_clarification(self.tid, conversation_id, plan,
+                                                 self.schema_ctx)
+
+    # -- the contract with the planner ----------------------------------------
+    def test_the_planner_is_asked_to_report_whether_a_timeframe_was_stated(self):
+        """Without the field in the contract the model never emits it, and the
+        pipeline would have nothing to branch on."""
+        self.assertIn("timeframe_stated", self.svc.PLAN_SYSTEM_PROMPT)
+
+    def test_the_plan_carries_what_the_planner_reported(self):
+        self.assertFalse(self.plan(NO_TIMEFRAME_PLAN).timeframe_stated)
+        self.assertTrue(self.plan(STATED_TIMEFRAME_PLAN).timeframe_stated)
+
+    def test_a_planner_that_omits_the_field_is_treated_as_having_stated_one(self):
+        """Back-compat, and the safe direction: a missing field must not turn
+        every turn into an interrogation."""
+        self.assertTrue(self.plan(SILENT_TIMEFRAME_PLAN).timeframe_stated)
+
+    # -- when the question is asked -------------------------------------------
+    def test_an_unstated_timeframe_produces_a_question(self):
+        self.assertTrue(self.clarification(NO_TIMEFRAME_PLAN))
+
+    def test_a_stated_timeframe_produces_no_question(self):
+        self.assertEqual(self.clarification(STATED_TIMEFRAME_PLAN), "")
+
+    def test_the_question_names_the_time_column_and_the_range_the_data_covers(self):
+        """A bare 'which period?' makes the user guess what is even available."""
+        asked = self.clarification(NO_TIMEFRAME_PLAN)
+        self.assertIn("date", asked)
+        self.assertIn("2025-06-01", asked)
+        self.assertIn("2026-08-17", asked)
+
+    def test_a_base_view_with_no_time_column_is_never_questioned(self):
+        """There is nothing to slice by, so there is nothing to ask about."""
+        self.view.time_column = ""
+        self.approve_view()
+        self.assertEqual(self.clarification(NO_TIMEFRAME_PLAN), "")
+
+    def test_a_turn_with_no_base_view_is_never_questioned(self):
+        """The aggregate path is an operational one-off, not a population."""
+        from analytics_platform.domain import TurnPlan
+        plan = TurnPlan(path="aggregate", timeframe_stated=False)
+        self.assertEqual(
+            self.svc._timeframe_clarification(self.tid, "c1", plan, self.schema_ctx), "")
+
+    def test_a_follow_up_inherits_the_window_of_a_cube_already_in_the_workspace(self):
+        """'now break that down by country' states no timeframe and does not need
+        to: the cube it re-cuts already carries one."""
+        import pandas as pd
+        from analytics_platform.execution.extract_store import ExtractMeta
+        self.svc.data_cache.put(
+            self.tid, "c2", "df_1", "sessions in July",
+            pd.DataFrame({"n": [1]}),
+            meta=ExtractMeta(label="df_1", grain=["session_id"], columns=["n"],
+                             base_view="checkout_sessions", row_count=1,
+                             population_hash=self.svc.base_views.population_hash(self.view),
+                             time_column="date", time_start="2026-07-19",
+                             time_end="2026-08-17", created_at="2026-08-19T00:00:00Z"))
+        self.assertEqual(self.clarification(NO_TIMEFRAME_PLAN, conversation_id="c2"), "")
+
+    def test_an_unbounded_cube_in_the_workspace_does_not_suppress_the_question(self):
+        """A cube with no window answers nothing about which window was meant."""
+        import pandas as pd
+        from analytics_platform.execution.extract_store import ExtractMeta
+        self.svc.data_cache.put(
+            self.tid, "c3", "df_1", "all sessions", pd.DataFrame({"n": [1]}),
+            meta=ExtractMeta(label="df_1", grain=["session_id"], columns=["n"],
+                             base_view="checkout_sessions", row_count=1,
+                             created_at="2026-08-19T00:00:00Z"))
+        self.assertTrue(self.clarification(NO_TIMEFRAME_PLAN, conversation_id="c3"))
+
+    # -- what the turn does with it -------------------------------------------
+    def test_the_pipeline_asks_instead_of_answering(self):
+        out = self.svc._run_analyst_pipeline(
+            MockLLM([NO_TIMEFRAME_PLAN]), self.tid, "c4",
+            "how many sessions converted?", "u1", "general", "trace-1", [], [])
+        self.assertIsNotNone(out)
+        self.assertEqual(out["status"], "NEEDS_CLARIFICATION")
+        self.assertEqual(out["answer_mode"], AnswerMode.NEEDS_CLARIFICATION.value)
+        # The wording of the extent is the unit test's business; what matters
+        # here is that the turn came back asking rather than answering.
+        self.assertIn("Which period", out["answer"])
+        self.assertIn("date", out["answer"])
+
+    def test_asking_costs_no_warehouse_query(self):
+        """The whole point is to ask BEFORE spending a full-history scan on a
+        window nobody chose."""
+        self.svc._run_analyst_pipeline(
+            MockLLM([NO_TIMEFRAME_PLAN]), self.tid, "c5",
+            "how many sessions converted?", "u1", "general", "trace-2", [], [])
+        self.assertEqual(self.spy.all_sql, [])

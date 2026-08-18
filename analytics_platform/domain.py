@@ -451,6 +451,10 @@ class TurnPlan:
 
     path: str = "aggregate"       # reuse | widen | retrieve | aggregate
     analysis: str = "python"      # workspace_sql | python -- how to compute, LLM's choice
+    # Did the QUESTION name a time window, as opposed to the planner inferring
+    # one? Defaults True so a planner that never reports it behaves exactly as
+    # before -- a missing field must not turn every turn into an interrogation.
+    timeframe_stated: bool = True
     df_label: str = ""            # the cube to compute over, from the verdict
     base_view: Optional["BaseView"] = None
     base_view_approved: bool = False      # False -> the answer is provisional
