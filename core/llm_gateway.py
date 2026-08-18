@@ -5,6 +5,35 @@ import time
 import requests
 from typing import Dict, Any, List, Optional
 
+def _reasoning_text(msg_obj: Dict[str, Any]) -> str:
+    """The reasoning a model returned, as text.
+
+    OpenRouter sends this two ways: a flat string under `reasoning`, and a list
+    of typed blocks under `reasoning_details` ({"type": "reasoning.text",
+    "text": ...}). The blocks are the fuller form, so they win -- but they are a
+    LIST, and str() on it yields a Python repr of dicts rather than anything a
+    caller can read or parse. Blocks that carry no readable field (encrypted
+    traces, for instance) fall back to the flat string rather than contributing
+    a repr of themselves.
+    """
+    details = msg_obj.get("reasoning_details")
+    if isinstance(details, list):
+        parts = []
+        for item in details:
+            if isinstance(item, dict):
+                part = item.get("text") or item.get("summary") or ""
+            else:
+                part = item if isinstance(item, str) else ""
+            if part:
+                parts.append(str(part))
+        if parts:
+            return "\n".join(parts)
+    elif isinstance(details, str) and details.strip():
+        return details
+    reasoning = msg_obj.get("reasoning")
+    return reasoning if isinstance(reasoning, str) else ""
+
+
 class LLMGateway:
     """
     Unified, multi-provider LLM gateway supporting:
@@ -227,8 +256,12 @@ class LLMGateway:
             msg_obj = choices[0].get("message", {})
             text = msg_obj.get("content", "") or ""
             reasoning_details = msg_obj.get("reasoning_details") or msg_obj.get("reasoning", "")
-            if not text and reasoning_details:
-                text = str(reasoning_details)
+            if not text:
+                # A reasoning model can return empty content and put everything
+                # under reasoning_details. That is a LIST of typed blocks, so it
+                # has to be flattened to text -- str() on it hands the caller a
+                # Python repr that nothing downstream can parse.
+                text = _reasoning_text(msg_obj)
 
             # Append assistant turn to messages
             updated_messages = list(chat_messages) + [{"role": "assistant", "content": text.strip()}]
