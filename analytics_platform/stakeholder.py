@@ -587,6 +587,7 @@ class StakeholderService:
 
         # "aggregate" retrieves too -- it just retrieves an ungoverned one-off,
         # which is exactly why it is marked unreconcilable below.
+        label = ""
         if plan.path in ("retrieve", "widen", "aggregate"):
             label, meta, toks = self._retrieve_cube(
                 llm, tenant_id, conversation_id, question, plan, artifact, caveats,
@@ -608,8 +609,12 @@ class StakeholderService:
                 else [result.result_summary])
         answer, syn_toks, chart_config = self._synthesize(
             llm, question, category,
+            # On a retrieve the cube is created BY this turn, so plan.df_label
+            # (the cube the plan meant to reuse) is empty and only the label
+            # retrieval just issued names it. Without this, a first turn reads
+            # its own complete cube and still disclaims it as possibly filtered.
             {"rows": rows, "frame_rows": self._frame_rows(tenant_id, conversation_id,
-                                                          plan.df_label)})
+                                                          plan.df_label or label)})
         t_in_total += syn_toks[0]
         t_out_total += syn_toks[1]
 
