@@ -45,6 +45,7 @@ class SpyJunior:
         self._catalog = catalog or {}
         self.fail = fail
         self.profile_calls = []
+        self.profile_result = None
 
     def get_catalog(self, tenant_id):
         return {"tables": [{"table": t, "columns": c, "types": ["object"] * len(c)}
@@ -66,6 +67,10 @@ class SpyJunior:
         self.profile_calls.append(tuple(tables or []))
         if self.fail:
             raise RuntimeError("ACCESS_DENIED")
+        if self.profile_result is not None:
+            self._profiles.update(self.profile_result)
+            return dict(self.profile_result)
+        # Default: the real junior's failure shape -- present key, empty list.
         for t in tables or []:
             self._profiles.setdefault(t, [])
         return {t: self._profiles[t] for t in tables or []}
@@ -175,10 +180,26 @@ class TestTableSelection(_ContextCase):
 
 class TestInlineProfiling(_ContextCase):
     def test_missing_profile_triggers_the_junior_inline(self):
+        """Profiling that comes back with columns is a real inline profile."""
         self.junior._profiles.pop("orders")
+        self.junior.profile_result = {"orders": list(ORDERS_PROFILES)}
         ctx = self.build("revenue by country")
         self.assertEqual(self.junior.profile_calls, [("orders",)])
         self.assertEqual(ctx.profiled_now, ["orders"])
+        self.assertEqual(ctx.unprofiled, [])
+
+    def test_inline_profiling_that_returns_nothing_is_reported(self):
+        """`profile_tables` signals "could not read that table" by returning an
+        EMPTY list, not by raising (junior.py does this so profiling can never
+        take a turn down). Recording that as a successful profile hides the one
+        fact the caveats exist to carry -- and leaves the cube guard refusing
+        every dimension with nothing in the answer to explain why."""
+        self.junior._profiles.pop("orders")
+        ctx = self.build("revenue by country")
+        self.assertEqual(self.junior.profile_calls, [("orders",)])
+        self.assertEqual(ctx.profiled_now, [])
+        self.assertEqual(ctx.unprofiled, ["orders"])
+        self.assertIn("not profiled", ctx.rendered.lower())
 
     def test_an_already_profiled_table_is_not_reprofiled(self):
         self.build("revenue by country")
@@ -299,3 +320,54 @@ class TestBlockOrder(_ContextCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSchemaQualifiedTableNames(unittest.TestCase):
+    """A base view that says `silver_layer.orders` yields the bare name `orders`
+    from the SQL parser, while its profile is stored under the qualified name the
+    catalog uses. Miss that and `profiles` comes back EMPTY -- and because the
+    cube guard fails closed on an unprofiled dimension, every cube is refused and
+    the turn silently falls through to one-off SQL. Nothing reports a profile
+    problem, because as far as each layer can tell it did its job."""
+
+    def setUp(self):
+        self.ctx = make_ctx()
+        self.tid = self.ctx.tenants.create_tenant("QualCo").id
+        self.semantic = SemanticLayer(self.ctx.pipeline.brain)
+        self.registry = BaseViewRegistry(self.ctx.pipeline.brain)
+        # Catalog and profiles are keyed on the QUALIFIED name, as the warehouse
+        # reports it; the parser will hand us the bare one.
+        self.junior = SpyJunior(profiles={"silver_layer.orders": ORDERS_PROFILES},
+                                catalog={"silver_layer.orders":
+                                         [p.column for p in ORDERS_PROFILES]})
+        self.builder = SchemaContextBuilder(self.junior, self.ctx.pipeline.brain,
+                                            self.ctx.settings, self.semantic, self.registry)
+        view = BaseView(name="checkout_sessions", grain=["session_id"],
+                        source_sql="SELECT session_id, country FROM silver_layer.orders",
+                        dimension_columns=["country"], measure_columns=["revenue"],
+                        grain_verified=True)
+        self.registry.upsert(self.tid, view, by="analyst")
+
+    def tearDown(self):
+        self.ctx.close()
+
+    def test_a_qualified_base_view_still_finds_its_profiles(self):
+        ctx = self.builder.build(self.tid, "revenue by country", [], [])
+        self.assertTrue(ctx.profiles,
+                        "profiles empty -- every cube over this base would be refused")
+        self.assertIn("country", ctx.profiles)
+
+    def test_the_qualified_name_is_what_reaches_the_prompt(self):
+        """The generated SQL has to name the table the warehouse actually has."""
+        ctx = self.builder.build(self.tid, "revenue by country", [], [])
+        self.assertIn("silver_layer.orders", ctx.rendered)
+
+    def test_a_table_that_truly_cannot_be_profiled_is_reported(self):
+        """Fail-closed is right; failing closed SILENTLY is not. If no profile
+        could be had, that has to reach the caveats."""
+        junior = SpyJunior(profiles={}, catalog={"silver_layer.orders": ["country"]})
+        builder = SchemaContextBuilder(junior, self.ctx.pipeline.brain,
+                                       self.ctx.settings, self.semantic, self.registry)
+        ctx = builder.build(self.tid, "revenue by country", [], [])
+        self.assertFalse(ctx.profiles)
+        self.assertTrue(ctx.unprofiled, "an unprofilable table must be named")

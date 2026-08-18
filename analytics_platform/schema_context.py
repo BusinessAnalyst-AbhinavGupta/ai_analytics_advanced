@@ -68,9 +68,18 @@ class SchemaContextBuilder:
 
         pinned: List[str] = []
         overflow: List[str] = []
+        canonical = self._canonical_names(tenant_id)
 
         def add(bucket: List[str], name: str) -> None:
+            # The SQL parser reports `silver_layer.orders` as bare `orders`,
+            # while the catalog -- and therefore every profile keyed off it --
+            # uses the qualified name. Resolve to the catalog's spelling HERE,
+            # at the one place every name enters, or the mismatch travels all
+            # the way to `_profiles_for`, which finds nothing, and to the cube
+            # guard, which then refuses every dimension as unprofiled. That
+            # failure is silent: each layer reports success.
             name = (name or "").strip()
+            name = canonical.get(name.lower(), name)
             if name and name not in pinned and name not in overflow:
                 bucket.append(name)
 
@@ -105,6 +114,29 @@ class SchemaContextBuilder:
                 add(overflow, table)
 
         return (pinned + overflow)[:MAX_CONTEXT_TABLES]
+
+    def _canonical_names(self, tenant_id: str) -> Dict[str, str]:
+        """Every spelling the catalog can be addressed by -> the catalog's own.
+
+        Maps both `orders` and `silver_layer.orders` onto whichever the
+        warehouse actually reported. An unqualified alias is only registered
+        when it is UNAMBIGUOUS: if two schemas both hold an `orders`, guessing
+        which one the analyst meant would be worse than leaving the name alone
+        and letting the miss be visible.
+        """
+        names = [e.get("table", "") for e in self._catalog(tenant_id)]
+        names = [n for n in names if n]
+        bare_counts: Dict[str, int] = {}
+        for n in names:
+            bare = n.split(".")[-1].lower()
+            bare_counts[bare] = bare_counts.get(bare, 0) + 1
+        out: Dict[str, str] = {}
+        for n in names:
+            out[n.lower()] = n
+            bare = n.split(".")[-1].lower()
+            if bare_counts[bare] == 1:
+                out.setdefault(bare, n)
+        return out
 
     def _catalog(self, tenant_id: str) -> List[Dict[str, Any]]:
         try:
@@ -228,7 +260,13 @@ class SchemaContextBuilder:
         try:
             produced = self.junior.profile_tables(tenant_id, [table]) or {}
             profiles = list(produced.get(table) or [])
-            ctx.profiled_now.append(table)
+            # Returning an empty dict is how profiling reports "I could not read
+            # that table" without raising. Counting it as profiled hides the one
+            # fact the caveats exist to carry.
+            if profiles:
+                ctx.profiled_now.append(table)
+            else:
+                ctx.unprofiled.append(table)
         except Exception as exc:  # noqa: BLE001
             logger.warning("inline profiling of %s failed for tenant %s: %s",
                            table, tenant_id, exc)
