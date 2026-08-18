@@ -509,8 +509,9 @@ class StakeholderService:
                         return out
 
                     # Synthesize final answer using data from execution
-                    data_context = {"rows": [p["preview"] for p in exec_res.data_previews]}
-                    answer, toks, chart_config = self._synthesize(llm, question, category, data_context)
+                    answer, toks, chart_config = self._synthesize(
+                        llm, question, category,
+                        {"skill_steps": exec_res.data_previews})
                     
                     out = self._record(tenant_id, question, user_id, category, trace, answer,
                                        AnswerMode.SKILL_EXECUTED_ANALYSIS, "ANSWERED", False, [],
@@ -2094,6 +2095,10 @@ what was asked."""
 
     def _synthesize(self, llm: Any, question: str, category: str, data: Optional[Dict[str, Any]] = None) -> Tuple[str, Tuple[int, int], Optional[Dict[str, Any]]]:
         try:
+            if data and isinstance(data, dict) and data.get("skill_steps"):
+                return self._synthesize_text(
+                    llm, question, category,
+                    self._skill_context(data["skill_steps"]))
             rows = None
             columns: List[str] = []
             frame_rows = 0
@@ -2106,7 +2111,44 @@ what was asked."""
             elif data and isinstance(data, list):
                 rows = data
             data_context = self._data_context(rows, columns, frame_rows, full_cube)
+            return self._synthesize_text(llm, question, category, data_context)
+        except Exception as e:  # noqa: BLE001 - LLM is optional
+            return "Could not generate an answer: " + str(e), (0, 0), None
 
+    def _skill_context(self, steps: Sequence[Dict[str, Any]]) -> str:
+        """One labelled block per skill step.
+
+        The old call site flattened every step's rows into a single nested list,
+        so the model got [[{...}], [{...}]] with no idea which query produced
+        what, how many rows each really had, or that anything had been cut. A
+        skill's steps are usually SEPARATE analyses over the same population --
+        segments in one, reasons in another -- and saying so is what lets the
+        answer explain that they cannot be cross-cut.
+        """
+        blocks: List[str] = []
+        for i, step in enumerate(steps or [], start=1):
+            rows = list(step.get("preview") or [])
+            total = int(step.get("row_count") or len(rows))
+            name = step.get("step", f"step {i}")
+            if rows and len(rows) < total:
+                state = (f"showing {len(rows)} of {total} rows -- the rest are NOT "
+                         f"shown, so do not total or take shares over them")
+            elif rows:
+                state = f"COMPLETE, all {total} row(s)"
+            else:
+                state = "returned no rows"
+            blocks.append(f"\n--- Result {i} ({name}) -- {state} ---\n{rows}")
+        if len(blocks) > 1:
+            blocks.append(
+                "\nThese results are separate queries. They may share a population "
+                "but they are NOT joined, so a figure from one cannot be broken "
+                "down by a dimension that only appears in another -- say so plainly "
+                "rather than implying a cross-cut you cannot make.")
+        return "".join(blocks)
+
+    def _synthesize_text(self, llm: Any, question: str, category: str,
+                         data_context: str) -> Tuple[str, Tuple[int, int], Optional[Dict[str, Any]]]:
+        try:
             sys_prompt = (
                 "You are a cautious internal analytics assistant. State what you know and what data you would need. Do not invent figures. "
                 "The data context tells you whether it is the COMPLETE result or only part of one. "

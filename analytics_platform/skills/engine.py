@@ -125,6 +125,11 @@ class SkillEngine:
         except Exception:
             return ({}, False, "")
 
+    # Skill queries are aggregates, so their natural cardinality is small; this
+    # is a backstop against a runaway GROUP BY reaching the prompt, not a
+    # summary. row_count is reported alongside so truncation is never silent.
+    PREVIEW_ROWS = 500
+
     def execute(self, skill: SkillBundle, params: Dict[str, Any], executor: Any, ec: Any) -> SkillExecutionResult:
         """Executes the skill's SQL templates with the extracted parameters."""
         queries_run = []
@@ -148,14 +153,18 @@ class SkillEngine:
             if not result.ok:
                 return SkillExecutionResult(ok=False, error=f"Error in {file_name}: {result.error}", queries_run=queries_run)
                 
-            # Collect preview
+            # Collect preview. Five rows is not a preview of a GROUP BY -- it is
+            # most of the answer thrown away. A skill that breaks down drop-off
+            # by service_line x category returned 5 of its segments, and the
+            # synthesis step could only describe those five while sounding like
+            # it had described the breakdown.
             preview = []
             rows = result.data
             if rows is not None:
                 try:
-                    preview = rows.head(5).to_dict(orient="records")
+                    preview = rows.head(self.PREVIEW_ROWS).to_dict(orient="records")
                 except Exception:
-                    preview = list(rows)[:5]
+                    preview = list(rows)[:self.PREVIEW_ROWS]
             data_previews.append({
                 "step": file_name,
                 "row_count": result.row_count,

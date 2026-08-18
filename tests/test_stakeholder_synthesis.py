@@ -176,3 +176,51 @@ class TestASliceOfASmallCubeIsShownWithTheWholeCube(unittest.TestCase):
         ctx = StakeholderService._data_context(self.SLICE, frame_rows=5, full_cube=CUBE[:3])
         self.assertIn("SUBSET", ctx)
         self.assertNotIn("COMPLETE cube", ctx)
+
+
+class TestSkillResultContext(unittest.TestCase):
+    """A skill runs several SQL templates and hands their results to synthesis.
+    The old call site flattened them into one nested list, so the model could
+    not tell which query produced what, how much had been cut, or that the
+    results were not joined -- and answered as if they were."""
+
+    STEPS = [
+        {"step": "01_dropoff_summary_by_segment.sql", "row_count": 23,
+         "preview": [{"service_line": "mobile", "dropoff_rate_pct": 83.6}]},
+        {"step": "02_dropoff_reason_breakdown.sql", "row_count": 4,
+         "preview": [{"reason_bucket": "passive exit", "sessions_affected": 33826},
+                     {"reason_bucket": "3-D Secure", "sessions_affected": 900},
+                     {"reason_bucket": "technical error", "sessions_affected": 120},
+                     {"reason_bucket": "rejected", "sessions_affected": 12}]},
+    ]
+
+    def _ctx(self):
+        return StakeholderService._skill_context(StakeholderService, self.STEPS)
+
+    def test_each_step_is_named(self):
+        ctx = self._ctx()
+        self.assertIn("01_dropoff_summary_by_segment.sql", ctx)
+        self.assertIn("02_dropoff_reason_breakdown.sql", ctx)
+
+    def test_a_truncated_step_says_how_much_is_missing(self):
+        """The live answer described 5 segments as if they were the breakdown."""
+        self.assertIn("showing 1 of 23 rows", self._ctx())
+        self.assertIn("do not total or take shares", self._ctx())
+
+    def test_a_whole_step_is_marked_complete(self):
+        self.assertIn("COMPLETE, all 4 row(s)", self._ctx())
+
+    def test_separate_queries_are_flagged_as_unjoined(self):
+        """Live, the model wanted a reason-by-segment breakdown and could not
+        have one -- the two queries are never joined. It has to say that."""
+        self.assertIn("NOT joined", self._ctx())
+
+    def test_a_step_with_no_rows_is_stated(self):
+        ctx = StakeholderService._skill_context(
+            StakeholderService, [{"step": "x.sql", "row_count": 0, "preview": []}])
+        self.assertIn("returned no rows", ctx)
+
+    def test_a_single_step_gets_no_cross_cut_warning(self):
+        ctx = StakeholderService._skill_context(
+            StakeholderService, [self.STEPS[0]])
+        self.assertNotIn("NOT joined", ctx)

@@ -57,4 +57,4 @@ FROM step_a_sessions a
 LEFT JOIN step_b_sessions b ON b.session_id = a.session_id
 GROUP BY a.service_line, a.category
 ORDER BY sessions_dropped_off DESC
-LIMIT 5;
+;
