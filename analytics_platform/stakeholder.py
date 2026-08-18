@@ -784,8 +784,11 @@ WITH ranked_{rule.column} AS (
                 reason = plan.cube_sql.error
                 return TurnPlan(path="aggregate", analysis=plan.analysis,
                                 rationale=f"no cube could be composed: {reason}",
-                                caveats=[f"the requested breakdown could not be sized: "
-                                         f"{reason}"])
+                                # Keep what _resolve_plan already found out -- a
+                                # grain violation is the reason this turn fell
+                                # through and the user has to be told which base.
+                                caveats=list(plan.caveats) + [
+                                    f"the requested breakdown could not be sized: {reason}"])
             plan = retried
 
         if parsed.get("aggregate_only"):
@@ -872,6 +875,8 @@ WITH ranked_{rule.column} AS (
                     f"this answer rests on an unreviewed base view definition "
                     f"({view.name}); figures are provisional until it is approved.")
 
+        view = self._verify_grain(tenant_id, view, approved, caveats)
+
         cube = self._parse_cube(parsed.get("cube") or {}, view)
         cube_sql = self.base_views.compose_cube(view, cube, schema_ctx.profiles or {})
         return TurnPlan(
@@ -887,6 +892,47 @@ WITH ranked_{rule.column} AS (
             # is already baked in and inherited; the planner may not override it.
             attributions=[])
 
+    def _verify_grain(self, tenant_id: str, view: BaseView, approved: bool,
+                      caveats: List[str]) -> BaseView:
+        """Probe the base's grain once per population_hash, before composing.
+
+        A tenant asking twenty questions against one approved base pays for this
+        once, ever. It runs before compose_cube because after GROUP BY there is
+        nothing left to see.
+        """
+        if not view.grain or not self.base_views.needs_grain_check(view):
+            return view
+        try:
+            probe = self.base_views.compose_grain_probe(view)
+        except ValueError:
+            return view
+        _, res = self._run_composed(tenant_id, probe, "base view grain verification")
+        if res is None or not res.ok or res.data is None or not len(res.data):
+            # Unverified is not the same as violated. Say so and let the cube
+            # refusal (which fails closed) decide the turn.
+            caveats.append(f"the grain of base view {view.name} could not be verified "
+                           f"this turn, so no cube may be built over it yet")
+            return view
+        row = res.data.iloc[0]
+        try:
+            rows, keys = int(row["row_count"]), int(row["key_count"])
+        except (KeyError, TypeError, ValueError) as exc:
+            logger.warning("unreadable grain probe result for %s: %s", view.name, exc)
+            return view
+        view = self.base_views.record_grain_check(tenant_id, view, rows, keys)
+        if not view.grain_verified:
+            caveats.append(
+                f"base view {view.name} returns {rows:,} rows for {keys:,} distinct "
+                f"{', '.join(view.grain)} keys -- it is not at the grain it claims, and "
+                f"every measure over it would be multiplied")
+            if approved:
+                # A governance failure, not a modelling accident: a human approved
+                # this definition. Surface it, never patch it.
+                logger.error("APPROVED base view %s for tenant %s fails its own grain "
+                             "claim (%s rows, %s distinct %s)", view.name, tenant_id,
+                             rows, keys, view.grain)
+        return view
+
     def _store_proposal(self, tenant_id: str, proposal: Dict[str, Any],
                         parsed: Dict[str, Any],
                         schema_ctx: SchemaContext) -> Optional[BaseView]:
@@ -898,6 +944,11 @@ WITH ranked_{rule.column} AS (
                                 "measure_columns", "time_column", "row_count_estimate",
                                 "description", "owner", "aliases"}}
             view = BaseView(**payload)
+            # Grain verification is a MEASUREMENT, never a declaration. The
+            # proposal is filtered to the fields above, so it cannot set these --
+            # but say so explicitly, because a base that could certify itself
+            # would make the probe decorative.
+            view.grain_verified, view.grain_checked_hash = False, ""
             view.attributions = rules + self._default_attributions(
                 view, rules, schema_ctx)
         except (TypeError, ValueError) as exc:
@@ -1143,6 +1194,7 @@ what was asked."""
                     self.settings.policy.max_transport_rows)
         ceiling = self.settings.policy.raw_extract_row_limit
 
+        self._grain_violated = False
         pages: List[Any] = []
         sql_run: List[str] = []
         warnings: List[str] = []
@@ -1186,6 +1238,20 @@ what was asked."""
         combined = pd.concat(pages, ignore_index=True) if pages else pd.DataFrame()
         if truncated and len(combined) > ceiling:
             combined = combined.head(ceiling)
+
+        # The ID-grain path keeps a row-level check. On a base whose grain probe
+        # passed this cannot fire; if it does, the base changed underneath the
+        # stored check, so trust neither artifact -- say so rather than quietly
+        # summing rows that are already multiplied.
+        grain = list(plan.base_view.grain) if plan.base_view else []
+        if (grain and page_keys == grain and len(combined)
+                and all(k in combined.columns for k in grain)):
+            if bool(combined.duplicated(subset=grain).any()):
+                self._grain_violated = True
+                warnings.append(
+                    f"this extract claims one row per {', '.join(grain)} but came back "
+                    f"with duplicate keys, so any total over it is double-counted; the "
+                    f"base view changed since its grain was verified")
         return (sql_run[-1] if sql_run else "",
                 QueryResult(ok=True, data=combined, row_count=len(combined),
                             columns=list(combined.columns), warnings=warnings,

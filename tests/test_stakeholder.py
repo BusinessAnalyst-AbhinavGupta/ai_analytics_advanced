@@ -726,7 +726,7 @@ class TestStakeholder(unittest.TestCase):
         from analytics_platform.execution.extract_store import ExtractMeta
 
         registry = self.ctx.stakeholder.base_views
-        view = BaseView(name="order_events", grain=["order_id"],
+        view = BaseView(grain_verified=True, name="order_events", grain=["order_id"],
                         source_sql="SELECT order_id, revenue FROM events",
                         dimension_columns=[], measure_columns=["revenue"],
                         row_count_estimate=1000)
@@ -1101,6 +1101,16 @@ CUBE = ('{"base_view":"checkout_sessions","cube":{"dimensions":["device"],'
 TOO_WIDE = ('{"base_view":"checkout_sessions","cube":{"dimensions":["country","device","city"],'
             '"measures":[{"name":"n","expr":"COUNT(*)"}]}}')
 
+# A proposed base is grain-probed in the same turn (Task 13), so a proposal
+# fixture has to be SQL that actually runs against the test warehouse AND is
+# genuinely one row per grain key -- which is what a base view claims to be.
+PROPOSAL = ('{"base_view":"guest_checkouts","propose_base_view":'
+            '{"name":"guest_checkouts","grain":["session_id"],'
+            '"source_sql":"SELECT session_id, MAX(region) AS country FROM events '
+            'GROUP BY session_id",'
+            '"dimension_columns":["country"],"measure_columns":["revenue"]},'
+            '"cube":{"dimensions":["country"],"measures":[]}}')
+
 
 class TestPlanTurn(unittest.TestCase):
     def setUp(self):
@@ -1114,7 +1124,7 @@ class TestPlanTurn(unittest.TestCase):
         self.registry = self.svc.base_views
 
         self.view = BaseView(
-            name="checkout_sessions", grain=["session_id"],
+            grain_verified=True, name="checkout_sessions", grain=["session_id"],
             source_sql="SELECT session_id, country, device, city, service_line, revenue "
                        "FROM orders WHERE is_test_traffic = false",
             dimension_columns=["country", "device", "city", "service_line"],
@@ -1244,12 +1254,7 @@ class TestPlanTurn(unittest.TestCase):
 
     # -- proposing a base view -------------------------------------------------
     def test_a_proposed_base_view_is_stored_as_draft_and_marked_provisional(self):
-        llm = MockLLM(['{"base_view":"guest_checkouts","propose_base_view":'
-                       '{"name":"guest_checkouts","grain":["guest_id"],'
-                       '"source_sql":"SELECT guest_id, country FROM guests",'
-                       '"dimension_columns":["country"],'
-                       '"measure_columns":["revenue"]},'
-                       '"cube":{"dimensions":["country"],"measures":[]}}'])
+        llm = MockLLM([PROPOSAL])
         plan = self.plan(llm, "guest revenue by country")
         self.assertEqual(plan.base_view.name, "guest_checkouts")
         self.assertIs(plan.base_view_approved, False)
@@ -1258,12 +1263,7 @@ class TestPlanTurn(unittest.TestCase):
         self.assertIsNone(self.registry.get(self.tid, "guest_checkouts"))   # not approved
 
     def test_a_proposal_carries_a_provisional_caveat(self):
-        llm = MockLLM(['{"base_view":"guest_checkouts","propose_base_view":'
-                       '{"name":"guest_checkouts","grain":["guest_id"],'
-                       '"source_sql":"SELECT guest_id, country FROM guests",'
-                       '"dimension_columns":["country"],"measure_columns":[]},'
-                       '"cube":{"dimensions":["country"],"measures":[]}}'])
-        plan = self.plan(llm, "guest revenue by country")
+        plan = self.plan(MockLLM([PROPOSAL]), "guest revenue by country")
         self.assertTrue(any("provisional" in c for c in plan.caveats), plan.caveats)
 
     def test_an_approved_view_is_preferred_over_a_draft_of_the_same_name(self):
@@ -1308,7 +1308,7 @@ class TestPlanTurn(unittest.TestCase):
     def test_a_proposed_base_view_may_carry_attribution_rules(self):
         llm = MockLLM(['''{"base_view":"events_by_session","propose_base_view":{
             "name":"events_by_session","grain":["session_id"],
-            "source_sql":"SELECT session_id, service_line FROM events",
+            "source_sql":"SELECT session_id, MAX(region) AS service_line FROM events GROUP BY session_id",
             "dimension_columns":["service_line"],"measure_columns":[]},
             "cube":{"dimensions":["service_line"],"measures":[]},
             "attributions":[{"column":"service_line","grain":["session_id"],
@@ -1334,7 +1334,7 @@ class TestPlanTurn(unittest.TestCase):
         ctx = SchemaContext(profiles=profiles, rendered="RENDERED")
         llm = MockLLM(['{"base_view":"events_by_session","propose_base_view":{'
                        '"name":"events_by_session","grain":["session_id"],'
-                       '"source_sql":"SELECT session_id, service_line FROM events",'
+                       '"source_sql":"SELECT session_id, MAX(region) AS service_line FROM events GROUP BY session_id",'
                        '"dimension_columns":["service_line"],"measure_columns":[]},'
                        '"cube":{"dimensions":["service_line"],"measures":[]}}'])
         plan = self.plan(llm, schema_ctx=ctx)
@@ -1377,6 +1377,17 @@ class SpyExecutor:
         self.error = ""
         self.fail_first = 0
         self.columns = ["country", "device", "revenue"]
+        # Task 13: every base is grain-probed once per population_hash before a
+        # cube is composed over it. A clean base by default; probe_returns()
+        # makes it fan out.
+        self.probe_rows = 1_200_000
+        self.probe_keys = 1_200_000
+        self.probe_call_count = 0
+        self.probe_fails = False
+        self.duplicate_keys = False
+
+    def probe_returns(self, rows, keys):
+        self.probe_rows, self.probe_keys = rows, keys
 
     def returns_pages(self, *counts):
         self.pages = list(counts)
@@ -1410,6 +1421,17 @@ class SpyExecutor:
     def execute(self, sql, ctx):
         import pandas as pd
         from analytics_platform.execution.base import QueryResult
+        if "key_count" in sql:
+            # The grain probe is a round trip like any other, but it is not one
+            # of the cube's pages -- counting it in all_sql would make every
+            # paging assertion off by one.
+            self.probe_call_count += 1
+            if self.probe_fails:
+                return QueryResult(ok=False, error="probe failed")
+            return QueryResult(
+                ok=True, row_count=1, columns=["row_count", "key_count"],
+                data=pd.DataFrame({"row_count": [self.probe_rows],
+                                   "key_count": [self.probe_keys]}))
         self.all_sql.append(sql)
         self.all_ctx.append(ctx)
         if self.error:
@@ -1423,8 +1445,9 @@ class SpyExecutor:
         # nothing about paging.
         cols = {}
         for i, c in enumerate(self.columns):
+            span = 1 if self.duplicate_keys else (7 - i)
             cols[c] = (list(range(n)) if c == "revenue"
-                       else [f"{c[:2]}{j % (7 - i)}" for j in range(n)])
+                       else [f"{c[:2]}{j % span}" for j in range(n)])
         df = pd.DataFrame(cols, columns=list(self.columns))
         return QueryResult(ok=True, data=df, row_count=n, columns=list(df.columns))
 
@@ -1448,7 +1471,7 @@ class TestExecuteCube(unittest.TestCase):
                                         dialect="athena", tables=["orders"])
 
         self.view = BaseView(
-            name="checkout_sessions", grain=["session_id"],
+            grain_verified=True, name="checkout_sessions", grain=["session_id"],
             source_sql="SELECT session_id, country, device, revenue FROM orders "
                        "WHERE is_test_traffic = false",
             dimension_columns=["country", "device", "date"], measure_columns=["revenue"],

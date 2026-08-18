@@ -93,6 +93,10 @@ class Settings:
     # Column profiling: rows sampled per table. Bigger is a better measurement
     # and a slower one; a saturated sample forfeits every completeness claim.
     profile_sample_rows: int = 50_000
+    # A column that fans out above this share of grain keys needs a business
+    # ranking before it can be carried onto the grain. 1% is deliberately low:
+    # the junior only proposes the question, a human answers it.
+    attribution_fanout_threshold: float = 0.01
 
     def resolve_db_path(self) -> str:
         """DEPRECATED: the single shared database. Use resolve_control_db_path()
@@ -183,6 +187,8 @@ class Settings:
                 os.environ.get("ANALYTICS_JUNIOR_HUMAN_SIGNOFF_DAYS", "7")),
             profile_sample_rows=int(
                 os.environ.get("ANALYTICS_PROFILE_SAMPLE_ROWS", "50000")),
+            attribution_fanout_threshold=float(
+                os.environ.get("ANALYTICS_ATTRIBUTION_FANOUT_THRESHOLD", "0.01")),
         )
 
     def to_dict(self) -> Dict[str, Any]:

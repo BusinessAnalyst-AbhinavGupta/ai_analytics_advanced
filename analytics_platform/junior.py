@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from dataclasses import asdict
 from typing import Any, Dict, List, Optional
 
 from .brain.embedding import Embedder
@@ -26,14 +27,20 @@ from .brain.index import BrainIndex
 from .brain.store import CompanyBrain
 from .config import Settings
 from .database import Store, dump_json, load_json
-from .domain import (PROFILE_CARDINALITY_CAP, PROFILE_TOP_VALUES, ColumnProfile,
-                     KnowledgeNode, NodeKind, ReviewStatus, clamp_junior_depth, now_iso)
+from .domain import (PROFILE_CARDINALITY_CAP, PROFILE_TOP_VALUES, AttributionRule,
+                     ColumnProfile, KnowledgeNode, NodeKind, ReviewStatus,
+                     clamp_junior_depth, now_iso)
 from .execution.base import ExecutionContext, QueryExecutor
 from .execution.policy import QueryPolicy
 from .llm.client import make_role_client
 from .observability import Observability
 from .stores import TenantStoreProvider
 from .tenancy import TenantService
+
+# Storage contract for tenant attribution rules. SchemaContextBuilder reads these
+# nodes back by title prefix, so the two must agree; it lives here, next to the
+# engine that writes them.
+ATTRIBUTION_TITLE_PREFIX = "Attribution Rule: "
 
 logger = logging.getLogger(__name__)
 
@@ -308,6 +315,12 @@ class JuniorEngine:
 
         return payload
 
+    # Attribution rules live in the Brain, not in a prompt constant: which value
+    # outranks which is a *business* judgement that differs per tenant, and it
+    # should pass a senior's review before it silently reshapes every answer.
+    # `ATTRIBUTION_TITLE_PREFIX` is the storage contract SchemaContextBuilder
+    # reads back, so it lives at module level next to the engine that writes it.
+
     # -- stage 1b: column value profiling (read-only) ------------------------
     # The catalog says a column exists and what type it is. It does not say that
     # `status` holds 'complete' and not 'COMPLETED', that `city` has ~300 distinct
@@ -419,8 +432,7 @@ class JuniorEngine:
 
     @staticmethod
     def _profile_to_dict(p: ColumnProfile) -> Dict[str, Any]:
-        from dataclasses import asdict as _asdict
-        return _asdict(p)
+        return asdict(p)
 
     def _clip(self, value: Any) -> str:
         return str(value)[: self.PROFILE_VALUE_CHARS]
@@ -490,6 +502,55 @@ class JuniorEngine:
             return
         brain.create(kind=NodeKind.DEFINITION, title=self.profile_node_title(table),
                      summary=summary, payload=payload, status=ReviewStatus.APPROVED)
+
+    # -- attribution proposals -----------------------------------------------
+    def attribution_node_title(self, table: str, column: str,
+                               grain: List[str]) -> str:
+        return (f"{ATTRIBUTION_TITLE_PREFIX}{table}.{column} by "
+                f"{', '.join(grain)}")
+
+    def propose_attribution_rules(self, tenant_id: str,
+                                  tables: Optional[List[str]] = None
+                                  ) -> List[KnowledgeNode]:
+        """Propose a DRAFT rule for every column that fans out at a grain key.
+
+        The junior proposes the *existence* of the problem -- it measured the
+        fan-out and can say so precisely. It deliberately supplies no
+        `priority_values`: which service line outranks which is a business
+        ranking, and inventing one here would bury a guess inside every future
+        population_hash where nobody would think to look for it.
+        """
+        threshold = float(getattr(self.settings, "attribution_fanout_threshold", 0.01))
+        if tables is None:
+            tables = [t["table"] for t in self.get_catalog(tenant_id).get("tables", [])]
+        brain = self.brain(tenant_id)
+        seen = {n.title for n in brain.all(kind=NodeKind.DEFINITION, limit=1000)}
+        created: List[KnowledgeNode] = []
+        for table in tables:
+            for profile in self.get_column_profiles(tenant_id, table):
+                for key, share in sorted(profile.fanout_by_key.items()):
+                    if share <= threshold:
+                        continue
+                    title = self.attribution_node_title(table, profile.column, [key])
+                    if title in seen:
+                        continue
+                    rule = AttributionRule(
+                        column=profile.column, grain=[key], strategy="most_frequent",
+                        source="junior",
+                        rationale=f"measured: {share:.1%} of {key} values carry more than "
+                                  f"one {profile.column}. most_frequent is a placeholder "
+                                  f"-- replace it with the business ranking.")
+                    payload = asdict(rule)
+                    payload.update({"table": table, "fanout": round(float(share), 6)})
+                    summary = (f"{share:.0%} of {key} keys carry more than one "
+                               f"{profile.column} in {table}; carrying {profile.column} "
+                               f"onto {key} without a ranking would double-count.")
+                    created.append(brain.create(
+                        kind=NodeKind.DEFINITION, title=title, summary=summary,
+                        payload=payload, created_by="junior",
+                        status=ReviewStatus.CANDIDATE))
+                    seen.add(title)
+        return created
 
     def datasets(self, tenant_id: str) -> List[str]:
         """Distinct column/schema names known across described tables (for EDA)."""

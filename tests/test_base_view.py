@@ -26,7 +26,11 @@ def _view(**kw):
              source_sql="SELECT session_id, country, device, revenue FROM orders "
                         "WHERE is_test_traffic = false",
              dimension_columns=["country", "device"], measure_columns=["revenue"],
-             row_count_estimate=1_200_000)
+             row_count_estimate=1_200_000,
+             # Task 13: a cube over an unverified base is refused. Every fixture
+             # here is about composition, so it starts from a probed base; the
+             # refusal itself is exercised in tests/test_attribution.py.
+             grain_verified=True)
     d.update(kw)
     return BaseView(**d)
 

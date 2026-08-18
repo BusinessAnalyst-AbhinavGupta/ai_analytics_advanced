@@ -36,7 +36,8 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 from .config import MAX_CUBE_CELLS, MAX_DIMENSION_CARDINALITY
 from .database import dump_json
 from .domain import (AttributionRule, BaseView, ColumnProfile, CubeMeasure, CubeSpec,
-                     CubeSQL, KnowledgeNode, NodeKind, ReconcileResult, ReviewStatus)
+                     CubeSQL, KnowledgeNode, NodeKind, ReconcileResult, ReviewStatus,
+                     now_iso)
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +208,76 @@ class BaseViewRegistry:
                             summary=summary, payload=payload, created_by=by,
                             status=ReviewStatus.CANDIDATE)
 
+    # -- grain verification --------------------------------------------------
+    # A base view asserts "one row per session_id". Nothing until now checked it,
+    # and the layer that used to check it cannot: GROUP BY deduplicates the
+    # dimension tuple unconditionally, so a base emitting three rows per key
+    # produces a cube where every cell is unique and every SUM is silently
+    # tripled. The violation is invisible at exactly the layer that used to catch
+    # it. So it is verified on the DEFINITION -- once per population_hash, which
+    # also means an edited source_sql re-probes automatically -- and a cube over
+    # an unverified base is refused outright.
+
+    def compose_grain_probe(self, view: BaseView) -> str:
+        """Two numbers, one round trip: rows in the population, distinct keys."""
+        if not view.grain:
+            raise ValueError(f"base view {view.name!r} declares no grain to verify")
+        keys = [_escape_ident(k) for k in view.grain]
+        if len(keys) == 1:
+            distinct = f"COUNT(DISTINCT {keys[0]})"
+        else:
+            # Trino/Athena will not COUNT(DISTINCT ROW(...)), so a composite grain
+            # is concatenated with ASCII 31 (unit separator) -- a character that
+            # cannot appear in an identifier value, so it cannot merge two
+            # distinct tuples into one. NULL keys COALESCE to '' and therefore
+            # collide; that can only make the probe MORE likely to flag, which is
+            # the right direction to be wrong in, since a NULL grain key is
+            # already a grain violation.
+            joined = " || CHR(31) || ".join(
+                f"COALESCE(CAST({k} AS VARCHAR), '')" for k in keys)
+            distinct = f"COUNT(DISTINCT {joined})"
+        return (f"WITH base AS (\n{view.source_sql}\n)\n"
+                f"SELECT COUNT(*) AS row_count, {distinct} AS key_count\n"
+                f"FROM base")
+
+    def needs_grain_check(self, view: BaseView) -> bool:
+        """True until the CURRENT population has been probed. Keyed by hash, not
+        by a flag, so editing the SQL or an attribution rule re-probes by
+        itself -- which is the second reason the hash is over canonicalised SQL
+        rather than a version number nobody would bump."""
+        return (not view.grain_checked_hash
+                or view.grain_checked_hash != self.population_hash(view))
+
+    def record_grain_check(self, tenant_id: str, view: BaseView,
+                           rows: int, keys: int) -> BaseView:
+        """Write the measurement back onto the node and return the updated view.
+
+        `row_count_estimate` is overwritten with the probe's `rows`: the cube cell
+        guard needs a real number and profiling could only offer a sampled floor.
+        This is the honest one and it costs nothing extra.
+        """
+        rows, keys = int(rows), int(keys)
+        view.grain_verified = rows > 0 and rows == keys
+        view.grain_violation_ratio = (round(1 - keys / rows, 6)
+                                      if rows > 0 and keys < rows else 0.0)
+        view.grain_checked_at = now_iso()
+        view.grain_checked_hash = self.population_hash(view)
+        if rows > 0:
+            view.row_count_estimate = rows
+        self.upsert(tenant_id, view, by="junior")
+        return view
+
+    def _grain_refusal(self, view: BaseView) -> str:
+        if view.grain_violation_ratio:
+            return (f"base view {view.name!r} is not at the grain it claims: "
+                    f"{view.grain_violation_ratio:.1%} of its rows are duplicates at "
+                    f"{view.grain}, so every measure over it would be multiplied. "
+                    f"Fix the base (an attribution rule or a de-duplicating pick) "
+                    f"rather than aggregating over it.")
+        return (f"base view {view.name!r} has not had its grain verified. A cube over "
+                f"an unverified base hides fan-out behind GROUP BY -- every cell "
+                f"looks unique while every measure is multiplied. Probe it first.")
+
     # -- measures ------------------------------------------------------------
     def _resolve_measure(self, m: CubeMeasure) -> CubeMeasure:
         """Rewrite AVG into a sum and a count, and classify additivity.
@@ -339,6 +410,9 @@ class BaseViewRegistry:
         different population_hash, which would break the one thing the base
         exists to guarantee.
         """
+        if not view.grain_verified:
+            return CubeSQL(ok=False, error=self._grain_refusal(view),
+                           population_hash=self.population_hash(view))
         guard = self._guard(view, spec, profiles)
         if not guard.ok:
             guard.population_hash = self.population_hash(view)
@@ -381,6 +455,10 @@ class BaseViewRegistry:
         cube whose estimate exceeds one round trip -- the latter passes its own
         dimensions as `keys` rather than walking the grain.
         """
+        if not view.grain_verified:
+            # Fan-out multiplies an ID-grain page exactly as it multiplies a cube;
+            # here it is worse, because the duplicate rows arrive looking real.
+            raise ValueError(self._grain_refusal(view))
         key_columns = [_escape_ident(k) for k in (keys or view.grain)]
         if not key_columns:
             raise ValueError("keyset pagination needs at least one ordering key")

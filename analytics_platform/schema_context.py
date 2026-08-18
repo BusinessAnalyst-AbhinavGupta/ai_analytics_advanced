@@ -20,11 +20,12 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
-from .domain import PROFILE_TOP_VALUES, ColumnProfile
+from .domain import PROFILE_TOP_VALUES, AttributionRule, ColumnProfile, NodeKind
 
 logger = logging.getLogger(__name__)
 
 MAX_CONTEXT_TABLES = 8      # do not dump the whole warehouse into every prompt
+ATTRIBUTION_HEADING = "=== APPROVED ATTRIBUTION RULES ==="
 IDENTIFIER_DISTINCT_SHARE = 0.9   # distinct >= this share of rows -> [identifier]
 
 _TOKEN_RE = re.compile(r"[a-z0-9_]+")
@@ -39,6 +40,7 @@ class SchemaContext:
     tables: List[Dict[str, Any]] = field(default_factory=list)   # {table, columns, row_count_estimate}
     semantics: Any = None                    # SemanticResolution
     base_views: List[Any] = field(default_factory=list)          # approved first, then drafts
+    attributions: List[Any] = field(default_factory=list)        # AttributionRule, APPROVED only
     profiles: Dict[str, ColumnProfile] = field(default_factory=dict)  # flattened, for the cube guard
     rendered: str = ""
     profiled_now: List[str] = field(default_factory=list)   # profiled inline this turn
@@ -120,6 +122,39 @@ class SchemaContextBuilder:
                   if v.name not in names]
         return approved + drafts
 
+    # -- attribution ---------------------------------------------------------
+    def attribution_rules(self, tenant_id: str,
+                          tables: Optional[Sequence[str]] = None) -> List[AttributionRule]:
+        """The tenant's APPROVED attribution rules, for the tables in play.
+
+        Approved only, and that is the whole point: a draft rule that reached the
+        prompt would steer an answer that no human has agreed to, and would do it
+        invisibly, because by the time it is baked into a base view's source_sql
+        it is already inside a population_hash.
+        """
+        from .junior import ATTRIBUTION_TITLE_PREFIX
+
+        wanted = {t for t in (tables or []) if t}
+        out: List[AttributionRule] = []
+        try:
+            nodes = self.brain_for(tenant_id).all(kind=NodeKind.DEFINITION, limit=1000)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("could not read attribution rules for %s: %s", tenant_id, exc)
+            return []
+        for node in nodes:
+            if not (node.title or "").startswith(ATTRIBUTION_TITLE_PREFIX):
+                continue
+            if not node.status.is_usable():
+                continue
+            payload = dict(node.payload or {})
+            if wanted and (payload.get("table") or "") not in wanted:
+                continue
+            try:
+                out.append(AttributionRule.from_dict(payload))
+            except (TypeError, ValueError) as exc:
+                logger.warning("skipping malformed attribution node %s: %s", node.id, exc)
+        return out
+
     # -- build ---------------------------------------------------------------
     def build(self, tenant_id: str, question: str, query_nodes: Sequence[Any],
               defn_nodes: Sequence[Any], profile_if_missing: bool = True) -> SchemaContext:
@@ -153,6 +188,8 @@ class SchemaContextBuilder:
                 "row_count_estimate": rows,
             })
 
+        ctx.attributions = self.attribution_rules(
+            tenant_id, [e["table"] for e in ctx.tables])
         ctx.truncated_tables = self._selection_was_capped(
             tenant_id, question, query_nodes, defn_nodes)
         ctx.profiles = self._flatten(ctx, row_estimates)
@@ -229,8 +266,39 @@ class SchemaContextBuilder:
         if semantics:
             blocks.append(semantics)
         blocks.append(self.base_views.render(ctx.base_views, tenant_id))
+        attributions = self._render_attributions(ctx.attributions)
+        if attributions:
+            blocks.append(attributions)
         blocks.append(self._render_schema(ctx))
         return "\n".join(blocks)
+
+    @staticmethod
+    def _render_attributions(rules: Sequence[AttributionRule]) -> str:
+        """Between the base views and the schema, because that is where it acts.
+
+        A rule is a property of the population, so it belongs inside a base
+        view's source_sql -- applied there once, hashed, inherited by every cube.
+        Applied instead as a per-question filter it would be applied twice, or
+        not at all, and two questions would again disagree.
+        """
+        if not rules:
+            return ""
+        lines = [ATTRIBUTION_HEADING, "",
+                 "Approved by this company. Apply these INSIDE the base view's "
+                 "source_sql (a ROW_NUMBER pick over the grain), never as a "
+                 "per-question filter -- a rule applied above the base is outside "
+                 "its population_hash and cannot be reconciled.", ""]
+        for r in rules:
+            lines.append(f"- {r.column} collapses onto {', '.join(r.grain) or 'the grain'} "
+                         f"by {r.strategy}")
+            if r.priority_values:
+                lines.append(f"    ranked best first: {r.priority_values}")
+            if r.tiebreakers:
+                lines.append(f"    tiebreakers: {r.tiebreakers}")
+            if r.rationale:
+                lines.append(f"    {r.rationale}")
+        lines.append("")
+        return "\n".join(lines)
 
     def _render_schema(self, ctx: SchemaContext) -> str:
         lines = ["=== DATABASE SCHEMA (authoritative -- use these exact table and "

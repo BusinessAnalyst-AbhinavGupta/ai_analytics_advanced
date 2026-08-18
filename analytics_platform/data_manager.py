@@ -52,6 +52,10 @@ class CoverageVerdict:
     missing_measures: List[str] = field(default_factory=list)
     missing_time_ranges: List[Tuple[str, str]] = field(default_factory=list)
     supersedes: str = ""         # on "widen": the narrower cube this one replaces
+    # The dimensions the narrower cube already carries. A widen re-runs the cube
+    # over the UNION of these and the requirement's, because adding a dimension
+    # re-splits every existing cell -- there is no partial cube to fetch.
+    existing_dimensions: List[str] = field(default_factory=list)
     reason: str = ""             # human-readable; goes into the answer's provenance
 
     def to_dict(self) -> Dict[str, Any]:
@@ -152,6 +156,7 @@ class DataManager:
                 missing_dimensions=best.missing_dimensions,
                 missing_measures=best.missing_measures,
                 missing_time_ranges=best.missing_time_ranges,
+                existing_dimensions=list(best.dimensions),
                 # Both share a population and the wider cube sums down to the
                 # narrower, so no answer already given from it is invalidated.
                 supersedes=best.label,

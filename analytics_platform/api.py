@@ -875,11 +875,33 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
         payload = body.model_dump()
         by = payload.pop("by", "analyst")
         payload["attributions"] = [AttributionRule(**r) for r in payload.get("attributions", [])]
-        node = BaseViewRegistry(C.pipeline.brain).upsert(
-            tenant_id, BaseView(**payload), by=by)
+        view = BaseView(**payload)
+        # Grain verification is measured by the probe, never asserted by whoever
+        # posts the definition. A caller that could set these would be certifying
+        # its own base view.
+        view.grain_verified, view.grain_violation_ratio = False, 0.0
+        view.grain_checked_at, view.grain_checked_hash = "", ""
+        node = BaseViewRegistry(C.pipeline.brain).upsert(tenant_id, view, by=by)
         C.observability.event(tenant_id=tenant_id, stage="knowledge.base_view",
                               actor=by, resource=node.id, status="OK")
         return node.to_dict()
+
+    # -- attribution proposals (Task 13) -------------------------------------
+    @app.post("/knowledge/{tenant_id}/attribution/propose")
+    def propose_attribution(tenant_id: str,
+                            tables: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """The junior measures which columns fan out and proposes DRAFT rules.
+
+        Review and approval go through the existing /review endpoint -- this adds
+        no parallel approval path, because the ranking these rules carry is a
+        business judgement and has to pass the same gate as any other one.
+        """
+        tenant_or_404(tenant_id)
+        nodes = C.junior.propose_attribution_rules(tenant_id, tables)
+        C.observability.event(tenant_id=tenant_id, stage="knowledge.attribution_propose",
+                              actor="junior", resource=tenant_id, status="OK",
+                              meta={"proposed": len(nodes)})
+        return [n.to_dict() for n in nodes]
 
     @app.post("/knowledge/{tenant_id}/{node_id}/review")
     def review(tenant_id: str, node_id: str, body: ReviewIn) -> Dict[str, Any]:

@@ -326,6 +326,17 @@ class BaseView:
     description: str = ""
     owner: str = ""
     aliases: List[str] = field(default_factory=list)
+    # -- grain verification (Task 13) ---------------------------------------
+    # Measured once per population_hash by an actual COUNT(*) vs COUNT(DISTINCT
+    # grain) probe, never asserted by whoever wrote the SQL. A cube over an
+    # unverified base is refused: GROUP BY deduplicates the dimension tuple
+    # unconditionally, so a base emitting three rows per session_id yields a cube
+    # where every cell is unique and every SUM is silently tripled. The stored
+    # hash is what makes an edited source_sql re-probe automatically.
+    grain_verified: bool = False
+    grain_violation_ratio: float = 0.0
+    grain_checked_at: str = ""
+    grain_checked_hash: str = ""
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "BaseView":
