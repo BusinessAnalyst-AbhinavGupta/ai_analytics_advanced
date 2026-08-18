@@ -72,5 +72,71 @@ class TestResolveTemplatePlaceholders(unittest.TestCase):
         self.assertEqual(sql, "SELECT * FROM shirt WHERE 1=1 AND 1=1")
 
 
+class TestTransportCeiling(unittest.TestCase):
+    """Task 4 -- three independent 50k caps had to be made to agree, and one of
+    them turned out not to be a cap at all."""
+
+    def setUp(self):
+        self.policy = QueryPolicy(PolicySettings())
+
+    def test_a_per_request_row_limit_is_injected(self):
+        d = self.policy.validate(
+            "SELECT session_id, revenue FROM orders WHERE dt >= '2026-01-01'",
+            row_limit=50_000, dialect="athena")
+        self.assertTrue(d.allowed, d.reasons)
+        self.assertIn("LIMIT 50000", d.approved_sql)
+
+    def test_default_path_still_limits_to_50000(self):
+        d = self.policy.validate(
+            "SELECT country, SUM(revenue) FROM orders WHERE dt >= '2026-01-01' GROUP BY country",
+            dialect="athena")
+        self.assertIn("LIMIT 50000", d.approved_sql)
+
+    def test_a_request_above_the_transport_ceiling_is_refused(self):
+        """No caller may ask a single round trip for more than the transport
+        carries. Above this, use a cube (Task 7) or keyset chunks (Task 12)."""
+        d = self.policy.validate("SELECT session_id FROM orders",
+                                 row_limit=1_000_000, dialect="athena")
+        self.assertFalse(d.allowed)
+        self.assertTrue(any("transport" in r.lower() for r in d.reasons), d.reasons)
+
+    def test_the_ceiling_is_read_from_settings_not_hardcoded(self):
+        """Task 4 Step 3 may well lower this after measuring the real boundary."""
+        policy = QueryPolicy(PolicySettings(max_transport_rows=1_000))
+        self.assertFalse(policy.validate("SELECT a FROM orders", row_limit=5_000).allowed)
+        self.assertTrue(policy.validate("SELECT a FROM orders", row_limit=1_000).allowed)
+
+    def test_exactly_the_ceiling_is_allowed(self):
+        d = self.policy.validate("SELECT a FROM orders", row_limit=50_000, dialect="athena")
+        self.assertTrue(d.allowed, d.reasons)
+
+    def test_a_cte_query_still_gets_a_limit_injected(self):
+        """Every composed cube starts `WITH base AS (`. The policy's injection is
+        the single place that decides the warehouse-side bound, so if it skipped
+        CTEs the cube path would reach Athena completely unbounded."""
+        sql = ("WITH base AS (SELECT session_id, country, revenue FROM orders)\n"
+               "SELECT country, SUM(revenue) AS revenue FROM base GROUP BY 1")
+        d = self.policy.validate(sql, row_limit=50_000, dialect="athena")
+        self.assertTrue(d.allowed, d.reasons)
+        self.assertIn("LIMIT 50000", d.approved_sql)
+
+    def test_a_cte_query_that_already_has_a_limit_is_left_alone(self):
+        sql = ("WITH base AS (SELECT session_id FROM orders)\n"
+               "SELECT session_id FROM base ORDER BY session_id LIMIT 100")
+        d = self.policy.validate(sql, row_limit=50_000, dialect="athena")
+        self.assertTrue(d.allowed, d.reasons)
+        self.assertEqual(d.approved_sql.upper().count("LIMIT"), 1)
+
+    def test_extract_chunk_rows_may_not_exceed_the_transport_ceiling(self):
+        s = PolicySettings()
+        self.assertLessEqual(s.extract_chunk_rows, s.max_transport_rows)
+
+    def test_the_materialised_ceiling_is_far_above_one_round_trip(self):
+        """raw_extract_row_limit bounds a cube summed across chunks, never a
+        single round trip -- conflating them is what this task exists to stop."""
+        s = PolicySettings()
+        self.assertGreater(s.raw_extract_row_limit, s.max_transport_rows)
+
+
 if __name__ == "__main__":
     unittest.main()

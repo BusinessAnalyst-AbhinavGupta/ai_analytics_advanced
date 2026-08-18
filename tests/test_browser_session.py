@@ -111,6 +111,45 @@ class TestBrowserSession(unittest.TestCase):
         r = ex.execute("SELECT 1", ExecutionContext(tenant_id="t"))
         self.assertEqual(r.row_count, 10)
 
+    def test_truncation_sets_a_warning_not_just_a_shorter_frame(self):
+        """Silent truncation is how a 50,000-row slice becomes a confidently wrong
+        total. Callers read this warning to set ExtractMeta.truncated."""
+        rows = [[i] for i in range(60)]
+        ex = BrowserSessionExecutor(database_id=1, max_rows=10,
+                                    runner=make_runner(probe_payload(),
+                                                       exec_payload(rows=rows, cols=["x"])))
+        r = ex.execute("SELECT 1", ExecutionContext(tenant_id="t"))
+        self.assertTrue(any("truncated" in w for w in r.warnings), r.warnings)
+        self.assertTrue(any("10" in w for w in r.warnings), r.warnings)
+
+    def test_an_untruncated_result_carries_no_truncation_warning(self):
+        ex = BrowserSessionExecutor(database_id=1, max_rows=10,
+                                    runner=make_runner(probe_payload(),
+                                                       exec_payload(rows=[[1]], cols=["x"])))
+        r = ex.execute("SELECT 1", ExecutionContext(tenant_id="t"))
+        self.assertEqual(r.warnings, [])
+
+    def test_the_per_request_row_limit_wins_when_no_max_rows_is_configured(self):
+        """max_rows defaults to None, meaning 'take it from ctx.row_limit', so a
+        cube page asking for 50,000 is not silently clipped by a stale default."""
+        rows = [[i] for i in range(60)]
+        ex = BrowserSessionExecutor(database_id=1,
+                                    runner=make_runner(probe_payload(),
+                                                       exec_payload(rows=rows, cols=["x"])))
+        r = ex.execute("SELECT 1", ExecutionContext(tenant_id="t", row_limit=25))
+        self.assertEqual(r.row_count, 25)
+        self.assertTrue(any("truncated" in w for w in r.warnings), r.warnings)
+
+    def test_an_explicit_max_rows_still_bounds_memory_below_the_request(self):
+        """max_rows is a memory guard, not a transport limit -- when it is set it
+        is the tighter of the two."""
+        rows = [[i] for i in range(60)]
+        ex = BrowserSessionExecutor(database_id=1, max_rows=5,
+                                    runner=make_runner(probe_payload(),
+                                                       exec_payload(rows=rows, cols=["x"])))
+        r = ex.execute("SELECT 1", ExecutionContext(tenant_id="t", row_limit=50))
+        self.assertEqual(r.row_count, 5)
+
     def test_concurrent_roundtrips_are_serialized(self):
         """window.__mb is one shared slot in the real browser tab -- e.g. a
         background session-health poll and a real query, or two concurrent

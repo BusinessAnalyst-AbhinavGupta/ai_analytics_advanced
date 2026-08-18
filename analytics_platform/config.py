@@ -13,6 +13,26 @@ class PolicySettings:
     require_date_filter_tables: List[str] = field(default_factory=list)
     block_multi_statement: bool = True
     forge_dialect: str = "athena"        # sqlglot dialect used for validation
+    # -- what one round trip may carry -------------------------------------
+    # UNMEASURED. 50,000 is inherited, not observed. BrowserSessionExecutor
+    # returns a whole Metabase response as a single `osascript` string which
+    # Python then json.loads, and AppleScript's return-value limit *truncates a
+    # string rather than raising* -- so the dangerous failure is a successful
+    # parse of a truncated payload, not an exception. Before trusting this
+    # number, run the same SELECT at 25k / 50k / 100k / 200k rows against the
+    # real Metabase tab and record, for each: wall-clock, whether osascript
+    # returned at all, and whether the parsed row count matches the requested
+    # one. Set this to the largest size that round-tripped *intact*, with a
+    # margin, and replace this paragraph with the measured figures. Every cube
+    # size and page size in the platform is derived from it, so a wrong value
+    # here produces silent data loss everywhere else.
+    max_transport_rows: int = 50_000
+    # Keyset page size. Must be <= max_transport_rows: a page IS one round trip.
+    extract_chunk_rows: int = 50_000
+    # The ceiling on a MATERIALISED cube or extract -- the sum across chunks,
+    # never a single round trip. Deliberately far above max_transport_rows.
+    raw_extract_row_limit: int = 1_000_000
+    extract_retention_days: int = 30
 
 
 @dataclass
@@ -92,7 +112,18 @@ class Settings:
         _provider = os.environ.get("ANALYTICS_LLM_PROVIDER", "").strip()
         if not _provider and os.environ.get("OPENROUTER_API_KEY"):
             _provider = "openrouter"
+        _policy_defaults = PolicySettings()
         return cls(
+            policy=PolicySettings(
+                max_transport_rows=int(os.environ.get(
+                    "ANALYTICS_MAX_TRANSPORT_ROWS", _policy_defaults.max_transport_rows)),
+                extract_chunk_rows=int(os.environ.get(
+                    "ANALYTICS_EXTRACT_CHUNK_ROWS", _policy_defaults.extract_chunk_rows)),
+                raw_extract_row_limit=int(os.environ.get(
+                    "ANALYTICS_RAW_EXTRACT_ROW_LIMIT", _policy_defaults.raw_extract_row_limit)),
+                extract_retention_days=int(os.environ.get(
+                    "ANALYTICS_EXTRACT_RETENTION_DAYS", _policy_defaults.extract_retention_days)),
+            ),
             data_dir=os.environ.get("ANALYTICS_DATA_DIR", ""),
             db_path=os.environ.get("ANALYTICS_DB_PATH", ""),
             llm_provider=_provider or "null",

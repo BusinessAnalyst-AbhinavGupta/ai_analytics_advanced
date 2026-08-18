@@ -156,13 +156,15 @@ class BrowserExecutorConfig:
     database_id: Any = None
     expected_host: str = ""
     timeout_s: float = 30.0
-    max_rows: int = 50000
+    # None means "take the bound from ctx.row_limit". This is a MEMORY GUARD on
+    # an already-received payload, not a transport limit -- see execute().
+    max_rows: Optional[int] = None
 
 
 class BrowserSessionExecutor(QueryExecutor):
     def __init__(self, metabase_base_url: str = "", database_id: Any = None,
                  expected_host: str = "", runner: Optional[Runner] = None,
-                 timeout_s: float = 30.0, max_rows: int = 50000):
+                 timeout_s: float = 30.0, max_rows: Optional[int] = None):
         self.base_url = metabase_base_url.rstrip("/")
         self.config = BrowserExecutorConfig(database_id=database_id,
                                             expected_host=expected_host,
@@ -302,10 +304,25 @@ class BrowserSessionExecutor(QueryExecutor):
             return QueryResult(ok=False, error=res.get("error", "metabase error"))
         rows = res.get("rows", [])
         cols = res.get("cols", [])
-        if len(rows) > self.config.max_rows:
-            rows = rows[: self.config.max_rows]
+        # WARNING TO THE NEXT READER: this slice runs AFTER the entire payload has
+        # already crossed the AppleScript boundary -- Metabase's whole response was
+        # JSON.stringify'd into window.__mb.payload and returned as one `osascript`
+        # string, which was then json.loads'd above. It is therefore a MEMORY
+        # GUARD, not a transport limit: raising it does not make that boundary
+        # carry more, it only stops discarding what already arrived. The only
+        # thing that bounds the *warehouse* is the LIMIT QueryPolicy injects,
+        # which is why cubes are sized to fit and ID-grain rows are keyset-paged.
+        bounds = [b for b in (self.config.max_rows, ctx.row_limit) if b]
+        cap = min(bounds) if bounds else None
+        warnings: List[str] = []
+        if cap is not None and len(rows) > cap:
+            rows = rows[:cap]
+            # Callers set ExtractMeta.truncated off this. A silently shorter frame
+            # is how a partial result becomes a confidently wrong total.
+            warnings.append(f"result truncated at {cap} rows")
         df = pd.DataFrame(rows, columns=cols)
-        return QueryResult(ok=True, data=df, row_count=len(df), columns=cols)
+        return QueryResult(ok=True, data=df, row_count=len(df), columns=cols,
+                           warnings=warnings)
 
     def cancel(self, execution_id: str) -> bool:
         return True
