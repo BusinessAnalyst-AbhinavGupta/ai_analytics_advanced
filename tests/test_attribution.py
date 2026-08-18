@@ -253,6 +253,35 @@ class TestGrainProbe(unittest.TestCase):
         self.assertIn("CHR(31)", sql)
         self.assertNotIn("DISTINCT (", sql.upper())
 
+    def test_the_probe_counts_null_keys_separately(self):
+        """A NULL grain key is not a duplicate. COUNT(DISTINCT k) ignores NULLs
+        while GROUP BY k gives them a group of their own, so a base with NULL
+        keys reports rows > keys and looks exactly like fan-out. Telling a human
+        to go hunt for duplicate sessions when the real defect is a missing join
+        key wastes their afternoon."""
+        sql = self.registry.compose_grain_probe(_view())
+        self.assertIn("null_keys", sql)
+
+    def test_a_null_keyed_base_says_null_not_duplicate(self):
+        v = self.registry.record_grain_check(self.tid, _view(), rows=31_274,
+                                             keys=31_273, null_keys=1_965)
+        self.assertFalse(v.grain_verified)
+        self.assertEqual(v.grain_null_keys, 1_965)
+        spec = CubeSpec(base_name=v.name, dimensions=["country"], measures=[SUM_REVENUE])
+        err = self.registry.compose_cube(v, spec, _profiles(country=30)).error.lower()
+        self.assertIn("null", err)
+        self.assertIn("1,965", err)
+        # It must actively say they are NOT duplicates -- the numbers alone look
+        # exactly like fan-out, so silence here sends the reader hunting.
+        self.assertIn("not duplicates", err)
+
+    def test_a_genuinely_duplicated_base_still_says_duplicate(self):
+        v = self.registry.record_grain_check(self.tid, _view(), rows=1_300_000,
+                                             keys=1_200_000, null_keys=0)
+        spec = CubeSpec(base_name=v.name, dimensions=["country"], measures=[SUM_REVENUE])
+        err = self.registry.compose_cube(v, spec, _profiles(country=30)).error.lower()
+        self.assertIn("duplicate", err)
+
     def test_a_probe_over_a_grainless_view_is_refused(self):
         with self.assertRaises(ValueError):
             self.registry.compose_grain_probe(_view(grain=[]))

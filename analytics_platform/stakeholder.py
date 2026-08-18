@@ -1253,12 +1253,24 @@ WITH ranked_{rule.column} AS (
         except (KeyError, TypeError, ValueError) as exc:
             logger.warning("unreadable grain probe result for %s: %s", view.name, exc)
             return view
-        view = self.base_views.record_grain_check(tenant_id, view, rows, keys)
+        try:
+            null_keys = int(row["null_keys"] or 0)
+        except (KeyError, TypeError, ValueError):
+            null_keys = 0       # older stored probe shape; treat as "not measured"
+        view = self.base_views.record_grain_check(tenant_id, view, rows, keys, null_keys)
         if not view.grain_verified:
-            caveats.append(
-                f"base view {view.name} returns {rows:,} rows for {keys:,} distinct "
-                f"{', '.join(view.grain)} keys -- it is not at the grain it claims, and "
-                f"every measure over it would be multiplied")
+            if null_keys:
+                caveats.append(
+                    f"base view {view.name} has {null_keys:,} rows with no "
+                    f"{', '.join(view.grain)} at all -- they are not at the grain it "
+                    f"claims and all of them collapse into one bucket. They are not "
+                    f"duplicates; exclude them in the base or key it on something "
+                    f"always present.")
+            else:
+                caveats.append(
+                    f"base view {view.name} returns {rows:,} rows for {keys:,} distinct "
+                    f"{', '.join(view.grain)} keys -- it is not at the grain it claims, "
+                    f"and every measure over it would be multiplied")
             if approved:
                 # A governance failure, not a modelling accident: a human approved
                 # this definition. Surface it, never patch it.

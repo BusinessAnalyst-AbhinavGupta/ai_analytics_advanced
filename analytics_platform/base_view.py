@@ -236,8 +236,12 @@ class BaseViewRegistry:
             joined = " || CHR(31) || ".join(
                 f"COALESCE(CAST({k} AS VARCHAR), '')" for k in keys)
             distinct = f"COUNT(DISTINCT {joined})"
+        # NULL keys are counted separately: they are not duplicates, but they
+        # make rows > keys look exactly like fan-out.
+        null_test = " OR ".join(f"{k} IS NULL" for k in keys)
         return (f"WITH base AS (\n{view.source_sql}\n)\n"
                 f"SELECT COUNT(*) AS row_count, {distinct} AS key_count\n"
+                f"     , SUM(CASE WHEN {null_test} THEN 1 ELSE 0 END) AS null_keys\n"
                 f"FROM base")
 
     def needs_grain_check(self, view: BaseView) -> bool:
@@ -249,17 +253,23 @@ class BaseViewRegistry:
                 or view.grain_checked_hash != self.population_hash(view))
 
     def record_grain_check(self, tenant_id: str, view: BaseView,
-                           rows: int, keys: int) -> BaseView:
+                           rows: int, keys: int, null_keys: int = 0) -> BaseView:
         """Write the measurement back onto the node and return the updated view.
 
         `row_count_estimate` is overwritten with the probe's `rows`: the cube cell
         guard needs a real number and profiling could only offer a sampled floor.
         This is the honest one and it costs nothing extra.
         """
-        rows, keys = int(rows), int(keys)
-        view.grain_verified = rows > 0 and rows == keys
-        view.grain_violation_ratio = (round(1 - keys / rows, 6)
-                                      if rows > 0 and keys < rows else 0.0)
+        rows, keys, null_keys = int(rows), int(keys), int(null_keys or 0)
+        # A NULL-keyed row collapses to one GROUP BY group but contributes
+        # nothing to COUNT(DISTINCT), so `keys` under-counts by exactly one when
+        # NULLs are present. Add that group back before comparing, or a base
+        # whose only defect is NULL keys is also reported as duplicated.
+        expected = keys + (1 if null_keys else 0)
+        view.grain_null_keys = null_keys
+        view.grain_verified = rows > 0 and rows == expected and not null_keys
+        view.grain_violation_ratio = (round(1 - expected / rows, 6)
+                                      if rows > 0 and expected < rows else 0.0)
         view.grain_checked_at = now_iso()
         view.grain_checked_hash = self.population_hash(view)
         if rows > 0:
@@ -268,6 +278,13 @@ class BaseViewRegistry:
         return view
 
     def _grain_refusal(self, view: BaseView) -> str:
+        if view.grain_null_keys:
+            return (f"base view {view.name!r} has {view.grain_null_keys:,} rows whose "
+                    f"{view.grain} is NULL. Those rows have no key, so they are not at "
+                    f"the declared grain and every one of them collapses into a single "
+                    f"bucket -- they are NOT duplicates, so do not go looking for one. "
+                    f"Exclude them in the base, or key the population on something "
+                    f"that is always present.")
         if view.grain_violation_ratio:
             return (f"base view {view.name!r} is not at the grain it claims: "
                     f"{view.grain_violation_ratio:.1%} of its rows are duplicates at "

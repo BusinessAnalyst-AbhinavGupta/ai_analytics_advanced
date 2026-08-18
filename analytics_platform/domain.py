@@ -335,6 +335,11 @@ class BaseView:
     # hash is what makes an edited source_sql re-probe automatically.
     grain_verified: bool = False
     grain_violation_ratio: float = 0.0
+    # Rows whose grain key is NULL. Counted separately because they are NOT
+    # duplicates: COUNT(DISTINCT k) ignores NULLs while GROUP BY k gives them a
+    # group of their own, so they present exactly like fan-out and send whoever
+    # reads the caveat hunting for duplicate keys that do not exist.
+    grain_null_keys: int = 0
     grain_checked_at: str = ""
     grain_checked_hash: str = ""
 
