@@ -1151,11 +1151,23 @@ WITH ranked_{rule.column} AS (
         if frames:
             lines.append("Cubes already in this conversation's workspace:")
             for f in frames:
+                dims = list(f.get("dimensions") or [])
+                # Coverage matches a measure by the NAME the cube stores it
+                # under, so a requirement that renames an existing measure --
+                # session_count for a COUNT(*) already sitting there as
+                # checkout_sessions -- reads as missing and re-queries the
+                # warehouse. Show the names so they can be reused verbatim.
+                measures = [c for c in (f.get("columns") or []) if c not in dims]
                 lines.append(
                     f"- {f['label']}: {f.get('description', '')} | base_view="
-                    f"{f.get('base_view') or 'none'} | dimensions={f.get('dimensions')} "
+                    f"{f.get('base_view') or 'none'} | dimensions={dims} "
+                    f"| measures={measures} "
                     f"| rows={f.get('row_count')} | truncated={f.get('truncated')} "
                     f"| sample={f.get('sample')}")
+            lines.append(
+                "If a measure you need is already listed above, name it EXACTLY as "
+                "that cube names it. A measure that means the same thing under a new "
+                "name counts as missing and costs a fresh warehouse query.")
             lines.append("")
         return "\n".join(lines)
 
@@ -1955,7 +1967,16 @@ what was asked."""
             return ""
         rows = list(rows)
         col_line = f"\nColumns: {list(columns)}" if columns else ""
-        whole = f"\nData context -- COMPLETE result, all {len(rows)} row(s): {rows}{col_line}"
+        # "COMPLETE" is a statement about the QUERY's output, never about the
+        # population. A workspace re-cut ending in ORDER BY ... LIMIT 1 returns
+        # one row completely, and a reader told only "complete" concludes that
+        # one row is the entire distribution -- which is how a top-1 answer
+        # became "the only category present, therefore 100% of sessions".
+        whole = (f"\nData context -- this is the COMPLETE output of the query that ran, "
+                 f"all {len(rows)} row(s). The query may itself have ranked, filtered or "
+                 f"limited the population, so do not conclude that no other categories or "
+                 f"rows exist, and do not compute a share unless these rows are the whole "
+                 f"population: {rows}{col_line}")
         if len(whole) <= cls.SYNTHESIS_CONTEXT_CHARS:
             return whole
 

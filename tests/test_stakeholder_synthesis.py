@@ -34,6 +34,15 @@ class TestASmallCubeArrivesWhole(unittest.TestCase):
         self.assertIn("COMPLETE", ctx)
         self.assertIn("all 5 row(s)", ctx)
 
+    def test_complete_describes_the_query_not_the_population(self):
+        """A workspace re-cut ending in ORDER BY ... LIMIT 1 returns one row
+        completely. Told only "complete", the model answered that this was the
+        only category present and therefore held 100% of sessions."""
+        ctx = StakeholderService._data_context([{"service_line": "NA"}])
+        self.assertIn("query that ran", ctx)
+        self.assertIn("do not conclude that no other categories", ctx)
+        self.assertIn("do not compute a share", ctx)
+
     def test_no_rows_is_no_context(self):
         self.assertEqual(StakeholderService._data_context([]), "")
         self.assertEqual(StakeholderService._data_context(None), "")
@@ -76,3 +85,30 @@ class TestRankingColumnChoice(unittest.TestCase):
     def test_no_numeric_column_is_handled(self):
         rows = [{"a": "x"}, {"a": "y"}]
         self.assertEqual(StakeholderService._measure_key(rows), "")
+
+
+class TestTheWorkspaceInventoryShownToThePlanner(unittest.TestCase):
+    """Coverage matches measures by the name the cube stores them under. If the
+    planner cannot see those names it invents new ones, every re-cut reads as a
+    missing measure, and the promise that a follow-up costs no warehouse query
+    quietly stops holding."""
+
+    FRAMES = [{"label": "df_1", "description": "sessions by service line",
+               "base_view": "checkout_sessions", "dimensions": ["service_line"],
+               "columns": ["service_line", "checkout_sessions"],
+               "row_count": 5, "truncated": False, "sample": []}]
+
+    def _prompt(self):
+        class Ctx:
+            rendered = ""
+        return StakeholderService._plan_prompt(
+            StakeholderService, "which is largest?", Ctx(), self.FRAMES)
+
+    def test_the_measure_names_are_listed(self):
+        self.assertIn("measures=['checkout_sessions']", self._prompt())
+
+    def test_dimensions_are_not_repeated_as_measures(self):
+        self.assertNotIn("measures=['service_line'", self._prompt())
+
+    def test_the_planner_is_told_to_reuse_the_exact_name(self):
+        self.assertIn("name it EXACTLY as", self._prompt())
