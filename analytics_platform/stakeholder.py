@@ -607,7 +607,9 @@ class StakeholderService:
         rows = (result.result_summary if isinstance(result.result_summary, list)
                 else [result.result_summary])
         answer, syn_toks, chart_config = self._synthesize(
-            llm, question, category, {"rows": rows})
+            llm, question, category,
+            {"rows": rows, "frame_rows": self._frame_rows(tenant_id, conversation_id,
+                                                          plan.df_label)})
         t_in_total += syn_toks[0]
         t_out_total += syn_toks[1]
 
@@ -1941,6 +1943,20 @@ what was asked."""
 
         return "", None, (t_in_total, t_out_total)
 
+    def _frame_rows(self, tenant_id: str, conversation_id: str, label: str) -> int:
+        """Rows in the cube a turn read, so synthesis can tell a whole cube from
+        a slice of one. Unknown label -> 0, which degrades to the cautious
+        wording rather than asserting completeness."""
+        if not label:
+            return 0
+        try:
+            for f in self.data_cache.list_available(tenant_id, conversation_id):
+                if f.get("label") == label:
+                    return int(f.get("row_count") or 0)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("could not size frame %s: %s", label, exc)
+        return 0
+
     # Synthesis sees the cube, not a sample of it. The pipeline goes to real
     # trouble to produce a population-hashed, reconcilable cube; narrating it
     # from an arbitrary handful of rows throws that away at the last step, and
@@ -1962,21 +1978,35 @@ what was asked."""
 
     @classmethod
     def _data_context(cls, rows: Optional[Sequence[Any]],
-                      columns: Optional[Sequence[str]] = None) -> str:
+                      columns: Optional[Sequence[str]] = None,
+                      frame_rows: int = 0) -> str:
+        """`frame_rows` is how many rows the cube being read actually holds.
+
+        Without it there is no way to tell a full cube read from an
+        `ORDER BY ... LIMIT 1`, and the choice is between two wrong answers:
+        call every result complete, and a top-1 re-cut becomes "the only
+        category present, therefore 100% of sessions"; or hedge every result,
+        and a genuinely complete distribution gets disclaimed into uselessness.
+        Both happened live. With it, each result is described as what it is.
+        """
         if not rows:
             return ""
         rows = list(rows)
         col_line = f"\nColumns: {list(columns)}" if columns else ""
-        # "COMPLETE" is a statement about the QUERY's output, never about the
-        # population. A workspace re-cut ending in ORDER BY ... LIMIT 1 returns
-        # one row completely, and a reader told only "complete" concludes that
-        # one row is the entire distribution -- which is how a top-1 answer
-        # became "the only category present, therefore 100% of sessions".
-        whole = (f"\nData context -- this is the COMPLETE output of the query that ran, "
-                 f"all {len(rows)} row(s). The query may itself have ranked, filtered or "
-                 f"limited the population, so do not conclude that no other categories or "
-                 f"rows exist, and do not compute a share unless these rows are the whole "
-                 f"population: {rows}{col_line}")
+        if frame_rows and len(rows) < frame_rows:
+            head = (f"\nData context -- a RANKED OR FILTERED SUBSET: {len(rows)} of the "
+                    f"{frame_rows} rows in the cube. The rows not shown still exist, so "
+                    f"do not say these are the only ones, and do not compute a share or "
+                    f"a total from them")
+        elif frame_rows:
+            head = (f"\nData context -- the COMPLETE cube over this population, all "
+                    f"{frame_rows} row(s). Account for every one of them; shares and "
+                    f"totals are valid here")
+        else:
+            head = (f"\nData context -- the complete output of the query that ran, all "
+                    f"{len(rows)} row(s). That query may itself have ranked or limited "
+                    f"the population, so do not conclude no other rows exist")
+        whole = f"{head}: {rows}{col_line}"
         if len(whole) <= cls.SYNTHESIS_CONTEXT_CHARS:
             return whole
 
@@ -1997,12 +2027,14 @@ what was asked."""
         try:
             rows = None
             columns: List[str] = []
+            frame_rows = 0
             if data and isinstance(data, dict) and data.get("rows"):
                 rows = data["rows"]
                 columns = list(data.get("columns") or [])
+                frame_rows = int(data.get("frame_rows") or 0)
             elif data and isinstance(data, list):
                 rows = data
-            data_context = self._data_context(rows, columns)
+            data_context = self._data_context(rows, columns, frame_rows)
 
             sys_prompt = (
                 "You are a cautious internal analytics assistant. State what you know and what data you would need. Do not invent figures. "

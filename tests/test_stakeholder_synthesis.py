@@ -29,19 +29,26 @@ class TestASmallCubeArrivesWhole(unittest.TestCase):
             self.assertIn(row["service_line"], ctx)
             self.assertIn(str(row["sessions"]), ctx)
 
-    def test_it_says_the_result_is_complete(self):
-        ctx = StakeholderService._data_context(CUBE)
-        self.assertIn("COMPLETE", ctx)
-        self.assertIn("all 5 row(s)", ctx)
+    def test_a_full_cube_read_is_called_complete(self):
+        ctx = StakeholderService._data_context(CUBE, frame_rows=5)
+        self.assertIn("COMPLETE cube", ctx)
+        self.assertIn("shares and totals are valid", ctx)
 
-    def test_complete_describes_the_query_not_the_population(self):
-        """A workspace re-cut ending in ORDER BY ... LIMIT 1 returns one row
-        completely. Told only "complete", the model answered that this was the
-        only category present and therefore held 100% of sessions."""
-        ctx = StakeholderService._data_context([{"service_line": "NA"}])
-        self.assertIn("query that ran", ctx)
-        self.assertIn("do not conclude that no other categories", ctx)
+    def test_a_top_one_recut_is_called_a_subset(self):
+        """The live failure: ORDER BY ... LIMIT 1 over a 5-row cube returned one
+        row, and the answer was "the only service line present is 'NA', so it
+        accounts for 100% of the sessions"."""
+        ctx = StakeholderService._data_context([{"service_line": "NA"}], frame_rows=5)
+        self.assertIn("SUBSET", ctx)
+        self.assertIn("1 of the 5 rows", ctx)
         self.assertIn("do not compute a share", ctx)
+        self.assertNotIn("COMPLETE", ctx)
+
+    def test_an_unknown_frame_size_stays_cautious(self):
+        """0 means "we could not size the cube" -- it must not read as complete."""
+        ctx = StakeholderService._data_context([{"service_line": "NA"}], frame_rows=0)
+        self.assertNotIn("COMPLETE", ctx)
+        self.assertIn("do not conclude no other rows exist", ctx)
 
     def test_no_rows_is_no_context(self):
         self.assertEqual(StakeholderService._data_context([]), "")
