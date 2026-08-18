@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 import sys
 import logging
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,8 @@ from .brain.index import BrainIndex
 from .brain.store import CompanyBrain
 from .config import Settings
 from .database import Store
-from .domain import (AnswerMode, DataSourceKind, KnowledgeNode, NodeKind, ReviewStatus, RunStatus)
+from .domain import (AnswerMode, DataSourceKind, KnowledgeNode, NodeKind, ReviewStatus,
+                     RunStatus, SemanticDimension, SemanticMetric)
 from .execution.base import QueryExecutor
 from .execution.sampler import SamplerExecutor
 from .junior import JuniorEngine
@@ -63,6 +64,7 @@ from .research import ResearchService
 from .retention import RetentionService
 from .scheduler import Scheduler
 from .senior import SeniorService
+from .semantic import SemanticLayer
 from .stakeholder import StakeholderService
 from .stores import TenantStoreProvider
 from .storyline import (DocxRendererUnavailable, assemble_storyline, render_docx,
@@ -132,6 +134,32 @@ class IngestSQL(BaseModel):
     sql: str
     source_ref: str = ""
     title: Optional[str] = None
+
+
+class SemanticMetricIn(BaseModel):
+    """A metric definition. Created unapproved; promote it through the existing
+    POST /knowledge/{tenant_id}/{node_id}/review endpoint."""
+    name: str
+    definition: str = ""
+    grain: List[str] = []
+    dimensions: List[str] = []
+    source_tables: List[str] = []
+    filters: List[str] = []          # ALWAYS applied to any query touching this metric
+    caveats: List[str] = []
+    freshness: str = ""
+    owner: str = ""
+    aliases: List[str] = []
+    by: str = "analyst"
+
+
+class SemanticDimensionIn(BaseModel):
+    name: str
+    column: str = ""
+    source_tables: List[str] = []
+    description: str = ""
+    values: List[str] = []
+    aliases: List[str] = []
+    by: str = "analyst"
 
 
 class LegacyItem(BaseModel):
@@ -762,6 +790,42 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
         brain = C.pipeline.brain(tenant_id)
         k = NodeKind(kind) if kind else None
         return [n.to_dict() for n in brain.search(q, kind=k, usable_only=usable_only, limit=limit)]
+
+    # -- the semantic layer (Task 6) ----------------------------------------
+    # Approval deliberately reuses POST /knowledge/{tenant_id}/{node_id}/review
+    # below -- no parallel approval path, so one review flow governs every kind
+    # of company knowledge.
+    @app.get("/knowledge/{tenant_id}/semantic")
+    def get_semantic_layer(tenant_id: str, approved_only: bool = True) -> Dict[str, Any]:
+        tenant_or_404(tenant_id)
+        layer = SemanticLayer(C.pipeline.brain)
+        return {
+            "metrics": [asdict(m) for m in layer.metrics(tenant_id, approved_only=approved_only)],
+            "dimensions": [asdict(d) for d in
+                           layer.dimensions(tenant_id, approved_only=approved_only)],
+        }
+
+    @app.post("/knowledge/{tenant_id}/semantic/metrics")
+    def upsert_semantic_metric(tenant_id: str, body: SemanticMetricIn) -> Dict[str, Any]:
+        tenant_or_404(tenant_id)
+        payload = body.model_dump()
+        by = payload.pop("by", "analyst")
+        node = SemanticLayer(C.pipeline.brain).upsert_metric(
+            tenant_id, SemanticMetric(**payload), by=by)
+        C.observability.event(tenant_id=tenant_id, stage="knowledge.semantic.metric",
+                              actor=by, resource=node.id, status="OK")
+        return node.to_dict()
+
+    @app.post("/knowledge/{tenant_id}/semantic/dimensions")
+    def upsert_semantic_dimension(tenant_id: str, body: SemanticDimensionIn) -> Dict[str, Any]:
+        tenant_or_404(tenant_id)
+        payload = body.model_dump()
+        by = payload.pop("by", "analyst")
+        node = SemanticLayer(C.pipeline.brain).upsert_dimension(
+            tenant_id, SemanticDimension(**payload), by=by)
+        C.observability.event(tenant_id=tenant_id, stage="knowledge.semantic.dimension",
+                              actor=by, resource=node.id, status="OK")
+        return node.to_dict()
 
     @app.post("/knowledge/{tenant_id}/{node_id}/review")
     def review(tenant_id: str, node_id: str, body: ReviewIn) -> Dict[str, Any]:

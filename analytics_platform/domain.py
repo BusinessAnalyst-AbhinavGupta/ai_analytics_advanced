@@ -283,6 +283,70 @@ class ColumnProfile:
 
 
 @dataclass
+class SemanticMetric:
+    """What a metric MEANS -- not where its columns live.
+
+    `filters` is the load-bearing field: those predicates are applied to every
+    query touching this metric whether or not the user mentioned them, which is
+    why they belong inside a governed base view rather than being bolted on as a
+    per-question slice.
+    """
+
+    name: str                       # "conversion_rate"
+    definition: str = ""            # "completed_applications / eligible_applications"
+    grain: List[str] = field(default_factory=list)          # the grain it is valid at
+    dimensions: List[str] = field(default_factory=list)     # what it may be sliced by
+    source_tables: List[str] = field(default_factory=list)
+    filters: List[str] = field(default_factory=list)        # ALWAYS applied
+    caveats: List[str] = field(default_factory=list)
+    freshness: str = ""             # "daily, T+1"
+    owner: str = ""
+    aliases: List[str] = field(default_factory=list)        # "CVR", "conversion"
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "SemanticMetric":
+        return _typed_from_dict(cls, d)
+
+
+@dataclass
+class SemanticDimension:
+    name: str
+    column: str = ""
+    source_tables: List[str] = field(default_factory=list)
+    description: str = ""
+    values: List[str] = field(default_factory=list)   # from the column profile when known
+    aliases: List[str] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "SemanticDimension":
+        return _typed_from_dict(cls, d)
+
+
+def _typed_from_dict(cls, d: Dict[str, Any]):
+    """Build a dataclass from a stored payload, dropping unknown keys and
+    rejecting values whose type does not match the declared one.
+
+    A hand-edited or older-schema node must degrade to 'not usable' rather than
+    producing a metric whose `grain` is the string "session_id" -- which would
+    iterate as characters and silently corrupt every downstream decision.
+    """
+    out: Dict[str, Any] = {}
+    for f in fields(cls):
+        if f.name not in d:
+            continue
+        value = d[f.name]
+        declared = f.type if isinstance(f.type, str) else getattr(f.type, "__name__", "")
+        if declared.startswith("List[") and not isinstance(value, list):
+            raise ValueError(f"{cls.__name__}.{f.name} must be a list, got {type(value).__name__}")
+        if declared.startswith("Dict[") and not isinstance(value, dict):
+            raise ValueError(f"{cls.__name__}.{f.name} must be a dict, got {type(value).__name__}")
+        if declared == "str" and not isinstance(value, str):
+            raise ValueError(f"{cls.__name__}.{f.name} must be a str, got {type(value).__name__}")
+        out[f.name] = value
+    return cls(**out)
+
+
+@dataclass
 class PolicyDecision:
     allowed: bool
     reasons: List[str] = field(default_factory=list)
