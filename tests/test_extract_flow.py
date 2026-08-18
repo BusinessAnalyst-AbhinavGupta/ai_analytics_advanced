@@ -440,3 +440,166 @@ class TestChartSpec(_FlowCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------------------
+# Task 15: download, reconcile, replay -- the whole interface Plan B consumes
+# ---------------------------------------------------------------------------
+class TestDownload(_FlowCase):
+    def _route(self, label="df_1", conversation=None):
+        from tests.test_api import route
+        handler = route(self.app, "GET",
+                        "/stakeholder/{tenant_id}/conversations/{conversation_id}"
+                        "/extracts/{label}/download")
+        return handler(self.tid, conversation or self.c1, label)
+
+    def test_download_returns_csv_for_a_real_extract(self):
+        self.approve_base()
+        self.first_turn()
+        r = self._route()
+        self.assertEqual(r.media_type, "text/csv")
+        self.assertEqual(r.body.decode().splitlines()[0], "country,device,revenue")
+        self.assertIn("filename*=UTF-8''", r.headers["content-disposition"])
+
+    def test_download_404s_for_an_unknown_label(self):
+        from fastapi import HTTPException
+        self.approve_base()
+        self.first_turn()
+        with self.assertRaises(HTTPException) as e:
+            self._route("df_99")
+        self.assertEqual(e.exception.status_code, 404)
+
+    def test_download_400s_on_a_traversal_attempt(self):
+        """Never let an id reach the filesystem, and never let ExtractStore's
+        own ValueError surface as a 500."""
+        from fastapi import HTTPException
+        self.approve_base()
+        self.first_turn()
+        with self.assertRaises(HTTPException) as e:
+            self._route("../../etc/passwd")
+        self.assertEqual(e.exception.status_code, 400)
+
+    def test_deleting_a_conversation_deletes_its_extracts(self):
+        self.approve_base()
+        self.first_turn()
+        self.assertTrue(self.svc.extract_store.list_metas(self.tid, self.c1))
+        self.svc.delete_conversation(self.tid, self.c1)
+        self.assertEqual(self.svc.extract_store.list_metas(self.tid, self.c1), [])
+
+
+class TestReconcile(_FlowCase):
+    def _reconcile(self, a, b, measure="revenue"):
+        from tests.test_api import route
+        handler = route(self.app, "POST",
+                        "/stakeholder/{tenant_id}/conversations/{conversation_id}/reconcile")
+        body = type("Body", (), {"answer_a": a, "answer_b": b, "measure": measure})()
+        return handler(self.tid, self.c1, body)
+
+    def _second_cube(self, filters='{}', dimensions='["country","device"]'):
+        llm = SequencedLLM([
+            "sales again",
+            '{"base_view":"checkout_sessions","cube":{"dimensions":' + dimensions + ','
+            '"measures":[{"name":"revenue","expr":"SUM(revenue)"}],"filters":'
+            + filters + '},"analysis":"python"}',
+            "```python\nresult = 1\n```", NARRATIVE])
+        return self.answer(llm, "sales again by country")
+
+    def test_two_answers_over_one_base_reconcile(self):
+        self.approve_base()
+        a, _ = self.first_turn()
+        b = self._second_cube()
+        r = self._reconcile(a["answer_id"], b["answer_id"])
+        self.assertIs(r["same_population"], True)
+        self.assertIs(r["agrees"], True)
+        self.assertAlmostEqual(r["value_a"], r["value_b"])
+
+    def test_the_comparison_is_made_at_the_intersected_slice(self):
+        """A is unfiltered, B is Germany-only. They agree about Germany, and that
+        is the only thing they can be asked to agree about."""
+        self.approve_base()
+        a, _ = self.first_turn()
+        b = self._second_cube(filters='{"country":["DE"]}')
+        r = self._reconcile(a["answer_id"], b["answer_id"])
+        self.assertIs(r["agrees"], True)
+        self.assertIn("DE", r["explanation"])
+        self.assertAlmostEqual(r["value_a"], 30.0)   # DE only, not the 100.0 total
+
+    def test_an_inexpressible_slice_is_explained_not_faked(self):
+        """B is filtered on a column A's cube does not carry, so A cannot isolate
+        the same subset. Comparing at a wider slice would report a disagreement
+        that is an artifact of the question, not of the data."""
+        self.approve_base()
+        llm = SequencedLLM([
+            "sales by country",
+            '{"base_view":"checkout_sessions","cube":{"dimensions":["country"],'
+            '"measures":[{"name":"revenue","expr":"SUM(revenue)"}],"filters":{}},'
+            '"analysis":"python"}',
+            "```python\nresult = 1\n```", NARRATIVE])
+        a = self.answer(llm, "sales by country")
+        b = self._second_cube(filters='{"device":["ios"]}')
+        r = self._reconcile(a["answer_id"], b["answer_id"])
+        self.assertIs(r["agrees"], False)
+        self.assertIn("does not carry", r["explanation"])
+
+    def test_an_aggregate_path_answer_reconciles_with_nothing(self):
+        self.approve_base()
+        a, _ = self.first_turn()
+        llm = SequencedLLM([
+            "total", '{"base_view":"checkout_sessions","aggregate_only":true,'
+                     '"cube":{"dimensions":[],"measures":[]}}',
+            "```sql\nSELECT SUM(revenue) AS revenue FROM orders\n```", NARRATIVE])
+        b = self.answer(llm, "total sales")
+        r = self._reconcile(b["answer_id"], a["answer_id"])
+        self.assertIs(r["same_population"], False)
+        self.assertIn("no base view", r["explanation"].lower())
+        self.assertIsNone(r["value_a"])
+
+    def test_a_real_disagreement_names_a_likely_cause(self):
+        """A WIDEN fetches its own cube, so the two answers really do read two
+        different frames -- and when one of them is truncated, its total is
+        understated. That is a finding about the data, not a bug in the compare."""
+        self.spy.frame = pd.DataFrame({
+            "country": ["DE", "DE", "US", "US"], "device": ["ios", "web", "ios", "web"],
+            "channel": ["app", "web", "app", "web"], "revenue": [10.0, 20.0, 30.0, 40.0]})
+        self.svc.junior.refresh_catalog(self.tid)
+        self.approve_base(BaseView(
+            name="checkout_sessions", grain=["session_id"],
+            source_sql="SELECT session_id, country, device, channel, revenue FROM orders",
+            dimension_columns=["country", "device", "channel"],
+            measure_columns=["revenue"], row_count_estimate=1_200))
+        a, _ = self.first_turn()
+        self.spy.frame = pd.DataFrame({"country": ["DE"], "device": ["ios"],
+                                       "channel": ["app"], "revenue": [1.0]})
+        self.svc.settings.policy.raw_extract_row_limit = 1
+        b = self._second_cube(dimensions='["country","device","channel"]')
+        r = self._reconcile(a["answer_id"], b["answer_id"])
+        self.assertIs(r["same_population"], True)
+        self.assertIs(r["agrees"], False)
+        self.assertIn("truncat", r["explanation"].lower())
+
+    def test_reconcile_404s_on_an_unknown_message_id(self):
+        from fastapi import HTTPException
+        self.approve_base()
+        self.first_turn()
+        with self.assertRaises(HTTPException) as e:
+            self._reconcile("nope", "nope")
+        self.assertEqual(e.exception.status_code, 404)
+
+
+class TestReplay(_FlowCase):
+    def test_replay_carries_the_population_provenance(self):
+        self.approve_base()
+        self.first_turn()
+        msgs = self.svc.get_conversation(self.tid, self.c1)["messages"]
+        a = next(m for m in msgs if m.get("analysis"))["analysis"]
+        self.assertTrue(a["population_hash"])
+        self.assertTrue(a["base_view"])
+        self.assertIn("base_view_approved", a)
+
+    def test_replay_carries_the_extract_meta(self):
+        self.approve_base()
+        self.first_turn()
+        msgs = self.svc.get_conversation(self.tid, self.c1)["messages"]
+        m = next(m for m in msgs if m.get("extract_meta"))["extract_meta"]
+        self.assertEqual(m["label"], "df_1")
+        self.assertEqual(m["dimensions"], ["country", "device"])

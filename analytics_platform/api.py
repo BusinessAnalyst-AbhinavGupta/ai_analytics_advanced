@@ -163,6 +163,13 @@ class AttributionRuleIn(BaseModel):
     rationale: str = ""
 
 
+class ReconcileIn(BaseModel):
+    """Two answers from one conversation, and the measure to compare."""
+    answer_a: str
+    answer_b: str
+    measure: str = ""      # empty -> the measure both cubes carry
+
+
 class BaseViewIn(BaseModel):
     """An ID-grain row population. Created unapproved; promote it through the
     existing review endpoint. Answers built on an unapproved base are marked
@@ -1214,6 +1221,58 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
         if not C.stakeholder.delete_conversation(tenant_id, conversation_id):
             raise HTTPException(status_code=404, detail="conversation not found")
         return {"deleted": conversation_id}
+
+    @app.get("/stakeholder/{tenant_id}/conversations/{conversation_id}"
+             "/extracts/{label}/download")
+    def download_extract(tenant_id: str, conversation_id: str, label: str) -> Response:
+        """The materialised cube behind an answer, as CSV.
+
+        At the materialised ceiling this is a large body -- that is the accepted
+        cost of "let me download the data". It is never silently sampled; if the
+        extract was truncated, `extract_meta.truncated` already says so and the
+        CSV is left alone.
+        """
+        tenant_or_404(tenant_id)
+        try:
+            df = C.stakeholder.extract_frame(tenant_id, conversation_id, label)
+        except ValueError as exc:
+            # ExtractStore's id validation. Never a 500, and never a path.
+            raise HTTPException(status_code=400, detail=str(exc))
+        if df is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"no extract {label!r} in conversation {conversation_id!r}")
+        # Same dual-form filename as the storyline export: Starlette encodes
+        # response headers as latin-1, so the ASCII slug carries the plain
+        # `filename=` and the RFC 5987 form carries the real one.
+        raw_name = f"{label}"[:60]
+        ascii_slug = "".join(
+            c if (c.isascii() and c.isalnum()) else "-" for c in raw_name
+        ).strip("-") or "extract"
+        utf8_name = quote(f"{raw_name}.csv", safe="")
+        return Response(
+            content=df.to_csv(index=False).encode("utf-8"), media_type="text/csv",
+            headers={"Content-Disposition":
+                     f'attachment; filename="{ascii_slug}.csv"; '
+                     f"filename*=UTF-8''{utf8_name}"})
+
+    @app.post("/stakeholder/{tenant_id}/conversations/{conversation_id}/reconcile")
+    def reconcile_answers(tenant_id: str, conversation_id: str,
+                          body: ReconcileIn) -> Dict[str, Any]:
+        """Do two answers in this conversation rest on the same rows, and do
+        their numbers agree? An answer with no base view is a 200 saying exactly
+        that -- a real, expected state, not an error."""
+        tenant_or_404(tenant_id)
+        try:
+            result = C.stakeholder.reconcile_answers(
+                tenant_id, conversation_id, body.answer_a, body.answer_b, body.measure)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        if result is None:
+            raise HTTPException(
+                status_code=404,
+                detail="one or both answers were not found in this conversation")
+        return asdict(result)
 
     @app.post("/stakeholder/{tenant_id}/conversations/{conversation_id}/export")
     def stakeholder_export_storyline(tenant_id: str, conversation_id: str,

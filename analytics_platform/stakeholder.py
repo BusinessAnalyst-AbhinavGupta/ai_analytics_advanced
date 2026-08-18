@@ -16,7 +16,7 @@ import logging
 from dataclasses import asdict
 from typing import Any, Dict, List, Optional, Tuple
 
-from .base_view import BaseViewRegistry
+from .base_view import BaseViewRegistry, reconcile
 from .brain.embedding import Embedder
 from .brain.index import BrainIndex
 from .brain.store import CompanyBrain
@@ -24,10 +24,10 @@ from .config import Settings
 from .database import Store, dump_json, load_json
 from .data_manager import CoverageVerdict, DataManager, DataRequirement
 from .domain import (AnalysisArtifact, AnswerMode, AttributionRule, BaseView, CubeMeasure,
-                     CubeSpec, NodeKind, TurnPlan, new_id, now_iso)
+                     CubeSpec, NodeKind, ReconcileResult, TurnPlan, new_id, now_iso)
 from .execution.base import ExecutionContext
 from .execution.dataframe_cache import ConversationDataCache
-from .execution.extract_store import ExtractMeta, ExtractStore
+from .execution.extract_store import SAFE_ID, ExtractMeta, ExtractStore
 from .execution.policy import QueryPolicy, resolve_template_placeholders
 from .execution.python_policy import PythonCodePolicy
 from .execution.python_sandbox import (EXTRACT_MEMORY_MB, EXTRACT_TIMEOUT_S,
@@ -65,6 +65,17 @@ def _permissive_profile(column: str):
     from .domain import ColumnProfile
     return ColumnProfile(column=column, dtype="object", distinct_count=1,
                          null_fraction=0.0, values=[], values_complete=False)
+
+
+def _escape_ident(name: str) -> str:
+    """Reused from base_view so both SQL builders quote identifiers identically."""
+    from .base_view import _escape_ident as _impl
+    return _impl(name)
+
+
+def _sql_literal(value: Any) -> str:
+    from .base_view import _quote
+    return _quote(value)
 
 
 def _extract_sql_block(text: str) -> str:
@@ -235,6 +246,11 @@ class StakeholderService:
             "facts": load_json(r["facts"], []), "queries_run": load_json(r["queries_run"], []),
             "python_cells": load_json(r["python_cells"], []),
             "produced_df_label": r["produced_df_label"] or "",
+            # Replay carries the whole provenance: what population the answer
+            # rests on, what was reused, what ran where, what was assumed. An
+            # answer that can only be re-read as prose is not reproducible.
+            "extract_meta": load_json(r["extract_meta"], {}) if "extract_meta" in r.keys() else {},
+            "analysis": load_json(r["analysis"], {}) if "analysis" in r.keys() else {},
             "escalated": bool(r["escalated"]), "cost": r["cost"], "created_at": r["created_at"],
         } for r in rows]
         return {"id": conv["id"], "title": conv["title"], "starred": bool(conv["starred"]),
@@ -275,6 +291,16 @@ class StakeholderService:
                       (conversation_id, tenant_id))
         store.execute("DELETE FROM stakeholder_conversations WHERE id=? AND tenant_id=?",
                       (conversation_id, tenant_id))
+        # Deleting a chat deletes its raw data too. Leaving Parquet on disk after
+        # the conversation is gone means retention silently stops applying to it,
+        # and the open DuckDB connection would keep serving views over files
+        # nobody can reach any more.
+        self.workspace.close(tenant_id, conversation_id)
+        try:
+            self.extract_store.delete_conversation(tenant_id, conversation_id)
+        except (OSError, ValueError) as exc:
+            logger.warning("could not delete extracts for conversation %s: %s",
+                           conversation_id, exc)
         return True
 
     def _refresh(self, tenant_id: str, node: Any, question: str) -> Dict[str, Any]:
@@ -1967,6 +1993,235 @@ what was asked."""
                 "python_cells": python_cells or [], "produced_df_label": produced_df_label,
                 "conversation_id": conversation_id,
                 "extract_meta": extract_meta or {}, "analysis": analysis or {}}
+
+    # -- reconciliation --------------------------------------------------------
+    # This is where the design stops being a claim and becomes a check.
+    # Everything upstream exists so that two answers CAN be compared; nothing
+    # until now actually compares them.
+
+    def extract_frame(self, tenant_id: str, conversation_id: str,
+                      label: str) -> Optional[Any]:
+        """The materialised extract behind one answer, memory or disk.
+
+        Ids are validated HERE rather than being left to whatever the cache does
+        with a bad one: a malformed label is a bad request, and it must never
+        become a 404 (which reads as "no such extract") or reach the filesystem.
+        """
+        for part in (tenant_id, conversation_id, label):
+            if not SAFE_ID.match(part or ""):
+                raise ValueError(f"unsafe identifier: {part!r}")
+        return self.data_cache.get(tenant_id, conversation_id, label)
+
+    def _answer_row(self, tenant_id: str, conversation_id: str,
+                    answer_id: str) -> Optional[Dict[str, Any]]:
+        return self.stores.for_tenant(tenant_id).query_one(
+            "SELECT * FROM stakeholder_answers WHERE id=? AND tenant_id=? "
+            "AND conversation_id=?", (answer_id, tenant_id, conversation_id))
+
+    def reconcile_answers(self, tenant_id: str, conversation_id: str,
+                          answer_a: str, answer_b: str,
+                          measure: str = "") -> Optional[ReconcileResult]:
+        """Do these two answers rest on the same rows, and do their numbers agree?
+
+        Not "two totals, subtract". Two answers legitimately differ when their
+        slices differ, so the comparison is made over the INTERSECTION of the two
+        slices -- an answer filtered to Germany and an unfiltered one agree about
+        Germany, and that is the only thing they can be asked to agree about.
+
+        Returns None when either answer id is unknown (the caller 404s).
+        """
+        row_a = self._answer_row(tenant_id, conversation_id, answer_a)
+        row_b = self._answer_row(tenant_id, conversation_id, answer_b)
+        if row_a is None or row_b is None:
+            return None
+        meta_a = self._answer_population(tenant_id, conversation_id, row_a)
+        meta_b = self._answer_population(tenant_id, conversation_id, row_b)
+        hash_a = str(meta_a.get("population_hash") or "")
+        hash_b = str(meta_b.get("population_hash") or "")
+        measure = measure or self._only_measure(meta_a, meta_b)
+
+        if not hash_a or not hash_b or hash_a != hash_b:
+            # Refuse WITHOUT computing. Producing two numbers here would invite
+            # someone to read their difference as meaningful, which is the exact
+            # mistake this whole design exists to prevent.
+            return reconcile(hash_a, 0.0, hash_b, 0.0, measure)
+
+        slice_filters, problem = self._intersect_slices(meta_a, meta_b)
+        if problem:
+            return ReconcileResult(
+                same_population=True, population_hash_a=hash_a, population_hash_b=hash_b,
+                measure=measure, agrees=False, explanation=problem)
+
+        values: List[float] = []
+        for meta in (meta_a, meta_b):
+            value, problem = self._measure_over_slice(
+                tenant_id, conversation_id, meta, measure, slice_filters)
+            if problem:
+                return ReconcileResult(
+                    same_population=True, population_hash_a=hash_a,
+                    population_hash_b=hash_b, measure=measure, agrees=False,
+                    explanation=problem)
+            values.append(value)
+
+        result = reconcile(hash_a, values[0], hash_b, values[1], measure)
+        result.explanation = self._explain(result, meta_a, meta_b, slice_filters)
+        return result
+
+    def _answer_population(self, tenant_id: str, conversation_id: str,
+                           row: Any) -> Dict[str, Any]:
+        """What population an answer rests on, and which extract to read it from.
+
+        A REUSE turn fetched nothing, so it has no extract_meta of its own -- but
+        it absolutely has a population, and refusing to reconcile it would make
+        the endpoint useless for exactly the turns this design exists to
+        produce. Its slice comes from its own analysis; the frame it was computed
+        over comes from the extract it reused.
+        """
+        meta = load_json(row["extract_meta"], {}) or {}
+        if meta.get("population_hash") and meta.get("label"):
+            return meta
+        analysis = load_json(row["analysis"], {}) or {}
+        labels = list(analysis.get("datasets_used") or [])
+        label = labels[0] if labels else (row["produced_df_label"] or "")
+        stored = self.extract_store.meta(tenant_id, conversation_id, label) if label else None
+        base = asdict(stored) if stored is not None else {}
+        base.update({
+            "label": label,
+            # What the FRAME is physically restricted to, which for a reuse turn
+            # is not the same as the answer's own slice: the answer asked about
+            # Germany, the cube on disk still holds every country.
+            "frame_filters": dict(base.get("filters") or {}),
+            "population_hash": analysis.get("population_hash") or base.get("population_hash", ""),
+            "base_view": analysis.get("base_view") or base.get("base_view", ""),
+            # The SLICE is this answer's own; the frame underneath may be wider.
+            "filters": dict(analysis.get("slice_filters") or {}),
+            "non_additive": list(analysis.get("non_additive")
+                                 or base.get("non_additive") or []),
+        })
+        return base
+
+    @staticmethod
+    def _only_measure(meta_a: Dict[str, Any], meta_b: Dict[str, Any]) -> str:
+        """When the caller named no measure, use the one both cubes carry."""
+        dims_a = set(meta_a.get("dimensions") or [])
+        dims_b = set(meta_b.get("dimensions") or [])
+        shared = [c for c in (meta_a.get("columns") or [])
+                  if c not in dims_a and c not in dims_b
+                  and c in (meta_b.get("columns") or [])]
+        return shared[0] if shared else ""
+
+    @staticmethod
+    def _intersect_slices(meta_a: Dict[str, Any],
+                          meta_b: Dict[str, Any]) -> Tuple[Dict[str, List[str]], str]:
+        """The narrowest slice both cubes can express, or why they cannot.
+
+        A filter column that is neither already baked into a cube's own slice nor
+        a dimension it carries makes the intersection inexpressible on that side.
+        Comparing at a wider slice instead would report a disagreement that is an
+        artifact of the question rather than of the data.
+        """
+        filters_a = {k: list(v) for k, v in (meta_a.get("filters") or {}).items()}
+        filters_b = {k: list(v) for k, v in (meta_b.get("filters") or {}).items()}
+        out: Dict[str, List[str]] = {}
+        for column in sorted(set(filters_a) | set(filters_b)):
+            if column in filters_a and column in filters_b:
+                values = [v for v in filters_a[column] if v in set(filters_b[column])]
+                if not values:
+                    return {}, (f"cannot compare at this slice: the two answers filter "
+                                f"`{column}` to values with nothing in common "
+                                f"({filters_a[column]} and {filters_b[column]}), so there "
+                                f"is no shared subset to compare.")
+            else:
+                values = list(filters_a.get(column) or filters_b.get(column) or [])
+            for meta in (meta_a, meta_b):
+                own = meta.get("filters") or {}
+                if column in own or column in (meta.get("dimensions") or []):
+                    continue
+                return {}, (f"cannot compare at this slice: {meta.get('label')} does not "
+                            f"carry `{column}`, so the {', '.join(values)} subset cannot "
+                            f"be isolated from it.")
+            out[column] = values
+        return out, ""
+
+    def _measure_over_slice(self, tenant_id: str, conversation_id: str,
+                            meta: Dict[str, Any], measure: str,
+                            slice_filters: Dict[str, List[str]]
+                            ) -> Tuple[float, str]:
+        """One `SELECT SUM(...) FROM <label> WHERE ...` through the workspace.
+
+        Through AnalyticalWorkspace.query, not straight at the Parquet: that is
+        where QueryPolicy and the result cap live, and no LLM comes near this.
+        """
+        label = str(meta.get("label") or "")
+        columns = list(meta.get("columns") or [])
+        if measure in (meta.get("non_additive") or []):
+            return 0.0, (f"`{measure}` is non-additive in {label}, so it cannot be "
+                         f"rolled up to this slice. Comparing it here would produce a "
+                         f"number that looks right and is not.")
+        if measure in columns:
+            expr = f"SUM({_escape_ident(measure)})"
+        elif f"{measure}_sum" in columns and f"{measure}_count" in columns:
+            # An averaged measure is stored decomposed; read it by dividing.
+            expr = (f"SUM({_escape_ident(measure + '_sum')}) / "
+                    f"NULLIF(SUM({_escape_ident(measure + '_count')}), 0)")
+        else:
+            return 0.0, (f"{label} does not carry a measure called `{measure}` "
+                         f"(it has {columns}).")
+
+        # Only a filter the FRAME is physically restricted to may be skipped. A
+        # reuse turn's own slice is a logical claim about the answer, not about
+        # the rows on disk -- skipping those would silently compare a Germany
+        # figure against a worldwide one.
+        baked = meta.get("frame_filters")
+        if baked is None:
+            baked = meta.get("filters") or {}
+        where = []
+        for column, values in sorted(slice_filters.items()):
+            if column in baked or not values:
+                continue
+            literals = ", ".join(_sql_literal(v) for v in values)
+            where.append(f"{_escape_ident(column)} IN ({literals})")
+        sql = f"SELECT {expr} AS _v FROM {_escape_ident(label)}"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+
+        self.workspace.register(tenant_id, conversation_id, label)
+        res = self.workspace.query(tenant_id, conversation_id, sql)
+        if not res.ok or res.data is None or not len(res.data):
+            return 0.0, (f"could not compute `{measure}` over {label}: "
+                         f"{res.error or 'no rows'}")
+        value = res.data.iloc[0, 0]
+        return (0.0 if value is None else float(value)), ""
+
+    @staticmethod
+    def _explain(result: ReconcileResult, meta_a: Dict[str, Any],
+                 meta_b: Dict[str, Any], slice_filters: Dict[str, List[str]]) -> str:
+        """Written for a human -- this is the field the UI shows."""
+        where = ("; ".join(f"{c} in {', '.join(v)}" for c, v in sorted(slice_filters.items()))
+                 or "the whole population")
+        label_a, label_b = meta_a.get("label", "A"), meta_b.get("label", "B")
+        verdict = "they agree" if result.agrees else "they DISAGREE"
+        text = (f"Both answers were computed over "
+                f"{meta_a.get('base_view') or 'the same base view'} (population "
+                f"{result.population_hash_a[:8]}…); over {where}, {result.measure} is "
+                f"{result.value_a:,.2f} from {label_a} and {result.value_b:,.2f} from "
+                f"{label_b} — {verdict}.")
+        if result.agrees:
+            return text
+        # A disagreement over one population is a real finding, and it usually
+        # has one of two causes. Name them rather than leaving the reader to
+        # guess which artifact to distrust.
+        causes = []
+        for meta in (meta_a, meta_b):
+            if meta.get("truncated"):
+                causes.append(f"{meta.get('label')} is truncated at "
+                              f"{meta.get('row_count')} rows, so its total is understated")
+            for name in (meta.get("non_additive") or []):
+                causes.append(f"{meta.get('label')} carries the non-additive measure "
+                              f"`{name}`, which cannot be rolled up")
+        if causes:
+            text += " Likely cause: " + "; ".join(causes) + "."
+        return text
 
     # -- feedback + quality -------------------------------------------------
     def record_feedback(self, tenant_id: str, answer_id: str, user_id: str,
