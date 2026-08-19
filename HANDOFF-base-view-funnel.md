@@ -221,6 +221,71 @@ inside. In order:
    key. The real fix is per-nonce slots (`window.__mbSlots[nonce]`) instead of
    one shared `window.__mb`.
 
+## Step 5 as it stands — verified working, with one live gap
+
+**Turn 1 is governed and correct.** Run three times end to end after the fixes:
+
+```
+mode            ADAPTED_APPROVED_QUERY
+population_hash 69bb8b07c1cc...        <- the base view, not empty
+facts           computed over the governed base view 'checkout_sessions'
+warehouse       1 query -- the composed cube, base view inlined verbatim
+caveats         provisional (DRAFT base) + all five attribution rules, named
+```
+
+Every attribution rule is surfaced to the reader in full, e.g. "service_line
+attributed to each session_id by highest intent (fmc > fixed > mobile > ott >
+acquisition > NA); rows touching multiple service_line values are counted once,
+under their highest-ranked one." That is the depth the previous answer lacked.
+
+The model also used the base view to find something real: `reached_order_review`
+is ~0 across DE, so `checkout/OrderReviewInfo` is skipped or untracked in that
+market, and it said so rather than reporting a 100% drop-off at that step.
+
+**Turn 2 — the follow-up — is where it still breaks, and this is the top open
+item.** Asking "now split that same drop-off by attribute_checkout_type" in the
+same conversation produced a plausible-looking answer that had **silently lost
+the DE filter and the 30-day window** — the numbers are full history, all
+natcos. It is marked `reconcilable: False` and carries the "no base view governs
+this query" caveat, so the machinery told the truth about itself; but a reader
+skimming the prose would not notice the population had changed underneath them.
+
+The cause is NOT the base view and NOT the clarification branch (which correctly
+stayed quiet — it recognised the inherited window). It is the planner call
+coming back with **empty `content` and nothing but a truncated reasoning
+trace**:
+
+```
+could not parse turn plan as JSON: 'We need to answer: "now split that same
+drop-off by attribute_checkout_type..." This is a follow-up to the previous cube
+df_1 which had dimensions service_line and category ... and a filter on DE
+(natco_code='de') and last 30 days. The user wants to split that same drop-off by
+```
+
+— cut off mid-sentence, JSON never reached. The model understood the task
+perfectly. It simply spent its output budget reasoning and emitted no answer.
+`_run_analyst_pipeline` then returns None and the turn falls to a one-off query
+that re-derives everything from the raw table, including which filters to apply.
+
+Two candidate fixes, neither attempted, because both change LLM behaviour
+platform-wide and want their own live validation:
+
+1. **Ask for JSON mode on the planner call.** The gateway already supports it
+   (`payload["response_format"] = {"type": "json_object"}` when `json_mode` is
+   passed) and `GatewayClient.generate` forwards `**kwargs` straight through, so
+   this is a one-line change at the call site in `_ask_planner`. The planner
+   prompt already demands STRICT JSON, so this only enforces what it asks for.
+2. **Stop force-enabling reasoning.** `core/llm_gateway.py` turns it on for any
+   model whose name contains "deepseek" or "reasoning" — including flash models,
+   and for every call regardless of what it is for.
+
+Worth knowing either way: a planner failure is invisible in the answer text. The
+only tell is `plan_rationale: "the planner produced no usable plan"` and an empty
+`population_hash`. Both are in the recorded analysis; neither is in the prose.
+
+Minor, noted in passing: the "unreviewed base view definition" caveat is emitted
+twice on every governed turn.
+
 ## The clarification branch (step 4)
 
 New field `timeframe_stated` on the planner contract; the planner is told to
