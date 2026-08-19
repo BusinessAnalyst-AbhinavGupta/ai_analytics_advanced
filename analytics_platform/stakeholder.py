@@ -1350,6 +1350,8 @@ WITH ranked_{rule.column} AS (
                 "different question over different rows, while reading as a breakdown "
                 "of the previous answer.")
             lines.append("")
+        if self._is_causal_question(question):
+            lines.extend([self.DIAGNOSTIC_MEASURE_PROMPT, ""])
         return "\n".join(lines)
 
     # How many earlier turns of the conversation the planner is shown. Input
@@ -1415,6 +1417,33 @@ WITH ranked_{rule.column} AS (
             return (message.get("answer") or "").strip()
         return ("(no population was chosen for that turn -- it was answered with a "
                 "one-off query, so there is no plan to build on)")
+
+    # A question asking why something happened needs the columns that could
+    # answer it. Matched on intent rather than on the literal word "why": "what
+    # is driving the drop-off" is the same question.
+    _CAUSAL_RE = re.compile(
+        r"\bwhy\b|\bdriv(?:e|es|ing|er|ers)\b|\bcaus(?:e|es|ing|al)\b|"
+        r"\broot\s*cause\b|\bdrop[\s-]?off\b|\bdrop[\s-]?out\b|\bchurn\b|"
+        r"\bleak(?:age|ing)?\b|\bfriction\b|\bbottleneck\b|\bexplain\b|"
+        r"\breason(?:s)?\b|\bdiagnos", re.IGNORECASE)
+
+    DIAGNOSTIC_MEASURE_PROMPT = (
+        "This question asks WHY something is happening, not just how much of it there "
+        "is. Two endpoint counts can only size a drop -- they can never explain one. "
+        "From the chosen base view's listed measure columns, ALSO include:\n"
+        "  - any error or failure counts it carries, which are what separate a broken "
+        "flow from an uninterested user;\n"
+        "  - the intermediate steps between the two endpoints you are comparing, which "
+        "are what show WHERE inside the drop people actually leave.\n"
+        "Add these as MEASURES, NOT DIMENSIONS. Measures do not multiply the cube's "
+        "cell count, so they are nearly free; an extra dimension is what gets a cube "
+        "refused. If the base carries no such column, say so in rationale rather than "
+        "inventing one."
+    )
+
+    @classmethod
+    def _is_causal_question(cls, question: str) -> bool:
+        return bool(cls._CAUSAL_RE.search(question or ""))
 
     @staticmethod
     def _render_slice(frame: Dict[str, Any]) -> str:
@@ -2360,6 +2389,63 @@ what was asked."""
                 f"cannot be computed from this, and it must not be described as the "
                 f"whole distribution: {shown}{col_line}")
 
+    # The prompt that writes every answer. What it asked for before was "a
+    # cautious internal analytics assistant" that would "state what you know and
+    # what data you would need", in "2-3 sentences" -- so the tool reliably
+    # stopped at description and signed off by listing what it lacked. That read
+    # as a refusal to analyse, because it is what was asked for. AGENTS.md Part 2
+    # (the friction taxonomy) and Part 3 (descriptive -> diagnostic ->
+    # prescriptive) had never reached a prompt at all.
+    ANSWER_SYSTEM_PROMPT = (
+        "You are an internal analytics assistant writing for a stakeholder who will "
+        "have to defend this number in a meeting.\n\n"
+
+        "FORMAT. Respond with a strict JSON object:\n"
+        '{"answer": "<markdown>", "chart_config": {"type": '
+        '"LineChart|BarChart|AreaChart|ScatterChart", "xKey": "col_name", '
+        '"series": [{"key": "col_name"}]}}\n'
+        "Omit chart_config if no chart applies. The `answer` value is markdown: open "
+        "with AT MOST five '- ' bullets carrying the findings that would change a "
+        "decision, then a blank line, then a detailed analysis under a '## Detailed analysis' "
+        "heading. Fewer bullets is better -- do not pad to five.\n\n"
+
+        "SEQUENCE. Work through all three layers in order, and NEVER jump straight to "
+        "recommendations:\n"
+        "1. DESCRIPTIVE -- establish the hard facts. What is happening, and how big is "
+        "it. Size every claim.\n"
+        "2. DIAGNOSTIC -- why is it happening? Form hypotheses from the data actually "
+        "in front of you, and say which the data supports, which it contradicts, and "
+        "which it cannot settle either way.\n"
+        "3. PRESCRIPTIVE -- what to do about it, most valuable first, and only after "
+        "1 and 2.\n\n"
+
+        "DIAGNOSING A DROP-OFF OR BOTTLENECK. Categorise each one as exactly one of:\n"
+        "  - MATCHING FRICTION: the wrong users arrived for this product.\n"
+        "  - EDUCATIONAL FRICTION: users do not understand the value, or the next step.\n"
+        "  - OPERATIONAL FRICTION: something is broken -- a bug, an error, latency, a "
+        "flow that dead-ends.\n"
+        "  - MOTIVATIONAL FRICTION: users understand it and simply lack a reason to "
+        "continue.\n"
+        "Name the type and say what in the data points to it. Error or failure counts "
+        "CONCENTRATED in one segment are evidence of operational friction; a drop of "
+        "similar size across every segment rarely is, and points to matching or "
+        "motivational friction instead. If the data cannot separate them, say which "
+        "single measurement would.\n\n"
+
+        "EVIDENCE.\n"
+        "- Never invent a figure. Every number must come from the data context.\n"
+        "- The data context states whether it is the COMPLETE result or only part of "
+        "one. When it is complete and small, account for every row -- do not describe "
+        "a distribution while silently omitting categories. When it is partial, say "
+        "so, and never present it as the whole picture.\n"
+        "- A figure that contradicts another (a later funnel step exceeding an earlier "
+        "one, a negative drop-off) is a finding about the DEFINITIONS, not a number to "
+        "report as fact. Say which definition must be wrong.\n"
+        "- Close by naming what you could not test and the one piece of data that "
+        "would settle it. Keep it short, and put it last -- it is a closing note, and "
+        "not as a substitute for analysing what you already have."
+    )
+
     def _synthesize(self, llm: Any, question: str, category: str, data: Optional[Dict[str, Any]] = None) -> Tuple[str, Tuple[int, int], Optional[Dict[str, Any]]]:
         try:
             if data and isinstance(data, dict) and data.get("skill_steps"):
@@ -2416,17 +2502,7 @@ what was asked."""
     def _synthesize_text(self, llm: Any, question: str, category: str,
                          data_context: str) -> Tuple[str, Tuple[int, int], Optional[Dict[str, Any]]]:
         try:
-            sys_prompt = (
-                "You are a cautious internal analytics assistant. State what you know and what data you would need. Do not invent figures. "
-                "The data context tells you whether it is the COMPLETE result or only part of one. "
-                "When it is complete and small, account for every row -- do not describe a "
-                "distribution while silently omitting categories. When it is partial, say so "
-                "and never present it as the whole picture. "
-                "You must respond with a strict JSON object with the following schema: "
-                "{\"answer\": \"Your 2-3 sentence answer text here\", "
-                "\"chart_config\": {\"type\": \"LineChart|BarChart|AreaChart|ScatterChart\", \"xKey\": \"col_name\", \"series\": [{\"key\": \"col_name\"}]} } "
-                "If a chart is not applicable, omit chart_config."
-            )
+            sys_prompt = self.ANSWER_SYSTEM_PROMPT
             res = llm.generate(
                 prompt="Answer the question: " + question + data_context,
                 system_prompt=sys_prompt,

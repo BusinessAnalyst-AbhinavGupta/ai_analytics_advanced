@@ -2418,3 +2418,153 @@ class TestCubeDatesAreDates(unittest.TestCase):
         where = BaseViewRegistry(brain_for=lambda t: None)._where(spec)
         self.assertIn("DATE '2026-07-19'", where)
         self.assertNotIn("T00:00:00Z", where)
+
+
+# --------------------------------------------------------------------------- #
+# The answer prompt: describe AND diagnose
+#
+# The old prompt asked for a "cautious" assistant that would "state what you know
+# and what data you would need", in "2-3 sentences". So the tool reliably stopped
+# at description and closed by listing what it lacked -- which read as a refusal
+# to analyse, because that is what the prompt asked for. AGENTS.md Part 2 and
+# Part 3 mandate the friction taxonomy and the descriptive -> diagnostic ->
+# prescriptive sequence; neither had ever reached a prompt.
+# --------------------------------------------------------------------------- #
+class TestAnswerPromptDiagnoses(unittest.TestCase):
+    def setUp(self):
+        self.ctx, self.base = app_ctx()
+        self.tid = self.ctx.tenants.create_tenant("PromptCo").id
+        self.app = create_app(self.ctx)
+        self.svc = self.ctx.stakeholder
+
+    def tearDown(self):
+        self.svc.workspace.close_all()
+        self.base.close()
+
+    def prompt(self):
+        llm = RecordingLLM(['{"answer":"a"}'])
+        self.svc._synthesize_text(llm, "why the drop-off?", "general", "DATA")
+        return llm.last_system_prompt
+
+    # -- shape -----------------------------------------------------------------
+    def test_it_asks_for_bullets_then_a_detailed_analysis(self):
+        out = self.prompt().lower()
+        self.assertIn("bullet", out)
+        self.assertIn("detailed analysis", out)
+
+    def test_the_two_to_three_sentence_cap_is_gone(self):
+        """That cap made depth structurally impossible."""
+        self.assertNotIn("2-3 sentence", self.prompt())
+
+    def test_it_caps_the_bullets_at_five(self):
+        self.assertIn("five", self.prompt().lower())
+
+    def test_it_does_not_ask_for_padding_to_five(self):
+        self.assertIn("do not pad", self.prompt().lower())
+
+    # -- AGENTS.md Part 3: the sequence ---------------------------------------
+    def test_it_states_the_descriptive_diagnostic_prescriptive_sequence(self):
+        out = self.prompt().lower()
+        for layer in ("descriptive", "diagnostic", "prescriptive"):
+            self.assertIn(layer, out)
+
+    def test_it_forbids_jumping_to_recommendations(self):
+        self.assertIn("never jump", self.prompt().lower())
+
+    # -- AGENTS.md Part 2: the friction taxonomy ------------------------------
+    def test_it_names_all_four_friction_types(self):
+        out = self.prompt().lower()
+        for friction in ("matching", "educational", "operational", "motivational"):
+            self.assertIn(friction + " friction", out)
+
+    def test_it_says_what_evidence_points_at_operational_friction(self):
+        """Naming four categories without a rule for choosing between them just
+        moves the guesswork."""
+        self.assertIn("concentrated", self.prompt().lower())
+
+    # -- what must NOT be lost ------------------------------------------------
+    def test_it_still_forbids_inventing_figures(self):
+        self.assertIn("invent", self.prompt().lower())
+
+    def test_it_still_distinguishes_a_complete_result_from_a_partial_one(self):
+        """Hard-won: a 5-row cube was once narrated from rows[:3], unsorted,
+        losing a category worth 32% of the population from an answer that read
+        as complete."""
+        out = self.prompt().lower()
+        self.assertIn("complete", out)
+        self.assertIn("partial", out)
+
+    def test_missing_data_is_a_closing_note_not_the_answer(self):
+        """The old prompt's "state what data you would need" became the whole
+        reply. It stays, demoted."""
+        self.assertIn("not as a substitute", self.prompt().lower())
+
+    def test_the_chart_contract_survives(self):
+        self.assertIn("chart_config", self.prompt())
+
+
+# --------------------------------------------------------------------------- #
+# A "why" question needs the columns that could answer "why"
+#
+# The base view offers error_event_count, purchase_failed and every intermediate
+# funnel step. The cube behind the live drop-off answer asked for three counts --
+# consent, order_confirmation, purchase_success -- and nothing else, so the
+# answer could only describe where the drop was, never what it looked like. The
+# diagnostic material was one column away and nothing asked for it.
+# --------------------------------------------------------------------------- #
+class TestDiagnosticMeasures(unittest.TestCase):
+    def setUp(self):
+        self.ctx, self.base = app_ctx()
+        self.tid = self.ctx.tenants.create_tenant("DiagCo").id
+        self.app = create_app(self.ctx)
+        self.svc = self.ctx.stakeholder
+
+    def tearDown(self):
+        self.svc.workspace.close_all()
+        self.base.close()
+
+    def prompt(self, question):
+        from analytics_platform.schema_context import SchemaContext
+        return self.svc._plan_prompt(question, SchemaContext(rendered=""), [])
+
+    # -- recognising the question ---------------------------------------------
+    def test_a_why_question_is_causal(self):
+        self.assertTrue(self.svc._is_causal_question("why are users dropping off?"))
+
+    def test_a_drop_off_question_is_causal_without_the_word_why(self):
+        self.assertTrue(self.svc._is_causal_question(
+            "what is driving the drop-off after consent?"))
+
+    def test_a_root_cause_question_is_causal(self):
+        self.assertTrue(self.svc._is_causal_question("root cause of the decline?"))
+
+    def test_a_plain_count_question_is_not_causal(self):
+        """It must not fire on everything -- extra measures cost cube width."""
+        self.assertFalse(self.svc._is_causal_question(
+            "how many checkout sessions per service line?"))
+
+    def test_a_trend_question_is_not_causal_by_itself(self):
+        self.assertFalse(self.svc._is_causal_question(
+            "show me sessions by month for the last year"))
+
+    # -- what it changes in the prompt ----------------------------------------
+    def test_a_causal_question_asks_for_the_diagnostic_measures(self):
+        out = self.prompt("why are users dropping off after consent?").lower()
+        self.assertIn("error", out)
+        self.assertIn("fail", out)
+
+    def test_a_causal_question_asks_for_the_intermediate_steps(self):
+        """Two endpoints tell you the size of a drop. The steps between them are
+        what tell you WHERE inside it people leave."""
+        self.assertIn("intermediate",
+                      self.prompt("why are users dropping off?").lower())
+
+    def test_a_plain_question_gets_no_diagnostic_instruction(self):
+        self.assertNotIn("intermediate",
+                         self.prompt("how many sessions per service line?").lower())
+
+    def test_the_instruction_respects_the_cube_size_guard(self):
+        """Telling it to add measures without saying they are measures would
+        invite extra DIMENSIONS, which is what actually blows up a cube."""
+        out = self.prompt("why the drop-off?").lower()
+        self.assertIn("measures, not dimensions", out)
