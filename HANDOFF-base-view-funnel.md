@@ -54,7 +54,191 @@ It is now the only tenant; two empty demo duplicates were deleted, backed up to
 
 ---
 
-## Next session, in order
+## Status — all five steps done (session of 2026-08-19, second sitting)
+
+1. ~~Measure the true history extent~~ → **2025-06-01 to 2026-08-17, 443 distinct
+   days, no gaps.** Not 30 days. Measured unfiltered.
+2. ~~Check whether `attribute_checkout_type` and `service_line` are
+   single-valued per session~~ → **Neither is. Both need attribution rules.**
+   Numbers below.
+3. ~~Write the base view, register as DRAFT~~ → **done, `checkout_sessions`,
+   status CANDIDATE, awaiting your approval.** Registering it under the toy's
+   own name changed the population hash, which withdrew the toy's approval
+   automatically — the toy is gone and no approved base view exists right now.
+4. ~~Add the "ask when no timeframe is given" branch~~ → **done, 12 tests.**
+5. Re-run the consent drop-off question end to end → see "What the live re-run
+   found" below. It took three attempts and turned up three separate blocking
+   defects, all now fixed.
+
+---
+
+## What step 1 actually measured
+
+```sql
+SELECT MIN(event_date), MAX(event_date), COUNT(DISTINCT event_date)
+FROM silver_layer.t_link_journey_checkout_com
+```
+
+| | |
+|---|---|
+| min_event_date | 2025-06-01 |
+| max_event_date | 2026-08-17 |
+| distinct days  | 443 (every day in the span is present) |
+
+The previous session's "2026-07-19 → 2026-08-17" was its own filter reflected
+back, exactly as it suspected.
+
+## What step 2 actually measured
+
+Per-session distinct-value counts over the **full** history, 16,040,942 sessions
+(plus exactly one row whose `session_id` is NULL — 477 `debeta` events; the base
+view excludes it):
+
+| column | sessions with >1 value | share |
+|---|---|---|
+| `service_line` | 10,289,615 | **64.1%** |
+| `category` | 2,458,630 | **15.3%** |
+| `sub_category` | 199,762 | 1.2% |
+| `attribute_checkout_type` | 20,692 | 0.13% |
+| `natco_code` | 50 | ~0% |
+
+**So the answer to the question step 2 was posed to settle is: no, neither is
+single-valued, and both need rules.** `service_line` is the severe one.
+
+The reason it is that severe is that `'NA'` is a *string value*, not a null —
+11,504,026 sessions carry it. Treating `'NA'` as the placeholder it is drops the
+genuine multi-value share from 64.1% to **11.8%**, and 10.8% of sessions have
+nothing but `'NA'`. The same shape appears in `category`: `acquisition` tags
+15,659,683 of 16,040,942 sessions, so it is a default label rather than a journey
+type, and any attribution that does not rank it below the specific journeys
+labels essentially every session `acquisition`.
+
+Other things the value scan turned up:
+
+- `purchaseSuccess` lives in **`action`**, not `event_type`/`event_action`/`label`.
+  2,734,619 sessions over full history.
+- `checkout/consent` is 2,696,940 sessions and has **no** `/err/` variants — but
+  `BASKET` (4,270) and `checkout/OrderConfirmation` (3,481) do, so the
+  err-stripping in the base view is doing real work elsewhere.
+- Case variants are real: `checkout/PersonalInfo` (342,499 sessions) and
+  `checkout/personalInfo` (3,761,065) are the same page. The base lower-cases.
+- `category` contains XSS-scanner junk as data —
+  `javascript:domxssExecutionSink(...)` and `acquisitionz3r0/'"><z3r0x>...`, one
+  session each. Harmless, but they will appear in a `category` breakdown's tail.
+
+## The base view that was registered
+
+`checkout_sessions`, **status CANDIDATE (DRAFT) — approval is yours, not mine.**
+
+- Grain `session_id`, verified by probe: **16,040,942 rows, 16,040,942 distinct
+  keys, 0 NULL keys.** Exact.
+- No date filter. `time_column = event_date`, defined as `MIN(event_date)` — the
+  day the session *started*, so a session belongs to exactly one day and a date
+  slice cannot count it twice (0.9% of sessions cross midnight).
+- Dimensions: `natco_code`, `service_line`, `category`, `sub_category`,
+  `attribute_checkout_type`.
+- Measures: `event_count`, `error_event_count`, and 0/1 flags `reached_basket`,
+  `reached_consent`, `reached_account`, `reached_personal_info`,
+  `reached_identification`, `reached_shipping`, `reached_payment`,
+  `reached_order_review`, `reached_order_confirmation`, `purchase_success`,
+  `purchase_failed`.
+- Structure: **one** warehouse scan. Grouping once by the five attributed columns
+  keeps the per-session frequencies every ranking needs, so the five attributions
+  rank over that small relation instead of rescanning 628M rows once each. Funnel
+  flags are aggregates in that same pass, so `page_name`/`action` never enter the
+  GROUP BY.
+
+**Correction to something the previous handoff asserted:** partition pruning does
+**not** survive. It claimed "Athena pushes the outer date predicate into the
+inlined CTE". It cannot here, because `event_date` is *computed by the
+aggregation* rather than passed through as a grouping key, so an outer predicate
+filters the aggregate. Every cube pays a full-history scan, ~45s. That is the
+real price of the no-window decision — which is still the right call, it just
+costs this rather than nothing. It is written into the view's description.
+
+Validated against the previous session's DE 30-day figures:
+
+| | previous | this base | delta |
+|---|---|---|---|
+| consent | 136,729 | 136,573 | −0.11% |
+| purchaseSuccess | 102,829 | 102,698 | −0.13% |
+| OrderConfirmation | 149,253 | 148,996 | −0.17% |
+| BASKET | 621,910 | 619,988 | −0.31% |
+
+All lower, all by a similar small amount — the leading-boundary effect of dating
+a session by its first event instead of per-event. Expected and correct.
+
+**The attribution rankings are proposals and need your sign-off.** Specifically:
+`fmc > fixed > mobile > ott > acquisition > NA` for `service_line`, and the
+journey ordering for `category`. The noise-floor placements (`NA` last,
+`acquisition` just above `firstPageLoad`/`error`/`''`) are argued from the volume
+data above and are the parts I am confident in; the ordering *among* the real
+values is a business judgment I proposed rather than measured.
+
+## What the live re-run found — three blocking defects, all fixed
+
+Step 5 did not work first time, and each failure looked like success from the
+inside. In order:
+
+1. **The turn plan was being thrown away as unparseable while the model was
+   getting it right.** `core/llm_gateway.py` fell back to
+   `str(reasoning_details)` when a reasoning model returned empty `content` —
+   and OpenRouter sends that as a *list of typed blocks*, so the caller got the
+   Python repr `[{'type': 'reasoning.text', 'text': '...'}]`. The log showed the
+   planner correctly choosing `checkout_sessions`; the plan was discarded anyway
+   and the turn fell to the ungoverned aggregate path with no population hash.
+   Fixed: blocks are flattened to their text.
+2. **A semicolon inside a SQL *comment* got the whole base view rejected.**
+   `QueryPolicy` blocks multi-statement SQL with a naive `";" in sql`, which does
+   not care whether the semicolon is inside a comment or a string literal. Two of
+   the explanatory comments in the base view's own SQL contained one, so every
+   grain probe was refused before it ran, with the reason "Multiple statements in
+   one query are blocked" surfacing to the user only as "the grain of base view
+   checkout_sessions could not be verified this turn". **This was the actual
+   blocker** — it fired at validation time, in 0s, ahead of anything else. Fixed
+   on the artifact side by rewording the two comments; comments are stripped
+   before hashing, so the population hash was unchanged. **The policy check
+   itself is still naive and is left alone deliberately** — it fails closed,
+   which is the right direction for a safety check, and loosening it is a
+   security-adjacent change that wants its own review. Worth knowing before you
+   write SQL for this platform: no semicolons anywhere, comments included.
+3. **Every live query ran under a 30-second ceiling.** `make_live_executor` never
+   passed `timeout_s`, so the constructor default applied. The base view's grain
+   probe takes 43s, so it could never have completed. To be precise about the
+   causal order: this defect is real but was never actually *observed* firing,
+   because the policy rejection above happened first and masked it. Fixed:
+   `Settings.metabase_timeout_s` (`ANALYTICS_MB_TIMEOUT_S`), default 300s,
+   threaded through to both the polling deadline and the osascript runner.
+4. **A second process driving the same Chrome tab silently destroys the first
+   one's result.** `window.__mb` is a single shared slot. The Streamlit frontend
+   polls `/observability/metabase/status` every 60s, and that probe overwrites
+   whatever an in-flight query left there; the query then reads the probe payload
+   and reports `metabase error`. **Not fixed, and it does not affect the
+   backend** — inside the API process the executor is a singleton and
+   `_roundtrip_lock` serialises the health poll against queries. It only bites
+   when a *separate* process drives the tab, which is what ad-hoc discovery
+   scripts do. If you write such a script, retry when the payload has no `ok`
+   key. The real fix is per-nonce slots (`window.__mbSlots[nonce]`) instead of
+   one shared `window.__mb`.
+
+## The clarification branch (step 4)
+
+New field `timeframe_stated` on the planner contract; the planner is told to
+report it honestly and leave `time_start`/`time_end` empty rather than invent a
+window. `_timeframe_clarification` decides, and the pipeline asks before spending
+the scan. It stays quiet where asking would be noise:
+
+- the base has no `time_column` — nothing to slice by;
+- the aggregate path — no population;
+- a follow-up re-cutting a cube that already carries a window — it inherits it;
+- a planner that omits the field — read as having stated one, so nothing else
+  changes.
+
+12 tests in `tests/test_stakeholder.py::TestTimeframeClarification`.
+
+---
+
+## Original plan (kept for context)
 
 1. **Measure the true history extent (`MIN(event_date)`), unfiltered**
 2. **Check whether `attribute_checkout_type` and `service_line` are single-valued
