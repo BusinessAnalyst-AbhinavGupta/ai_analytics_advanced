@@ -286,6 +286,74 @@ only tell is `plan_rationale: "the planner produced no usable plan"` and an empt
 Minor, noted in passing: the "unreviewed base view definition" caveat is emitted
 twice on every governed turn.
 
+## The follow-up problem, and why the seatbelt was only half of it
+
+The seatbelt (refuse to improvise a new population mid-conversation) stops the
+*harm*. It does not stop the *cause*, which turned out to be that the planner
+call was never conversational in the first place.
+
+**What the planner used to be told about an earlier turn — all of it:**
+
+```
+- df_1: why are users dropping off after reaching consent page and not going on
+  to place the order. break this down by service line and category and limit to
+  DE. Also let's just work on last 30 days worth of  | base_view=checkout_sessions
+  | dimensions=['service_line','category'] | measures=[...] | rows=24
+```
+
+One line. No prior questions, no prior answers, no commentary. And the slice —
+which `ExtractMeta` records exactly as `filters={'natco_code': ['de']}` and
+`2026-07-19..2026-08-17` — was **not passed on at all**. The only trace of "DE,
+last 30 days" was the previous question truncated at 200 characters, and that cut
+landed inside the phrase `"last 30 days worth of "`, losing the timeframe
+outright. "limit to DE" survived by luck of word order.
+
+So a follow-up was asked to rewrite a request it had never been shown, using a
+chopped-off paraphrase, while the exact values sat unused in memory.
+
+**Two changes, in order.**
+
+1. *Send what we already know.* Each cached cube now carries `slice=` — the
+   filters and window verbatim — and says "no filters, no time window" when it
+   has none, because silence is ambiguous: the planner cannot tell an unfiltered
+   cube from one whose filters were withheld. The question ceiling went from 200
+   to 600 characters.
+2. *Make the call a conversation.* The planner now receives prior turns as a
+   real message thread — the question verbatim, then what it decided, rendered
+   in the same JSON shape it is being asked to emit, so the model reads its own
+   prior output in the format it must answer in. Turns that chose no population
+   say so in prose rather than posing as a plan. Clarification turns stay in,
+   because the user's next message is usually the reply to one.
+
+Verified live against the conversation that failed. The follow-up now comes back
+with `filters: {'natco_code': ['de']}` and `2026-07-19..2026-08-17`, and the
+model's own rationale reads *"re-uses the existing checkout_sessions base and
+repeats the exact DE 30-day"* slice.
+
+**Things worth knowing before you touch this.**
+
+- **The gateway silently ignores `system_prompt` whenever `messages` is
+  supplied.** Leave the system prompt outside the list and the entire planner
+  contract vanishes with no error. It goes inside the list.
+- **Ordering is deliberate.** Stable material (system prompt, schema, base
+  views) first, volatile material (thread, new question) last, so the cacheable
+  prefix survives across turns. A measured planner call was 13,242 input tokens
+  with 4,864 already cached, at $0.0033 — input is cheap, and cheaper still if
+  this ordering is preserved.
+- **Bounded to the last 8 turns** (`PLANNER_HISTORY_TURNS`). Tokens are cheap;
+  context windows are not infinite and conversations are not bounded.
+- **Date literals are normalised now.** The planner sometimes answers with a
+  full ISO timestamp, which composed to `DATE '2026-07-19T00:00:00Z'` — rejected
+  by Athena. Echoing prior turns back makes this likelier, since the shape one
+  turn used is what the next turn sees. Anything that is not a date is dropped
+  rather than passed through: an unfiltered turn is visible, a syntax error is
+  not.
+- **Plan B does not cover any of this.** Plan B is the analyst *surface* --
+  assistant-ui, streamed steps, storyline export -- and its own scope statement
+  says it "does not touch the semantic layer, the Data Manager, the DuckDB
+  workspace, or the extract store except to read what they produced". It makes
+  the UI chat-like; the LLM call would have stayed stateless.
+
 ## The clarification branch (step 4)
 
 New field `timeframe_stated` on the planner contract; the planner is told to
