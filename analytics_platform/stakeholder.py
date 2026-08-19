@@ -13,6 +13,7 @@ cost per answer is tracked.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import asdict
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -49,6 +50,22 @@ logger = logging.getLogger(__name__)
 # very timeframe the user had stated, in the one field a follow-up turn reads to
 # find out what the previous turn was about.
 CUBE_DESCRIPTION_CHARS = 600
+
+_ISO_DATE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})")
+
+
+def _as_date_literal(value: Any) -> str:
+    """The date part of whatever the planner offered, or "" if it is not a date.
+
+    compose_cube emits `DATE '<literal>'`, and Trino/Athena accept that only as
+    YYYY-MM-DD. The planner sometimes answers with a full ISO timestamp instead
+    -- seen live as "2026-07-19T00:00:00Z" -- which composes to a literal the
+    warehouse rejects, failing the whole query. Anything that is not a date at
+    all is dropped rather than passed through: an unfiltered turn is visible and
+    recoverable, a syntax error is neither.
+    """
+    match = _ISO_DATE_RE.match(str(value or "").strip())
+    return match.group(1) if match else ""
 
 CATEGORY_MARKERS: Dict[str, List[str]] = {
     "metric_lookup": ["how many", "count", "number of", "what is the value", "measure", "metric"],
@@ -1242,8 +1259,11 @@ WITH ranked_{rule.column} AS (
                                                    defn_nodes)
         frames = self.data_cache.list_available(tenant_id, conversation_id)
         prompt = self._plan_prompt(question, schema_ctx, frames)
+        # A follow-up is a rewrite of an earlier request, so the planner is given
+        # the conversation rather than a summary of its leftovers.
+        history = self._conversation_thread(tenant_id, conversation_id)
 
-        parsed = self._ask_planner(llm, prompt, schema_ctx)
+        parsed = self._ask_planner(llm, prompt, schema_ctx, history=history)
         if parsed is None and any(f.get("population_hash") for f in frames):
             # Ask once more, but ONLY where giving up would cost something. This
             # failure is intermittent -- the same call, same prompt, usually
@@ -1251,7 +1271,7 @@ WITH ranked_{rule.column} AS (
             # for the price of one planning call. On a conversation with no
             # governed cube in it there is nothing for a fallback answer to
             # contradict, so the retry would be cost without a benefit.
-            parsed = self._ask_planner(llm, prompt, schema_ctx)
+            parsed = self._ask_planner(llm, prompt, schema_ctx, history=history)
         if parsed is None:
             return TurnPlan(path="aggregate", analysis="python", planner_failed=True,
                             rationale="the planner produced no usable plan")
@@ -1266,7 +1286,8 @@ WITH ranked_{rule.column} AS (
         # question nobody asked.
         if plan.cube_sql is not None and not plan.cube_sql.ok:
             retry = self._ask_planner(
-                llm, prompt + "\n\n" + self._guard_feedback(plan.cube_sql), schema_ctx)
+                llm, prompt + "\n\n" + self._guard_feedback(plan.cube_sql), schema_ctx,
+                history=history)
             retried = self._resolve_plan(tenant_id, retry, schema_ctx) if retry else None
             if retried is None or retried.cube_sql is None or not retried.cube_sql.ok:
                 reason = plan.cube_sql.error
@@ -1331,6 +1352,70 @@ WITH ranked_{rule.column} AS (
             lines.append("")
         return "\n".join(lines)
 
+    # How many earlier turns of the conversation the planner is shown. Input
+    # tokens are cheap -- and cheaper still under prompt caching, which is why
+    # the stable material goes in the system message and the volatile thread
+    # after it -- but a context window is finite and a long-running conversation
+    # is not, so this is bounded rather than unbounded.
+    PLANNER_HISTORY_TURNS = 8
+
+    def _conversation_thread(self, tenant_id: str,
+                             conversation_id: str) -> List[Dict[str, str]]:
+        """Earlier turns of this conversation, as chat messages for the planner.
+
+        A follow-up is a rewrite of an earlier request, and until now the model
+        was never shown the request it was rewriting -- only a one-line summary
+        of the cube that came out of it. "Now split THAT by checkout type" cannot
+        be resolved against a summary; it needs the turn it refers to.
+
+        Each earlier turn becomes a user message (the question, verbatim) and an
+        assistant message (what the planner decided, in the SAME JSON shape it is
+        being asked to emit now, so the model reads its own prior output in the
+        format it must answer in). Turns that decided no population say so in
+        prose instead -- rendering them as a plan would invite the model to build
+        on a decision nobody made. Clarifications stay in, because the user's
+        next message is usually the answer to one.
+        """
+        if not conversation_id:
+            return []
+        conversation = self.get_conversation(tenant_id, conversation_id)
+        if not conversation:
+            return []
+        out: List[Dict[str, str]] = []
+        for message in (conversation.get("messages") or [])[-self.PLANNER_HISTORY_TURNS:]:
+            question = (message.get("question") or "").strip()
+            if not question:
+                continue
+            out.append({"role": "user", "content": question})
+            out.append({"role": "assistant",
+                        "content": self._render_prior_turn(message)})
+        return out
+
+    @staticmethod
+    def _render_prior_turn(message: Dict[str, Any]) -> str:
+        """What the planner decided on an earlier turn, for the assistant slot."""
+        requirement = ((message.get("analysis") or {}).get("requirement")) or {}
+        if requirement.get("base_view"):
+            return dump_json({
+                "base_view": requirement.get("base_view", ""),
+                "cube": {
+                    "dimensions": list(requirement.get("dimensions") or []),
+                    "measures": [{"name": m.get("name", ""), "expr": m.get("expr", "")}
+                                 for m in (requirement.get("measures") or [])
+                                 if isinstance(m, dict)],
+                    "filters": dict(requirement.get("filters") or {}),
+                    "time_column": requirement.get("time_column", ""),
+                    "time_start": _as_date_literal(requirement.get("time_start")),
+                    "time_end": _as_date_literal(requirement.get("time_end")),
+                },
+            })
+        if message.get("status") == "NEEDS_CLARIFICATION":
+            # Kept as prose, and kept at all: the user's NEXT message is the reply
+            # to this, and without it that reply reads as a non-sequitur.
+            return (message.get("answer") or "").strip()
+        return ("(no population was chosen for that turn -- it was answered with a "
+                "one-off query, so there is no plan to build on)")
+
     @staticmethod
     def _render_slice(frame: Dict[str, Any]) -> str:
         """What a cached cube was filtered to, as the planner needs to repeat it.
@@ -1354,15 +1439,27 @@ WITH ranked_{rule.column} AS (
             parts.append(f"{column}={start}..{end}")
         return "; ".join(parts) if parts else "no filters, no time window"
 
-    def _ask_planner(self, llm: Any, prompt: str,
-                     schema_ctx: SchemaContext) -> Optional[Dict[str, Any]]:
+    def _ask_planner(self, llm: Any, prompt: str, schema_ctx: SchemaContext,
+                     history: Optional[List[Dict[str, str]]] = None
+                     ) -> Optional[Dict[str, Any]]:
         system = self.PLAN_SYSTEM_PROMPT
         if self._has_fanout(schema_ctx):
             system += "\n\n" + self.PROPOSAL_PROMPT
         system += "\n\n" + self._render_attribution_pattern(
             self._fanout_rules(schema_ctx))
+        # The system message carries the stable material and comes first, so the
+        # cacheable prefix stays valid across the turns of a conversation; the
+        # volatile thread and the new question follow it.
+        #
+        # The system prompt goes INSIDE the list, not beside it: the gateway
+        # ignores `system_prompt` entirely whenever `messages` is supplied, so
+        # leaving it outside would silently drop the whole planner contract.
+        messages = ([{"role": "system", "content": system}]
+                    + list(history or [])
+                    + [{"role": "user", "content": prompt}])
         try:
-            res = llm.generate(prompt=prompt, system_prompt=system, temperature=0.0)
+            res = llm.generate(prompt=prompt, system_prompt=system,
+                               messages=messages, temperature=0.0)
             text = (res.text or "").strip() if res and hasattr(res, "text") else ""
         except Exception as exc:  # noqa: BLE001 - a dead gateway degrades, never raises
             logger.warning("turn planning failed: %s", exc, exc_info=True)
@@ -1537,8 +1634,8 @@ WITH ranked_{rule.column} AS (
             dimensions=[str(d) for d in (raw.get("dimensions") or [])],
             measures=measures, filters=filters,
             time_column=str(raw.get("time_column") or view.time_column or ""),
-            time_start=str(raw.get("time_start") or ""),
-            time_end=str(raw.get("time_end") or ""))
+            time_start=_as_date_literal(raw.get("time_start")),
+            time_end=_as_date_literal(raw.get("time_end")))
 
     @staticmethod
     def _has_fanout(schema_ctx: SchemaContext) -> bool:

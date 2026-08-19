@@ -1090,6 +1090,18 @@ class MockLLM:
         return not self.responses
 
 
+class RecordingLLM(MockLLM):
+    """MockLLM that also keeps the `messages` thread it was handed."""
+
+    def __init__(self, responses):
+        super().__init__(responses)
+        self.last_messages = None
+
+    def generate(self, prompt="", system_prompt="", **kw):
+        self.last_messages = kw.get("messages")
+        return super().generate(prompt=prompt, system_prompt=system_prompt, **kw)
+
+
 REUSE_PLAN = ('{"base_view":"order_events","cube":{"dimensions":[],'
               '"measures":[{"name":"revenue","expr":"SUM(revenue)"}],"filters":{}},'
               '"analysis":"python"}')
@@ -2224,3 +2236,185 @@ class TestPlannerSeesTheSlice(unittest.TestCase):
                         cube=CubeSpec(base_name="cs", measures=[CubeMeasure("n", "COUNT(*)")]))
         meta = self.svc._extract_meta("df_1", question, plan, _Res(), "SELECT 1")
         self.assertIn("last 30 days worth of data", meta.description)
+
+
+# --------------------------------------------------------------------------- #
+# The planner call is a conversation, not a fresh acquaintance every turn
+#
+# Until now every planning call was stateless: the model saw the current
+# question, the schema, and one summary line per cached cube. It never saw what
+# the user had actually asked before, what it had decided in reply, or what it
+# had asked the user to clarify. So a follow-up like "now split that by checkout
+# type" had to reconstruct the whole intent from a summary -- and "that" pointed
+# at something the model was never shown.
+# --------------------------------------------------------------------------- #
+class TestPlannerConversationThread(unittest.TestCase):
+    def setUp(self):
+        self.ctx, self.base = app_ctx()
+        self.tid = self.ctx.tenants.create_tenant("ThreadCo").id
+        self.app = create_app(self.ctx)
+        self.svc = self.ctx.stakeholder
+        self.conv = self.svc._ensure_conversation(self.tid, "", "first question")
+
+    def tearDown(self):
+        self.svc.workspace.close_all()
+        self.base.close()
+
+    def turn(self, question, answer="an answer", requirement=None, status="ANSWERED",
+             mode=AnswerMode.ADAPTED_APPROVED_QUERY):
+        analysis = {"requirement": requirement} if requirement else {}
+        return self.svc._record(self.tid, question, "u1", "general", "t", answer,
+                                mode, status, False, [], analysis=analysis,
+                                conversation_id=self.conv)
+
+    REQ = {"base_view": "checkout_sessions", "dimensions": ["service_line", "category"],
+           "measures": [{"name": "consent_sessions", "expr": "SUM(reached_consent)"}],
+           "filters": {"natco_code": ["de"]}, "time_column": "event_date",
+           "time_start": "2026-07-19", "time_end": "2026-08-17"}
+
+    def thread(self):
+        return self.svc._conversation_thread(self.tid, self.conv)
+
+    # -- what the thread contains ---------------------------------------------
+    def test_a_first_turn_has_nothing_to_send(self):
+        self.assertEqual(self.thread(), [])
+
+    def test_the_previous_question_is_sent_verbatim(self):
+        """Not the 600-character summary of it -- the question."""
+        self.turn("break consent drop-off down by service line, DE, last 30 days",
+                  requirement=self.REQ)
+        user = [m for m in self.thread() if m["role"] == "user"]
+        self.assertEqual(len(user), 1)
+        self.assertIn("last 30 days", user[0]["content"])
+
+    def test_the_plan_it_produced_comes_back_as_the_assistant_turn(self):
+        """In the same JSON shape the planner is asked to emit, so the model is
+        reading its own prior output in the format it must answer in."""
+        import json
+        self.turn("q1", requirement=self.REQ)
+        assistant = [m for m in self.thread() if m["role"] == "assistant"]
+        parsed = json.loads(assistant[0]["content"])
+        self.assertEqual(parsed["base_view"], "checkout_sessions")
+        self.assertEqual(parsed["cube"]["filters"], {"natco_code": ["de"]})
+        self.assertEqual(parsed["cube"]["time_start"], "2026-07-19")
+
+    def test_the_turns_are_oldest_first(self):
+        self.turn("oldest", requirement=self.REQ)
+        self.turn("newest", requirement=self.REQ)
+        users = [m["content"] for m in self.thread() if m["role"] == "user"]
+        self.assertEqual(users, ["oldest", "newest"])
+
+    def test_a_clarification_stays_in_the_thread(self):
+        """Otherwise the user's next message -- which is the ANSWER to it -- reads
+        as a non-sequitur: 'last 30 days' following nothing."""
+        self.turn("why the drop-off?", answer="Which period should this cover?",
+                  status="NEEDS_CLARIFICATION", mode=AnswerMode.NEEDS_CLARIFICATION)
+        assistant = [m for m in self.thread() if m["role"] == "assistant"]
+        self.assertIn("Which period", assistant[0]["content"])
+
+    def test_a_turn_with_no_plan_does_not_masquerade_as_one(self):
+        """A one-off query decided nothing about a population, and presenting it
+        as a plan would invite the model to build on a decision never made."""
+        self.turn("a one-off lookup", requirement=None)
+        assistant = [m for m in self.thread() if m["role"] == "assistant"]
+        self.assertNotIn("base_view", assistant[0]["content"])
+
+    def test_the_thread_is_bounded(self):
+        """Tokens are cheap but context windows are not infinite."""
+        for i in range(40):
+            self.turn(f"question {i}", requirement=self.REQ)
+        self.assertLessEqual(len(self.thread()), 2 * self.svc.PLANNER_HISTORY_TURNS)
+
+    def test_the_bound_keeps_the_most_recent_turns(self):
+        for i in range(40):
+            self.turn(f"question {i}", requirement=self.REQ)
+        users = [m["content"] for m in self.thread() if m["role"] == "user"]
+        self.assertEqual(users[-1], "question 39")
+
+    # -- how it reaches the model ---------------------------------------------
+    def test_the_planner_call_sends_the_thread_as_messages(self):
+        from analytics_platform.schema_context import SchemaContext
+        self.turn("the earlier question", requirement=self.REQ)
+        llm = RecordingLLM(['{"base_view":"x","cube":{"dimensions":[]}}'])
+        self.svc._ask_planner(llm, "the new question", SchemaContext(rendered="SCHEMA"),
+                              history=self.thread())
+        roles = [m["role"] for m in llm.last_messages]
+        self.assertEqual(roles, ["system", "user", "assistant", "user"])
+
+    def test_the_system_prompt_travels_inside_the_messages(self):
+        """The gateway IGNORES system_prompt whenever messages are supplied, so a
+        system prompt left outside the list is silently dropped -- taking the
+        entire planner contract with it."""
+        from analytics_platform.schema_context import SchemaContext
+        llm = RecordingLLM(['{"base_view":"x","cube":{"dimensions":[]}}'])
+        self.svc._ask_planner(llm, "q", SchemaContext(rendered="SCHEMA"), history=[])
+        self.assertEqual(llm.last_messages[0]["role"], "system")
+        self.assertIn("timeframe_stated", llm.last_messages[0]["content"])
+
+    def test_planning_a_turn_sends_the_conversation_it_belongs_to(self):
+        """The end that matters: _plan_turn is what production calls, and a
+        history only _ask_planner knows how to accept would never be sent."""
+        from analytics_platform.schema_context import SchemaContext
+        self.turn("the earlier question", requirement=self.REQ)
+        llm = RecordingLLM(['{"base_view":"nope","cube":{"dimensions":[]}}'])
+        self.svc._plan_turn(llm, self.tid, self.conv, "the new question", [], [],
+                            schema_ctx=SchemaContext(rendered="SCHEMA"))
+        sent = "\n".join(m["content"] for m in llm.last_messages)
+        self.assertIn("the earlier question", sent)
+        self.assertIn("the new question", sent)
+
+    def test_the_new_question_is_the_last_message(self):
+        from analytics_platform.schema_context import SchemaContext
+        self.turn("earlier", requirement=self.REQ)
+        llm = RecordingLLM(['{"base_view":"x","cube":{"dimensions":[]}}'])
+        self.svc._ask_planner(llm, "THE NEW ONE", SchemaContext(rendered="SCHEMA"),
+                              history=self.thread())
+        self.assertIn("THE NEW ONE", llm.last_messages[-1]["content"])
+
+
+# --------------------------------------------------------------------------- #
+# A date literal has to be a date
+#
+# compose_cube emits `<col> BETWEEN DATE '<literal>' AND DATE '<literal>'`, and
+# Trino/Athena accept a DATE literal only as YYYY-MM-DD. The planner sometimes
+# answers with a full ISO timestamp instead -- observed live, returning
+# "2026-07-19T00:00:00Z" -- which composes to `DATE '2026-07-19T00:00:00Z'` and
+# fails at the warehouse. Feeding prior turns back into the planner makes this
+# likelier, because whatever shape one turn used is what the next turn sees.
+# --------------------------------------------------------------------------- #
+class TestCubeDatesAreDates(unittest.TestCase):
+    def parse(self, **raw):
+        from analytics_platform.domain import BaseView
+        from analytics_platform.stakeholder import StakeholderService
+        view = BaseView(name="cs", grain=["session_id"], time_column="event_date")
+        return StakeholderService._parse_cube(raw, view)
+
+    def test_an_iso_timestamp_is_reduced_to_its_date(self):
+        spec = self.parse(time_start="2026-07-19T00:00:00Z",
+                          time_end="2026-08-17T00:00:00Z")
+        self.assertEqual(spec.time_start, "2026-07-19")
+        self.assertEqual(spec.time_end, "2026-08-17")
+
+    def test_a_space_separated_timestamp_is_reduced_too(self):
+        self.assertEqual(self.parse(time_start="2026-07-19 13:45:00").time_start,
+                         "2026-07-19")
+
+    def test_a_plain_date_is_left_alone(self):
+        self.assertEqual(self.parse(time_start="2026-07-19").time_start, "2026-07-19")
+
+    def test_an_empty_window_stays_empty(self):
+        self.assertEqual(self.parse().time_start, "")
+
+    def test_something_that_is_not_a_date_is_dropped_rather_than_passed_through(self):
+        """A DATE literal the warehouse cannot parse fails the whole query. An
+        unusable window is better dropped -- the turn then reads as unfiltered,
+        which is visible, instead of erroring out of the governed path."""
+        self.assertEqual(self.parse(time_start="last tuesday").time_start, "")
+
+    def test_the_composed_predicate_is_a_valid_date_literal(self):
+        from analytics_platform.base_view import BaseViewRegistry
+        spec = self.parse(time_start="2026-07-19T00:00:00Z",
+                          time_end="2026-08-17T00:00:00Z")
+        where = BaseViewRegistry(brain_for=lambda t: None)._where(spec)
+        self.assertIn("DATE '2026-07-19'", where)
+        self.assertNotIn("T00:00:00Z", where)
