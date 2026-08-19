@@ -16,6 +16,17 @@ from analytics_platform.fixtures import WEEKLY_ORDER_SQL, build_retail_warehouse
 from tests.test_api import app_ctx, call
 
 
+def plan_resp():
+    """The planning call _plan_turn makes on every turn (Task 11).
+
+    These fixtures define no base view, so there is no population to resolve:
+    the planner falls back to the aggregate path, which is exactly the behaviour
+    the tests below were written against. Returning unparseable text is the
+    honest way to say "no plan" without inventing a base view.
+    """
+    return MagicMock(text="", ok=True, tokens_in=0, tokens_out=0)
+
+
 class TestStakeholder(unittest.TestCase):
     def setUp(self):
         self.ctx, self.base = app_ctx(warehouse=build_retail_warehouse())
@@ -325,7 +336,7 @@ class TestStakeholder(unittest.TestCase):
 
         mock_llm = MagicMock()
         mock_llm.name = "mock_gateway"
-        mock_llm.generate.side_effect = [intent_resp, no_sql_resp, skill_null_resp, freeform_resp]
+        mock_llm.generate.side_effect = [intent_resp, plan_resp(), no_sql_resp, skill_null_resp, freeform_resp]
         mock_make_role_client.return_value = mock_llm
 
         self.ctx.tenants.set_analyst_config(self.tid, {
@@ -369,7 +380,7 @@ class TestStakeholder(unittest.TestCase):
 
         mock_llm = MagicMock()
         mock_llm.name = "mock_gateway"
-        mock_llm.generate.side_effect = [intent_resp, no_sql_resp, synth_resp]
+        mock_llm.generate.side_effect = [intent_resp, plan_resp(), no_sql_resp, synth_resp]
         mock_make_role_client.return_value = mock_llm
 
         self.ctx.tenants.set_analyst_config(self.tid, {
@@ -406,7 +417,7 @@ class TestStakeholder(unittest.TestCase):
 
         mock_llm = MagicMock()
         mock_llm.name = "mock_gateway"
-        mock_llm.generate.side_effect = [intent_resp, no_sql_resp, chart_resp]
+        mock_llm.generate.side_effect = [intent_resp, plan_resp(), no_sql_resp, chart_resp]
         mock_make_role_client.return_value = mock_llm
 
         self.ctx.tenants.set_analyst_config(self.tid, {
@@ -444,7 +455,7 @@ class TestStakeholder(unittest.TestCase):
 
         mock_llm = MagicMock()
         mock_llm.name = "mock_gateway"
-        mock_llm.generate.side_effect = [intent_resp, sql_resp, answer_resp]
+        mock_llm.generate.side_effect = [intent_resp, plan_resp(), sql_resp, answer_resp]
         mock_make_role_client.return_value = mock_llm
 
         self.ctx.tenants.set_analyst_config(self.tid, {
@@ -486,7 +497,7 @@ class TestStakeholder(unittest.TestCase):
 
         mock_llm = MagicMock()
         mock_llm.name = "mock_gateway"
-        mock_llm.generate.side_effect = [intent_resp, sql_resp, answer_resp]
+        mock_llm.generate.side_effect = [intent_resp, plan_resp(), sql_resp, answer_resp]
         mock_make_role_client.return_value = mock_llm
 
         self.ctx.tenants.set_analyst_config(self.tid, {
@@ -516,7 +527,7 @@ class TestStakeholder(unittest.TestCase):
 
         mock_llm = MagicMock()
         mock_llm.name = "mock_gateway"
-        mock_llm.generate.side_effect = [intent_resp, bad_sql_resp, fixed_sql_resp, answer_resp]
+        mock_llm.generate.side_effect = [intent_resp, plan_resp(), bad_sql_resp, fixed_sql_resp, answer_resp]
         mock_make_role_client.return_value = mock_llm
 
         self.ctx.tenants.set_analyst_config(self.tid, {
@@ -531,7 +542,7 @@ class TestStakeholder(unittest.TestCase):
                       res["queries_run"][0])
         # The repair prompt for attempt 2 must actually mention the rejection
         # reason, not just retry the same broken query blind.
-        second_call_kwargs = mock_llm.generate.call_args_list[2].kwargs
+        second_call_kwargs = mock_llm.generate.call_args_list[3].kwargs
         self.assertIn("{{Date}}", second_call_kwargs["prompt"])
 
     @patch("analytics_platform.stakeholder.make_role_client")
@@ -549,7 +560,7 @@ class TestStakeholder(unittest.TestCase):
 
         mock_llm = MagicMock()
         mock_llm.name = "mock_gateway"
-        mock_llm.generate.side_effect = [intent_resp, bad_table_resp, fixed_sql_resp, answer_resp]
+        mock_llm.generate.side_effect = [intent_resp, plan_resp(), bad_table_resp, fixed_sql_resp, answer_resp]
         mock_make_role_client.return_value = mock_llm
 
         self.ctx.tenants.set_analyst_config(self.tid, {
@@ -576,7 +587,7 @@ class TestStakeholder(unittest.TestCase):
         # intent + 3 synthesis attempts (all rejected) + final chart synthesis
         # on the verbatim-reuse fallback path
         mock_llm.generate.side_effect = [
-            intent_resp, always_bad_resp, always_bad_resp, always_bad_resp, answer_resp]
+            intent_resp, plan_resp(), always_bad_resp, always_bad_resp, always_bad_resp, answer_resp]
         mock_make_role_client.return_value = mock_llm
 
         self.ctx.tenants.set_analyst_config(self.tid, {
@@ -585,7 +596,7 @@ class TestStakeholder(unittest.TestCase):
 
         res = self.ctx.stakeholder.answer(self.tid, "how many retail orders per month")
         self.assertEqual(res["answer_mode"], AnswerMode.REFRESHED_APPROVED_QUERY.value)
-        self.assertEqual(mock_llm.generate.call_count, 5)
+        self.assertEqual(mock_llm.generate.call_count, 6)
 
     @patch("analytics_platform.stakeholder.make_role_client")
     def test_sql_synthesis_falls_back_when_llm_declines(self, mock_make_role_client):
@@ -598,7 +609,7 @@ class TestStakeholder(unittest.TestCase):
 
         mock_llm = MagicMock()
         mock_llm.name = "mock_gateway"
-        mock_llm.generate.side_effect = [intent_resp, no_sql_resp, answer_resp]
+        mock_llm.generate.side_effect = [intent_resp, plan_resp(), no_sql_resp, answer_resp]
         mock_make_role_client.return_value = mock_llm
 
         self.ctx.tenants.set_analyst_config(self.tid, {
@@ -624,7 +635,7 @@ class TestStakeholder(unittest.TestCase):
         # intent + 3 synthesis attempts (all the same unsafe write, all rejected)
         # + final chart synthesis on the verbatim-reuse fallback path
         mock_llm.generate.side_effect = [
-            intent_resp, unsafe_sql_resp, unsafe_sql_resp, unsafe_sql_resp, answer_resp]
+            intent_resp, plan_resp(), unsafe_sql_resp, unsafe_sql_resp, unsafe_sql_resp, answer_resp]
         mock_make_role_client.return_value = mock_llm
 
         self.ctx.tenants.set_analyst_config(self.tid, {
@@ -634,7 +645,7 @@ class TestStakeholder(unittest.TestCase):
         res = self.ctx.stakeholder.answer(self.tid, "how many retail orders per month")
         self.assertEqual(res["answer_mode"], AnswerMode.REFRESHED_APPROVED_QUERY.value)
         self.assertNotIn("DELETE", " ".join(res["queries_run"]))
-        self.assertEqual(mock_llm.generate.call_count, 5)
+        self.assertEqual(mock_llm.generate.call_count, 6)
 
     @patch("analytics_platform.stakeholder.make_role_client")
     def test_sql_synthesis_falls_back_when_generated_sql_fails_execution(self, mock_make_role_client):
@@ -651,7 +662,7 @@ class TestStakeholder(unittest.TestCase):
         mock_llm = MagicMock()
         mock_llm.name = "mock_gateway"
         mock_llm.generate.side_effect = [
-            intent_resp, bad_column_resp, bad_column_resp, bad_column_resp, answer_resp]
+            intent_resp, plan_resp(), bad_column_resp, bad_column_resp, bad_column_resp, answer_resp]
         mock_make_role_client.return_value = mock_llm
 
         self.ctx.tenants.set_analyst_config(self.tid, {
@@ -660,7 +671,7 @@ class TestStakeholder(unittest.TestCase):
 
         res = self.ctx.stakeholder.answer(self.tid, "how many retail orders per month")
         self.assertEqual(res["answer_mode"], AnswerMode.REFRESHED_APPROVED_QUERY.value)
-        self.assertEqual(mock_llm.generate.call_count, 5)
+        self.assertEqual(mock_llm.generate.call_count, 6)
 
     def test_ensure_conversation_creates_then_reuses(self):
         svc = self.ctx.stakeholder
@@ -702,54 +713,36 @@ class TestStakeholder(unittest.TestCase):
         self.assertIsNone(svc.get_conversation(self.tid, cid))
         self.assertFalse(svc.delete_conversation(self.tid, cid))
 
-    def test_choose_compute_path_defaults_to_sql_when_nothing_cached(self):
-        mock_llm = MagicMock()
-        path, label = self.ctx.stakeholder._choose_compute_path(
-            mock_llm, self.tid, "no-such-conversation", "how many orders")
-        self.assertEqual(path, "sql")
-        self.assertEqual(label, "")
-        mock_llm.generate.assert_not_called()  # no point asking if nothing's cached
+    def _seed_reusable_cube(self, conversation_id, label="df_1"):
+        """Approve a base view and cache a cube over it, so a follow-up turn can
+        legitimately be served from the workspace.
 
-    def test_choose_compute_path_returns_python_when_llm_says_so_and_label_exists(self):
+        Before Task 11 any cached frame was a reuse candidate. Now a candidate
+        must carry the same population_hash as the turn's plan, so a test that
+        wants reuse has to establish a population first.
+        """
         import pandas as pd
+        from analytics_platform.domain import BaseView
+        from analytics_platform.execution.extract_store import ExtractMeta
+
+        registry = self.ctx.stakeholder.base_views
+        view = BaseView(grain_verified=True, name="order_events", grain=["order_id"],
+                        source_sql="SELECT order_id, revenue FROM events",
+                        dimension_columns=[], measure_columns=["revenue"],
+                        row_count_estimate=1000)
+        node = registry.upsert(self.tid, view, by="senior")
+        brain = self.ctx.pipeline.brain(self.tid)
+        brain.submit(node.id, by="junior")
+        brain.approve(node.id, by="senior")
         self.ctx.stakeholder.data_cache.put(
-            self.tid, "conv-1", "df_1", "orders by month", pd.DataFrame({"a": [1, 2]}))
-        mock_llm = MagicMock()
-        mock_llm.generate.return_value = MagicMock(
-            text='{"path": "python", "df_label": "df_1"}', tokens_in=5, tokens_out=5)
-
-        path, label = self.ctx.stakeholder._choose_compute_path(
-            mock_llm, self.tid, "conv-1", "what's the total")
-
-        self.assertEqual(path, "python")
-        self.assertEqual(label, "df_1")
-
-    def test_choose_compute_path_falls_back_to_sql_on_unknown_label(self):
-        import pandas as pd
-        self.ctx.stakeholder.data_cache.put(
-            self.tid, "conv-1", "df_1", "orders by month", pd.DataFrame({"a": [1, 2]}))
-        mock_llm = MagicMock()
-        mock_llm.generate.return_value = MagicMock(
-            text='{"path": "python", "df_label": "df_does_not_exist"}', tokens_in=5, tokens_out=5)
-
-        path, label = self.ctx.stakeholder._choose_compute_path(
-            mock_llm, self.tid, "conv-1", "what's the total")
-
-        self.assertEqual(path, "sql")
-        self.assertEqual(label, "")
-
-    def test_choose_compute_path_falls_back_to_sql_on_malformed_llm_response(self):
-        import pandas as pd
-        self.ctx.stakeholder.data_cache.put(
-            self.tid, "conv-1", "df_1", "orders by month", pd.DataFrame({"a": [1, 2]}))
-        mock_llm = MagicMock()
-        mock_llm.generate.return_value = MagicMock(text="not json at all", tokens_in=0, tokens_out=0)
-
-        path, label = self.ctx.stakeholder._choose_compute_path(
-            mock_llm, self.tid, "conv-1", "what's the total")
-
-        self.assertEqual(path, "sql")
-        self.assertEqual(label, "")
+            self.tid, conversation_id, label, "orders",
+            pd.DataFrame({"amount": [1, 2, 3], "revenue": [1, 2, 3]}),
+            meta=ExtractMeta(label=label, grain=["order_id"],
+                             columns=["amount", "revenue"], dimensions=[],
+                             base_view="order_events",
+                             population_hash=registry.population_hash(view),
+                             row_count=3, created_at="2026-08-15T00:00:00Z"))
+        return view
 
     def test_python_synthesis_repairs_after_policy_rejection(self):
         import pandas as pd
@@ -817,15 +810,13 @@ class TestStakeholder(unittest.TestCase):
         # fresh conversation instead) -- create a real one first, same as
         # test_answer_creates_and_reuses_conversation does, then seed the
         # DataFrame cache under that real id.
-        import pandas as pd
         cid = self.ctx.stakeholder._ensure_conversation(self.tid, "", "seed conversation")
-        self.ctx.stakeholder.data_cache.put(
-            self.tid, cid, "df_1", "orders", pd.DataFrame({"amount": [1, 2, 3]}))
+        self._seed_reusable_cube(cid)
         mock_llm = MagicMock()
         mock_llm.name = "mock_gateway"
         mock_llm.generate.side_effect = [
             MagicMock(text='{"category": "metric_lookup"}', tokens_in=5, tokens_out=5),
-            MagicMock(text='{"path": "python", "df_label": "df_1"}', tokens_in=5, tokens_out=5),
+            MagicMock(text=REUSE_PLAN, tokens_in=5, tokens_out=5),
             MagicMock(text="```python\nresult = int(df_1['amount'].sum())\n```", tokens_in=10, tokens_out=5),
             MagicMock(text='{"answer": "the total is 6"}', tokens_in=10, tokens_out=5),
         ]
@@ -844,15 +835,13 @@ class TestStakeholder(unittest.TestCase):
 
     @patch("analytics_platform.stakeholder.make_role_client")
     def test_get_conversation_includes_python_cells_after_reload(self, mock_make_role_client):
-        import pandas as pd
         cid = self.ctx.stakeholder._ensure_conversation(self.tid, "", "seed conversation")
-        self.ctx.stakeholder.data_cache.put(
-            self.tid, cid, "df_1", "orders", pd.DataFrame({"amount": [1, 2, 3]}))
+        self._seed_reusable_cube(cid)
         mock_llm = MagicMock()
         mock_llm.name = "mock_gateway"
         mock_llm.generate.side_effect = [
             MagicMock(text='{"category": "metric_lookup"}', tokens_in=5, tokens_out=5),
-            MagicMock(text='{"path": "python", "df_label": "df_1"}', tokens_in=5, tokens_out=5),
+            MagicMock(text=REUSE_PLAN, tokens_in=5, tokens_out=5),
             MagicMock(text="```python\nresult = int(df_1['amount'].sum())\n```", tokens_in=10, tokens_out=5),
             MagicMock(text='{"answer": "the total is 6"}', tokens_in=10, tokens_out=5),
         ]
@@ -883,12 +872,13 @@ class TestStakeholder(unittest.TestCase):
             # Turn 1: search-intent extraction -> SQL synthesis -> answer synthesis
             # (same shape as test_successful_sql_synthesis_caches_the_resulting_dataframe).
             MagicMock(text="retail orders", ok=True, tokens_in=10, tokens_out=5),
+            plan_resp(),
             MagicMock(text="```sql\nSELECT revenue FROM events WHERE action = 'order' LIMIT 10\n```",
                       tokens_in=20, tokens_out=10),
             MagicMock(text='{"answer": "here is the order data"}', tokens_in=15, tokens_out=8),
-            # Turn 2: search-intent extraction -> routing(python) -> python synthesis -> answer synthesis.
+            # Turn 2: search-intent extraction -> planning(reuse) -> python synthesis -> answer synthesis.
             MagicMock(text='{"category": "metric_lookup"}', tokens_in=10, tokens_out=5),
-            MagicMock(text='{"path": "python", "df_label": "df_1"}', tokens_in=5, tokens_out=5),
+            MagicMock(text=REUSE_PLAN, tokens_in=5, tokens_out=5),
             MagicMock(text="```python\nresult = int(df_1['revenue'].sum())\n```", tokens_in=10, tokens_out=5),
             MagicMock(text='{"answer": "the total is computed from what we already fetched"}',
                      tokens_in=10, tokens_out=5),
@@ -900,6 +890,7 @@ class TestStakeholder(unittest.TestCase):
             turn1 = self.ctx.stakeholder.answer(self.tid, "show me order amounts", conversation_id="")
             conv_id = turn1["conversation_id"]
             self.assertEqual(len(turn1["queries_run"]), 1)
+            self._seed_reusable_cube(conv_id)   # see the note on that helper
 
             # Ground truth computed from the cache itself, not hard-coded --
             # this test must pass regardless of what the fixture warehouse's
@@ -938,7 +929,7 @@ class TestStakeholder(unittest.TestCase):
 
         mock_llm = MagicMock()
         mock_llm.name = "mock_gateway"
-        mock_llm.generate.side_effect = [intent_resp, sql_resp, answer_resp]
+        mock_llm.generate.side_effect = [intent_resp, plan_resp(), sql_resp, answer_resp]
         mock_make_role_client.return_value = mock_llm
 
         self.ctx.tenants.set_analyst_config(self.tid, {
@@ -958,15 +949,13 @@ class TestStakeholder(unittest.TestCase):
         test_answer_routes_to_python_when_cache_hit_and_records_python_cells)
         doesn't itself populate the DataFrame cache, so produced_df_label
         should stay empty."""
-        import pandas as pd
         cid = self.ctx.stakeholder._ensure_conversation(self.tid, "", "seed conversation")
-        self.ctx.stakeholder.data_cache.put(
-            self.tid, cid, "df_1", "orders", pd.DataFrame({"amount": [1, 2, 3]}))
+        self._seed_reusable_cube(cid)
         mock_llm = MagicMock()
         mock_llm.name = "mock_gateway"
         mock_llm.generate.side_effect = [
             MagicMock(text='{"category": "metric_lookup"}', tokens_in=5, tokens_out=5),
-            MagicMock(text='{"path": "python", "df_label": "df_1"}', tokens_in=5, tokens_out=5),
+            MagicMock(text=REUSE_PLAN, tokens_in=5, tokens_out=5),
             MagicMock(text="```python\nresult = int(df_1['amount'].sum())\n```", tokens_in=10, tokens_out=5),
             MagicMock(text='{"answer": "the total is 6"}', tokens_in=10, tokens_out=5),
         ]
@@ -1005,6 +994,7 @@ class TestStakeholder(unittest.TestCase):
         mock_llm.name = "mock_gateway"
         mock_llm.generate.side_effect = [
             MagicMock(text="retail orders", ok=True, tokens_in=10, tokens_out=5),
+            plan_resp(),
             MagicMock(text="```sql\nSELECT revenue FROM events WHERE action = 'order' LIMIT 10\n```",
                       tokens_in=20, tokens_out=10),
             MagicMock(text='{"answer": "here is the revenue"}', tokens_in=15, tokens_out=8),
@@ -1016,10 +1006,11 @@ class TestStakeholder(unittest.TestCase):
 
         conv_id = turn1["conversation_id"]
         self.assertEqual(turn1["produced_df_label"], "df_1")
+        self._seed_reusable_cube(conv_id)      # see the note on that helper
 
         mock_llm.generate.side_effect = [
             MagicMock(text='{"category": "metric_lookup"}', tokens_in=5, tokens_out=5),
-            MagicMock(text='{"path": "python", "df_label": "df_1"}', tokens_in=5, tokens_out=5),
+            MagicMock(text=REUSE_PLAN, tokens_in=5, tokens_out=5),
             MagicMock(text="```python\nresult = int(df_1['revenue'].sum())\n```",
                       tokens_in=10, tokens_out=5),
             MagicMock(text='{"answer": "the total is 6"}', tokens_in=10, tokens_out=5),
@@ -1062,3 +1053,1368 @@ class TestConversationSchema(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# --------------------------------------------------------------------------- #
+# Task 11 -- _plan_turn: choose the population, state the cube
+# --------------------------------------------------------------------------- #
+class MockLLM:
+    """A live-looking client returning canned text, counting calls."""
+
+    name = "gateway"
+
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = 0
+        self.prompts = []
+        self.system_prompts = []
+
+    def generate(self, prompt="", system_prompt="", **kw):
+        from analytics_platform.llm.client import LLMResponse
+        self.calls += 1
+        self.prompts.append(prompt)
+        self.system_prompts.append(system_prompt)
+        if not self.responses:
+            raise AssertionError("the LLM was called more times than the test allows")
+        return LLMResponse(text=self.responses.pop(0), tokens_in=5, tokens_out=5)
+
+    @property
+    def last_prompt(self):
+        return self.prompts[-1] if self.prompts else ""
+
+    @property
+    def last_system_prompt(self):
+        return self.system_prompts[-1] if self.system_prompts else ""
+
+    @property
+    def exhausted(self):
+        return not self.responses
+
+
+class RecordingLLM(MockLLM):
+    """MockLLM that also keeps the `messages` thread it was handed."""
+
+    def __init__(self, responses):
+        super().__init__(responses)
+        self.last_messages = None
+
+    def generate(self, prompt="", system_prompt="", **kw):
+        self.last_messages = kw.get("messages")
+        return super().generate(prompt=prompt, system_prompt=system_prompt, **kw)
+
+
+REUSE_PLAN = ('{"base_view":"order_events","cube":{"dimensions":[],'
+              '"measures":[{"name":"revenue","expr":"SUM(revenue)"}],"filters":{}},'
+              '"analysis":"python"}')
+
+CUBE = ('{"base_view":"checkout_sessions","cube":{"dimensions":["device"],'
+        '"measures":[{"name":"revenue","expr":"SUM(revenue)"}],"filters":{}},'
+        '"analysis":"workspace_sql"}')
+
+TOO_WIDE = ('{"base_view":"checkout_sessions","cube":{"dimensions":["country","device","city"],'
+            '"measures":[{"name":"n","expr":"COUNT(*)"}]}}')
+
+# A proposed base is grain-probed in the same turn (Task 13), so a proposal
+# fixture has to be SQL that actually runs against the test warehouse AND is
+# genuinely one row per grain key -- which is what a base view claims to be.
+PROPOSAL = ('{"base_view":"guest_checkouts","propose_base_view":'
+            '{"name":"guest_checkouts","grain":["session_id"],'
+            '"source_sql":"SELECT session_id, MAX(region) AS country FROM events '
+            'GROUP BY session_id",'
+            '"dimension_columns":["country"],"measure_columns":["revenue"]},'
+            '"cube":{"dimensions":["country"],"measures":[]}}')
+
+
+class TestPlanTurn(unittest.TestCase):
+    def setUp(self):
+        from analytics_platform.domain import BaseView, ColumnProfile
+        from analytics_platform.schema_context import SchemaContext
+
+        self.ctx, self.base = app_ctx(warehouse=build_retail_warehouse())
+        self.tid = self.ctx.tenants.create_tenant("PlanCo").id
+        self.app = create_app(self.ctx)       # backfills ctx.stakeholder
+        self.svc = self.ctx.stakeholder
+        self.registry = self.svc.base_views
+
+        self.view = BaseView(
+            grain_verified=True, name="checkout_sessions", grain=["session_id"],
+            source_sql="SELECT session_id, country, device, city, service_line, revenue "
+                       "FROM orders WHERE is_test_traffic = false",
+            dimension_columns=["country", "device", "city", "service_line"],
+            measure_columns=["revenue"], row_count_estimate=1_200_000,
+            description="test traffic excluded")
+        self.profiles = {
+            c: ColumnProfile(column=c, dtype="object", distinct_count=n,
+                             null_fraction=0.0, values=[], values_complete=False)
+            for c, n in (("country", 30), ("device", 4), ("city", 4_000),
+                         ("service_line", 3))}
+        self.schema_ctx = SchemaContext(profiles=self.profiles, rendered="RENDERED")
+
+    def tearDown(self):
+        self.svc.workspace.close_all()
+        self.base.close()
+
+    def approve_view(self, view=None):
+        node = self.registry.upsert(self.tid, view or self.view, by="senior")
+        brain = self.ctx.pipeline.brain(self.tid)
+        brain.submit(node.id, by="junior")
+        brain.approve(node.id, by="senior")
+        return node
+
+    def plan(self, llm, question="q", conversation_id="c1", schema_ctx=None):
+        return self.svc._plan_turn(llm, self.tid, conversation_id, question, [], [],
+                                   schema_ctx=schema_ctx or self.schema_ctx)
+
+    # -- the division of labour ------------------------------------------------
+    def test_the_verdict_not_the_llm_sets_the_path(self):
+        """The LLM names the population and the cut; the DataManager decides
+        whether the workspace already covers it."""
+        import pandas as pd
+        from analytics_platform.execution.extract_store import ExtractMeta
+        self.approve_view()
+        pop = self.registry.population_hash(self.view)
+        self.svc.data_cache.put(
+            self.tid, "c1", "df_1", "sessions by device and country",
+            pd.DataFrame({"device": ["ios"], "country": ["DE"], "revenue": [1]}),
+            meta=ExtractMeta(label="df_1", grain=["session_id"],
+                             columns=["device", "country", "revenue"],
+                             dimensions=["device", "country"], population_hash=pop,
+                             base_view="checkout_sessions", row_count=1,
+                             created_at="2026-08-15T00:00:00Z"))
+        plan = self.plan(MockLLM([CUBE]), "break that down by device")
+        self.assertEqual(plan.path, "reuse")
+        self.assertEqual(plan.df_label, "df_1")
+        self.assertEqual(plan.analysis, "workspace_sql")
+
+    def test_the_population_hash_comes_from_the_base_not_the_llm(self):
+        """An LLM-supplied hash would let a bad plan claim a reconcilability it
+        does not have."""
+        self.approve_view()
+        plan = self.plan(MockLLM([CUBE]))
+        self.assertEqual(plan.requirement.population_hash,
+                         self.registry.population_hash(self.view))
+
+    def test_a_cube_the_workspace_cannot_cover_becomes_retrieve(self):
+        self.approve_view()
+        llm = MockLLM([CUBE])
+        plan = self.plan(llm, "how did revenue trend?")
+        self.assertEqual(plan.path, "retrieve")
+        self.assertEqual(plan.grain, ["session_id"])
+        self.assertEqual(llm.calls, 1)   # regression guard: the old router returned early
+
+    def test_the_planner_is_called_even_with_an_empty_workspace(self):
+        """The key difference from the old router, which short-circuited to 'sql'
+        whenever nothing was cached -- which is why two SQLs and zero Python
+        appeared in the reported run."""
+        self.approve_view()
+        llm = MockLLM([CUBE])
+        self.plan(llm)
+        self.assertEqual(llm.calls, 1)
+
+    def test_an_approved_base_is_not_marked_provisional(self):
+        self.approve_view()
+        self.assertTrue(self.plan(MockLLM([CUBE])).base_view_approved)
+
+    # -- failure handling ------------------------------------------------------
+    def test_an_unknown_base_view_name_is_a_parse_failure(self):
+        self.approve_view()
+        plan = self.plan(MockLLM(['{"base_view":"nope","cube":{"dimensions":[]}}']))
+        self.assertEqual(plan.path, "aggregate")
+        self.assertIsNone(plan.base_view)
+
+    def test_plan_turn_falls_back_to_aggregate_on_garbage(self):
+        """Deliberately NOT retrieve: with no resolved base there is no population
+        to retrieve over, and inventing one produces an unreconcilable number
+        silently. The aggregate path at least declares itself."""
+        p = self.plan(MockLLM(["not json at all"]))
+        self.assertEqual(p.path, "aggregate")
+        self.assertIsNone(p.base_view)
+
+    def test_plan_turn_falls_back_to_aggregate_when_the_llm_errors(self):
+        class Boom:
+            name = "gateway"
+
+            def generate(self, *a, **k):
+                raise RuntimeError("gateway down")
+
+        self.assertEqual(self.plan(Boom()).path, "aggregate")
+
+    def test_aggregate_only_overrides_the_verdict(self):
+        self.approve_view()
+        llm = MockLLM(['{"base_view":"checkout_sessions","cube":{"dimensions":[],'
+                       '"measures":[{"name":"revenue","expr":"SUM(revenue)"}]},'
+                       '"aggregate_only":true,"analysis":"python"}'])
+        self.assertEqual(self.plan(llm, "total revenue?").path, "aggregate")
+
+    # -- the cell guard --------------------------------------------------------
+    def test_a_cube_over_the_cell_limit_is_re_prompted_with_the_culprit(self):
+        """The guard refuses; the LLM is told which dimension is the problem, not
+        just 'no'. Silently dropping one on the model's behalf would answer a
+        question nobody asked."""
+        self.approve_view()
+        llm = MockLLM([TOO_WIDE,
+                       '{"base_view":"checkout_sessions","cube":{"dimensions":["country","device"],'
+                       '"measures":[{"name":"n","expr":"COUNT(*)"}]}}'])
+        plan = self.plan(llm)
+        self.assertEqual(llm.calls, 2)
+        self.assertIn("city", llm.prompts[1])
+        self.assertEqual(plan.cube.dimensions, ["country", "device"])
+        self.assertTrue(plan.cube_sql.ok)
+
+    def test_a_cube_that_cannot_be_shrunk_falls_back_to_aggregate(self):
+        self.approve_view()
+        self.assertEqual(self.plan(MockLLM([TOO_WIDE, TOO_WIDE])).path, "aggregate")
+
+    # -- proposing a base view -------------------------------------------------
+    def test_a_proposed_base_view_is_stored_as_draft_and_marked_provisional(self):
+        llm = MockLLM([PROPOSAL])
+        plan = self.plan(llm, "guest revenue by country")
+        self.assertEqual(plan.base_view.name, "guest_checkouts")
+        self.assertIs(plan.base_view_approved, False)
+        self.assertIsNotNone(
+            self.registry.get(self.tid, "guest_checkouts", approved_only=False))
+        self.assertIsNone(self.registry.get(self.tid, "guest_checkouts"))   # not approved
+
+    def test_a_proposal_carries_a_provisional_caveat(self):
+        plan = self.plan(MockLLM([PROPOSAL]), "guest revenue by country")
+        self.assertTrue(any("provisional" in c for c in plan.caveats), plan.caveats)
+
+    def test_an_approved_view_is_preferred_over_a_draft_of_the_same_name(self):
+        self.approve_view()
+        self.registry.upsert(self.tid, self.view, by="planner")   # touches the same node
+        self.assertTrue(self.plan(MockLLM([CUBE])).base_view_approved)
+
+    # -- measures --------------------------------------------------------------
+    def test_avg_is_accepted_and_arrives_additive(self):
+        self.approve_view()
+        llm = MockLLM(['{"base_view":"checkout_sessions","cube":{"dimensions":["country"],'
+                       '"measures":[{"name":"revenue","expr":"AVG(revenue)"}]}}'])
+        plan = self.plan(llm, "average revenue by country")
+        self.assertEqual(plan.cube_sql.non_additive, [])
+        self.assertIn("revenue_sum", plan.cube_sql.sql)
+        self.assertNotIn("AVG(", plan.cube_sql.sql)
+
+    def test_a_distinct_count_is_flagged_non_additive_on_the_plan(self):
+        self.approve_view()
+        llm = MockLLM(['{"base_view":"checkout_sessions","cube":{"dimensions":["country"],'
+                       '"measures":[{"name":"users","expr":"COUNT(DISTINCT user_id)"}]}}'])
+        self.assertEqual(self.plan(llm).cube_sql.non_additive, ["users"])
+
+    # -- attribution is inherited, never restated ------------------------------
+    def test_attribution_on_an_existing_base_is_inherited_not_restated(self):
+        """Two questions applying two rankings to the same sessions is exactly the
+        failure the base exists to prevent, so an attributions array the planner
+        emits over an existing base is ignored."""
+        from analytics_platform.domain import AttributionRule, BaseView
+        import dataclasses
+        attributed = dataclasses.replace(self.view, attributions=[AttributionRule(
+            column="service_line", grain=["session_id"], strategy="highest_intent",
+            priority_values=["mobile", "fixed", "ott"], source="brain")])
+        self.approve_view(attributed)
+        llm = MockLLM(['{"base_view":"checkout_sessions","cube":{"dimensions":["service_line"],'
+                       '"measures":[]},"attributions":[{"column":"service_line",'
+                       '"grain":["session_id"],"strategy":"latest"}]}'])
+        plan = self.plan(llm)
+        self.assertEqual(plan.attributions, [])                             # ignored
+        self.assertEqual(plan.base_view.attributions[0].strategy, "highest_intent")
+
+    def test_a_proposed_base_view_may_carry_attribution_rules(self):
+        llm = MockLLM(['''{"base_view":"events_by_session","propose_base_view":{
+            "name":"events_by_session","grain":["session_id"],
+            "source_sql":"SELECT session_id, MAX(region) AS service_line FROM events GROUP BY session_id",
+            "dimension_columns":["service_line"],"measure_columns":[]},
+            "cube":{"dimensions":["service_line"],"measures":[]},
+            "attributions":[{"column":"service_line","grain":["session_id"],
+                             "strategy":"highest_intent",
+                             "priority_values":["mobile","fixed","ott"],
+                             "tiebreakers":["event_count DESC","log_time DESC"],
+                             "source":"brain"}]}'''])
+        plan = self.plan(llm)
+        self.assertEqual(plan.base_view.attributions[0].priority_values,
+                         ["mobile", "fixed", "ott"])
+
+    def test_a_proposed_base_with_a_fanned_out_column_and_no_rule_gets_a_default(self):
+        """service_line fans out and the proposal ignored it. Carrying it onto the
+        grain silently would double-count, so a most_frequent rule is synthesized
+        and marked as a default rather than a business decision."""
+        from analytics_platform.domain import ColumnProfile
+        from analytics_platform.schema_context import SchemaContext
+        profiles = dict(self.profiles)
+        profiles["service_line"] = ColumnProfile(
+            column="service_line", dtype="object", distinct_count=3, null_fraction=0.0,
+            values=["mobile", "fixed", "ott"], values_complete=True,
+            fanout_by_key={"session_id": 0.06})
+        ctx = SchemaContext(profiles=profiles, rendered="RENDERED")
+        llm = MockLLM(['{"base_view":"events_by_session","propose_base_view":{'
+                       '"name":"events_by_session","grain":["session_id"],'
+                       '"source_sql":"SELECT session_id, MAX(region) AS service_line FROM events GROUP BY session_id",'
+                       '"dimension_columns":["service_line"],"measure_columns":[]},'
+                       '"cube":{"dimensions":["service_line"],"measures":[]}}'])
+        plan = self.plan(llm, schema_ctx=ctx)
+        rule = next(a for a in plan.base_view.attributions if a.column == "service_line")
+        self.assertEqual(rule.strategy, "most_frequent")
+        self.assertEqual(rule.source, "default")
+
+    # -- the prompt ------------------------------------------------------------
+    def test_plan_turn_prompt_carries_the_rendered_context(self):
+        self.approve_view()
+        llm = MockLLM([CUBE])
+        self.plan(llm)
+        self.assertIn("RENDERED", llm.last_system_prompt + llm.last_prompt)
+
+    def test_the_verdict_reason_survives_onto_the_plan(self):
+        import pandas as pd
+        from analytics_platform.execution.extract_store import ExtractMeta
+        self.approve_view()
+        pop = self.registry.population_hash(self.view)
+        self.svc.data_cache.put(
+            self.tid, "c1", "df_1", "by device",
+            pd.DataFrame({"device": ["ios"], "revenue": [1]}),
+            meta=ExtractMeta(label="df_1", grain=["session_id"],
+                             columns=["device", "revenue"], dimensions=["device"],
+                             population_hash=pop, base_view="checkout_sessions",
+                             row_count=1, created_at="2026-08-15T00:00:00Z"))
+        self.assertIn("df_1", self.plan(MockLLM([CUBE])).verdict.reason)
+
+
+# --------------------------------------------------------------------------- #
+# Task 12 -- execute the composed cube; LLM SQL only on the aggregate path
+# --------------------------------------------------------------------------- #
+class SpyExecutor:
+    """Records every round trip and can be scripted with per-page row counts."""
+
+    def __init__(self):
+        self.all_sql = []
+        self.all_ctx = []
+        self.pages = None
+        self.error = ""
+        self.fail_first = 0
+        self.columns = ["country", "device", "revenue"]
+        # Task 13: every base is grain-probed once per population_hash before a
+        # cube is composed over it. A clean base by default; probe_returns()
+        # makes it fan out.
+        self.probe_rows = 1_200_000
+        self.probe_keys = 1_200_000
+        self.probe_call_count = 0
+        self.probe_fails = False
+        self.duplicate_keys = False
+
+    def probe_returns(self, rows, keys):
+        self.probe_rows, self.probe_keys = rows, keys
+
+    def returns_pages(self, *counts):
+        self.pages = list(counts)
+
+    def always_fails(self, error):
+        self.error = error
+
+    def fails_then_succeeds(self, error):
+        self.error = error
+        self.fail_first = 1
+
+    @property
+    def call_count(self):
+        return len(self.all_sql)
+
+    @property
+    def last_sql(self):
+        return self.all_sql[-1] if self.all_sql else ""
+
+    @property
+    def last_ctx(self):
+        return self.all_ctx[-1] if self.all_ctx else None
+
+    def supports(self, ctx):
+        return True
+
+    def session_status(self, tenant_id):
+        from analytics_platform.execution.base import SessionStatus
+        return SessionStatus(state="valid", tenant_id=tenant_id)
+
+    def execute(self, sql, ctx):
+        import pandas as pd
+        from analytics_platform.execution.base import QueryResult
+        if "key_count" in sql:
+            # The grain probe is a round trip like any other, but it is not one
+            # of the cube's pages -- counting it in all_sql would make every
+            # paging assertion off by one.
+            self.probe_call_count += 1
+            if self.probe_fails:
+                return QueryResult(ok=False, error="probe failed")
+            return QueryResult(
+                ok=True, row_count=1, columns=["row_count", "key_count"],
+                data=pd.DataFrame({"row_count": [self.probe_rows],
+                                   "key_count": [self.probe_keys]}))
+        self.all_sql.append(sql)
+        self.all_ctx.append(ctx)
+        if self.error:
+            if self.fail_first and len(self.all_sql) > self.fail_first:
+                pass
+            else:
+                return QueryResult(ok=False, error=self.error)
+        n = self.pages.pop(0) if self.pages else 1
+        # Return the columns the composed cube actually selected -- a keyset page
+        # cursors on them, so a fixture that hardcodes a different set tests
+        # nothing about paging.
+        cols = {}
+        for i, c in enumerate(self.columns):
+            span = 1 if self.duplicate_keys else (7 - i)
+            cols[c] = (list(range(n)) if c == "revenue"
+                       else [f"{c[:2]}{j % span}" for j in range(n)])
+        df = pd.DataFrame(cols, columns=list(self.columns))
+        return QueryResult(ok=True, data=df, row_count=n, columns=list(df.columns))
+
+    def cancel(self, execution_id):
+        return True
+
+
+class TestExecuteCube(unittest.TestCase):
+    def setUp(self):
+        from analytics_platform.domain import (BaseView, ColumnProfile, CubeMeasure,
+                                               CubeSpec, TurnPlan)
+        from analytics_platform.schema_context import SchemaContext
+
+        self.ctx, self.base = app_ctx()
+        self.tid = self.ctx.tenants.create_tenant("CubeCo").id
+        self.app = create_app(self.ctx)
+        self.svc = self.ctx.stakeholder
+        self.spy = SpyExecutor()
+        self.svc.executor = self.spy
+        self.ctx.tenants.add_datasource(self.tid, "Orders", DataSourceKind.DIRECT_DB,
+                                        dialect="athena", tables=["orders"])
+
+        self.view = BaseView(
+            grain_verified=True, name="checkout_sessions", grain=["session_id"],
+            source_sql="SELECT session_id, country, device, revenue FROM orders "
+                       "WHERE is_test_traffic = false",
+            dimension_columns=["country", "device", "date"], measure_columns=["revenue"],
+            time_column="date", row_count_estimate=1_200_000)
+        self.profiles = {c: ColumnProfile(column=c, dtype="object", distinct_count=n,
+                                          null_fraction=0.0, values=[], values_complete=False)
+                         for c, n in (("country", 30), ("device", 4), ("date", 400))}
+        self.schema_ctx = SchemaContext(profiles=self.profiles, rendered="RENDERED")
+
+    def tearDown(self):
+        self.svc.workspace.close_all()
+        self.base.close()
+
+    def _plan(self, path="retrieve", dimensions=("country",), approved=True,
+              verdict=None, **spec_kw):
+        from analytics_platform.domain import CubeMeasure, CubeSpec, TurnPlan
+        spec = CubeSpec(base_name=self.view.name, dimensions=list(dimensions),
+                        measures=[CubeMeasure("revenue", "SUM(revenue)", True)], **spec_kw)
+        cube_sql = self.svc.base_views.compose_cube(self.view, spec, self.profiles)
+        return TurnPlan(path=path, base_view=self.view, base_view_approved=approved,
+                        cube=spec, cube_sql=cube_sql, grain=["session_id"],
+                        dimensions=list(dimensions), profiles=dict(self.profiles),
+                        verdict=verdict)
+
+    def run_sql(self, plan, llm=None, **kw):
+        return self.svc._synthesize_and_execute_sql(
+            llm or MockLLM([]), self.tid, "q", [], [], plan=plan, **kw)
+
+    # -- the cube paths do not synthesize -------------------------------------
+    def test_a_retrieve_path_never_calls_the_sql_llm(self):
+        """The base is governed. Re-authoring it would change the population_hash,
+        which breaks the one thing the base exists to guarantee."""
+        llm = MockLLM([])            # any call raises
+        self.run_sql(self._plan(), llm=llm)
+        self.assertEqual(llm.calls, 0)
+
+    def test_the_executed_sql_is_the_composed_cube_byte_for_byte(self):
+        plan = self._plan()
+        self.run_sql(plan)
+        self.assertIn(self.view.source_sql, self.spy.last_sql)
+        self.assertTrue(self.spy.last_sql.startswith("WITH base AS ("))
+
+    def test_each_round_trip_is_bounded_by_the_transport_ceiling(self):
+        """Not raw_extract_row_limit -- the policy rejects that outright, rightly."""
+        self.run_sql(self._plan())
+        self.assertEqual(self.spy.last_ctx.row_limit,
+                         self.svc.settings.policy.max_transport_rows)
+
+    def test_the_composed_sql_still_goes_through_policy(self):
+        self.run_sql(self._plan())
+        self.assertIn("LIMIT", self.spy.last_sql.upper())
+
+    # -- paging ---------------------------------------------------------------
+    def _wide_plan(self):
+        """estimated_cells = 30 x 400 = 12,000 cells; force paging by lowering the
+        transport ceiling rather than by inventing a bigger fixture."""
+        self.svc.settings.policy.max_transport_rows = 50
+        self.svc.settings.policy.extract_chunk_rows = 50
+        self.spy.columns = ["country", "date", "revenue"]
+        return self._plan(dimensions=["country", "date"])
+
+    def test_a_cube_larger_than_the_transport_is_paged(self):
+        plan = self._wide_plan()
+        self.spy.returns_pages(50, 50, 20)
+        _, res, _ = self.run_sql(plan)
+        self.assertEqual(self.spy.call_count, 3)
+        self.assertEqual(len(res.data), 120)
+        self.assertFalse(res.truncated)
+
+    def test_paging_stops_on_a_short_page_not_on_the_estimate(self):
+        """The estimate is an estimate. The real stop condition is a short page."""
+        plan = self._wide_plan()
+        self.spy.returns_pages(50, 10)
+        _, res, _ = self.run_sql(plan)
+        self.assertEqual(self.spy.call_count, 2)
+        self.assertEqual(len(res.data), 60)
+
+    def test_a_full_final_page_forces_one_more_trip(self):
+        """A page exactly chunk_rows long is not evidence of completeness."""
+        plan = self._wide_plan()
+        self.spy.returns_pages(50, 50, 0)
+        self.run_sql(plan)
+        self.assertEqual(self.spy.call_count, 3)
+
+    def test_paging_stops_at_the_materialised_ceiling_and_says_so(self):
+        plan = self._wide_plan()
+        self.svc.settings.policy.raw_extract_row_limit = 100
+        self.spy.returns_pages(50, 50, 50)
+        _, res, _ = self.run_sql(plan)
+        self.assertEqual(len(res.data), 100)
+        self.assertTrue(res.truncated)
+        self.assertTrue(any("truncated" in w for w in res.warnings), res.warnings)
+
+    def test_every_page_is_recorded_not_just_the_last(self):
+        """The return signature carries one SQL string, so a 12-trip fetch used
+        to look exactly like a 1-trip fetch in the audit trail -- nothing in the
+        record said how much had been pulled, or that paging happened at all."""
+        plan = self._wide_plan()
+        self.spy.returns_pages(50, 50, 20)
+        _, res, _ = self.run_sql(plan)
+        self.assertEqual(len(self.svc._sql_pages), 3)
+        # The spy replays identical rows, so pages 2 and 3 resume from the same
+        # cursor. What must hold is that the first page carries no cursor and
+        # the later ones do -- i.e. real paging SQL was recorded, not one query
+        # repeated three times.
+        first, second = self.svc._sql_pages[0], self.svc._sql_pages[1]
+        self.assertNotEqual(first, second)
+        self.assertNotIn(">", first.split("WHERE")[-1] if "WHERE" in first else "")
+        self.assertIn(">", second)
+
+    def test_a_paged_fetch_says_how_many_trips_it_took(self):
+        plan = self._wide_plan()
+        self.spy.returns_pages(50, 50, 20)
+        _, res, _ = self.run_sql(plan)
+        self.assertTrue(any("3 keyset pages" in w for w in res.warnings), res.warnings)
+
+    def test_a_single_page_fetch_is_not_announced_as_paged(self):
+        plan = self._wide_plan()
+        self.spy.returns_pages(10)
+        _, res, _ = self.run_sql(plan)
+        self.assertEqual(len(self.svc._sql_pages), 1)
+        self.assertFalse(any("keyset pages" in w for w in res.warnings), res.warnings)
+
+    def test_no_page_ever_uses_offset(self):
+        """Athena rescans from the top on every OFFSET page: quadratic, and on a
+        changing table it silently skips and duplicates rows."""
+        plan = self._wide_plan()
+        self.spy.returns_pages(50, 10)
+        self.run_sql(plan)
+        self.assertTrue(all("OFFSET" not in s.upper() for s in self.spy.all_sql))
+        self.assertIn(">", self.spy.all_sql[1])          # the cursor predicate
+
+    def test_the_cursor_is_the_last_rows_dimension_tuple(self):
+        plan = self._wide_plan()
+        self.spy.returns_pages(50, 10)
+        self.run_sql(plan)
+        self.assertIn("(country, date)", self.spy.all_sql[1])
+
+    # -- widen ----------------------------------------------------------------
+    def test_a_widen_on_a_missing_dimension_re_runs_the_whole_cube(self):
+        """Adding `device` re-splits every existing country cell -- there is no
+        'just the device part' to fetch."""
+        from analytics_platform.data_manager import CoverageVerdict
+        plan = self._plan(path="widen", dimensions=["country", "device"],
+                          verdict=CoverageVerdict(decision="widen", label="df_1",
+                                                  missing_dimensions=["device"],
+                                                  supersedes="df_1"))
+        self.run_sql(plan)
+        self.assertIn("GROUP BY 1, 2", self.spy.last_sql)
+        self.assertNotIn("df_1", self.spy.last_sql)      # not a delta query
+
+    def test_a_widen_on_a_time_gap_only_fetches_the_missing_window(self):
+        """Cells over disjoint date ranges are disjoint and additive, so this one
+        IS a gap fetch."""
+        from analytics_platform.data_manager import CoverageVerdict
+        plan = self._plan(path="widen", dimensions=["country"], time_column="date",
+                          time_start="2026-08-01", time_end="2026-08-31",
+                          verdict=CoverageVerdict(
+                              decision="widen", label="df_1",
+                              missing_time_ranges=[("2026-07-01", "2026-07-31")]))
+        self.run_sql(plan)
+        sql = self.spy.last_sql
+        self.assertIn("2026-07-01", sql)
+        self.assertIn("2026-07-31", sql)
+        self.assertNotIn("2026-08", sql)                 # August is already on disk
+
+    # -- failure ownership ----------------------------------------------------
+    def test_a_failing_approved_base_is_surfaced_not_rewritten(self):
+        """An approved base is a human-owned artifact. Patching it silently would
+        make its population_hash describe SQL that never ran."""
+        plan = self._plan(approved=True)
+        self.spy.always_fails("COLUMN_NOT_FOUND: revenue")
+        _, res, _ = self.run_sql(plan)
+        self.assertTrue(res is None or not res.ok)
+        self.assertTrue(any("needs review" in c and "checkout_sessions" in c
+                            for c in plan.caveats), plan.caveats)
+        self.assertEqual(self.spy.call_count, 1)         # no blind retry
+
+    def test_a_failing_draft_base_may_be_repaired_once(self):
+        """The LLM authored this source_sql minutes ago and nobody reviewed it."""
+        plan = self._plan(approved=False)
+        self.spy.fails_then_succeeds("COLUMN_NOT_FOUND: revenu")
+        llm = MockLLM(['{"base_view":"checkout_sessions","propose_base_view":'
+                       '{"name":"checkout_sessions","grain":["session_id"],'
+                       '"source_sql":"SELECT session_id, country, revenue FROM orders",'
+                       '"dimension_columns":["country"],"measure_columns":["revenue"]},'
+                       '"cube":{"dimensions":["country"],'
+                       '"measures":[{"name":"revenue","expr":"SUM(revenue)"}]}}'])
+        _, res, _ = self.run_sql(plan, llm=llm, schema_ctx=self.schema_ctx)
+        self.assertTrue(res is not None and res.ok)
+        self.assertEqual(llm.calls, 1)
+        self.assertIn("COLUMN_NOT_FOUND", llm.prompts[0])   # fed back verbatim
+
+    def test_a_repair_that_fails_again_falls_back(self):
+        plan = self._plan(approved=False)
+        self.spy.always_fails("boom")
+        llm = MockLLM(['{"base_view":"checkout_sessions","propose_base_view":'
+                       '{"name":"checkout_sessions","grain":["session_id"],'
+                       '"source_sql":"SELECT session_id, country FROM orders",'
+                       '"dimension_columns":["country"],"measure_columns":["revenue"]},'
+                       '"cube":{"dimensions":["country"],'
+                       '"measures":[{"name":"revenue","expr":"SUM(revenue)"}]}}'])
+        _, res, _ = self.run_sql(plan, llm=llm, schema_ctx=self.schema_ctx)
+        self.assertTrue(res is None or not res.ok)
+        self.assertEqual(self.spy.call_count, 2)         # original + one repair
+
+    # -- the aggregate path ---------------------------------------------------
+    def test_the_aggregate_path_still_calls_the_llm(self):
+        from analytics_platform.domain import TurnPlan
+        llm = MockLLM(["```sql\nSELECT 1\n```"])
+        self.svc._synthesize_sql(llm, "q", [], [], plan=TurnPlan(path="aggregate"))
+        self.assertEqual(llm.calls, 1)
+
+    def test_mandatory_metric_filters_are_demanded_in_the_prompt(self):
+        from analytics_platform.domain import TurnPlan
+        from analytics_platform.schema_context import SchemaContext
+        llm = MockLLM(["```sql\nSELECT 1\n```"])
+        ctx = SchemaContext(rendered="ALWAYS APPLY: is_test_traffic = false")
+        self.svc._synthesize_sql(llm, "conversion by country", [], [],
+                                 plan=TurnPlan(path="aggregate"), schema_ctx=ctx)
+        self.assertIn("ALWAYS APPLY: is_test_traffic = false",
+                      llm.last_system_prompt + llm.last_prompt)
+
+    def test_the_aggregate_prompt_says_the_result_is_unreconcilable(self):
+        from analytics_platform.domain import TurnPlan
+        llm = MockLLM(["```sql\nSELECT 1\n```"])
+        self.svc._synthesize_sql(llm, "q", [], [], plan=TurnPlan(path="aggregate"),
+                                 schema_ctx=self.schema_ctx)
+        self.assertIn("cannot be reconciled", llm.last_system_prompt)
+
+    def test_the_aggregate_prompt_ranks_semantics_over_the_examples(self):
+        from analytics_platform.domain import TurnPlan
+        llm = MockLLM(["```sql\nSELECT 1\n```"])
+        self.svc._synthesize_sql(llm, "q", [], [], plan=TurnPlan(path="aggregate"),
+                                 schema_ctx=self.schema_ctx)
+        self.assertIn("semantics win over schema", llm.last_system_prompt)
+
+    def test_no_plan_and_no_schema_ctx_is_todays_prompt_exactly(self):
+        """The regression guard for every existing test in this module."""
+        llm = MockLLM(["```sql\nSELECT 1\n```"])
+        self.svc._synthesize_sql(llm, "q", [], [])
+        self.assertNotIn("BUSINESS SEMANTICS", llm.last_system_prompt)
+        self.assertNotIn("cannot be reconciled", llm.last_system_prompt)
+
+
+class TestAttributionPattern(unittest.TestCase):
+    """The only moment an LLM writes attribution SQL is when it is authoring a
+    proposed base view. Render the actual CTE -- a model copies structure far more
+    reliably than it follows prose."""
+
+    def setUp(self):
+        self.ctx, self.base = app_ctx()
+        self.app = create_app(self.ctx)
+        self.svc = self.ctx.stakeholder
+
+    def tearDown(self):
+        self.base.close()
+
+    def test_attribution_pattern_renders_a_ranked_case_and_row_number(self):
+        from analytics_platform.domain import AttributionRule
+        p = self.svc._render_attribution_pattern([AttributionRule(
+            column="service_line", grain=["session_id"], strategy="highest_intent",
+            priority_values=["mobile", "fixed", "ott"],
+            tiebreakers=["event_count DESC", "log_time DESC"])])
+        self.assertIn("ROW_NUMBER() OVER", p)
+        self.assertIn("PARTITION BY session_id", p)
+        self.assertIn("WHEN 'mobile' THEN 1", p)
+        self.assertIn("WHEN 'ott' THEN 3", p)
+
+    def test_most_frequent_strategy_omits_the_priority_case(self):
+        from analytics_platform.domain import AttributionRule
+        p = self.svc._render_attribution_pattern([AttributionRule(
+            column="category", grain=["session_id"], strategy="most_frequent")])
+        self.assertNotIn("CASE category", p)
+        self.assertIn("event_count DESC", p)
+
+    def test_the_pattern_demands_the_base_end_at_its_grain(self):
+        from analytics_platform.domain import AttributionRule
+        p = self.svc._render_attribution_pattern([AttributionRule(
+            column="category", grain=["session_id"], strategy="most_frequent")])
+        self.assertIn("rn = 1", p)
+        self.assertIn("distinct count of the grain", p)
+
+    def test_no_rules_means_no_pattern_block(self):
+        self.assertEqual(self.svc._render_attribution_pattern([]), "")
+
+    def test_the_proposal_prompt_carries_the_worked_pattern(self):
+        """A base view proposed over a fanned-out column must be told the shape,
+        not the theory."""
+        from analytics_platform.domain import ColumnProfile
+        from analytics_platform.schema_context import SchemaContext
+        tid = self.ctx.tenants.create_tenant("FanCo").id
+        ctx = SchemaContext(profiles={"service_line": ColumnProfile(
+            column="service_line", dtype="object", distinct_count=3, null_fraction=0.0,
+            values=["mobile"], values_complete=True,
+            fanout_by_key={"session_id": 0.06})}, rendered="R")
+        llm = MockLLM(['{"base_view":"x","cube":{"dimensions":[],"measures":[]}}'])
+        self.svc._plan_turn(llm, tid, "c1", "revenue by service line", [], [],
+                            schema_ctx=ctx)
+        self.assertIn("ROW_NUMBER() OVER", llm.last_system_prompt)
+
+
+# --------------------------------------------------------------------------- #
+# Ask when no timeframe is given
+#
+# The planner used to proceed on whatever window the LLM inferred, so a question
+# that named no timeframe silently got a default nobody chose -- and the answer
+# read as though the user had asked for exactly that period. The base view
+# deliberately carries no date filter, which makes this worse rather than
+# better: with no window baked in anywhere, an unstated timeframe means the
+# whole of history unless somebody says otherwise.
+# --------------------------------------------------------------------------- #
+NO_TIMEFRAME_PLAN = (
+    '{"base_view":"checkout_sessions","timeframe_stated":false,'
+    '"cube":{"dimensions":[],"measures":[{"name":"n","expr":"COUNT(*)"}],'
+    '"filters":{},"time_column":"date"},"analysis":"python"}')
+
+STATED_TIMEFRAME_PLAN = (
+    '{"base_view":"checkout_sessions","timeframe_stated":true,'
+    '"cube":{"dimensions":[],"measures":[{"name":"n","expr":"COUNT(*)"}],'
+    '"filters":{},"time_column":"date","time_start":"2026-07-19",'
+    '"time_end":"2026-08-17"},"analysis":"python"}')
+
+SILENT_TIMEFRAME_PLAN = (
+    '{"base_view":"checkout_sessions",'
+    '"cube":{"dimensions":[],"measures":[{"name":"n","expr":"COUNT(*)"}],'
+    '"filters":{},"time_column":"date"},"analysis":"python"}')
+
+
+class TestTimeframeClarification(unittest.TestCase):
+    def setUp(self):
+        from analytics_platform.domain import BaseView, ColumnProfile
+        from analytics_platform.schema_context import SchemaContext
+
+        self.ctx, self.base = app_ctx()
+        self.tid = self.ctx.tenants.create_tenant("ClarifyCo").id
+        self.app = create_app(self.ctx)
+        self.svc = self.ctx.stakeholder
+        self.spy = SpyExecutor()
+        self.svc.executor = self.spy
+        self.ctx.tenants.add_datasource(self.tid, "Orders", DataSourceKind.DIRECT_DB,
+                                        dialect="athena", tables=["orders"])
+
+        self.view = BaseView(
+            grain_verified=True, name="checkout_sessions", grain=["session_id"],
+            source_sql="SELECT session_id, country, date, revenue FROM orders",
+            dimension_columns=["country"], measure_columns=["revenue"],
+            time_column="date", row_count_estimate=1_200_000)
+        self.view.grain_checked_hash = self.svc.base_views.population_hash(self.view)
+        self.profiles = {
+            "country": ColumnProfile(column="country", dtype="object", distinct_count=30,
+                                     null_fraction=0.0, values=[], values_complete=False),
+            "date": ColumnProfile(column="date", dtype="date", distinct_count=443,
+                                  null_fraction=0.0, values=[], values_complete=False,
+                                  min_value="2025-06-01", max_value="2026-08-17"),
+        }
+        self.schema_ctx = SchemaContext(profiles=self.profiles, rendered="RENDERED")
+        self.approve_view()
+
+    def tearDown(self):
+        self.svc.workspace.close_all()
+        self.base.close()
+
+    def approve_view(self):
+        node = self.svc.base_views.upsert(self.tid, self.view, by="senior")
+        if node.status.is_usable():
+            # time_column is not part of the population_hash, so editing it
+            # leaves the approval standing and re-submitting would be illegal.
+            return node
+        brain = self.ctx.pipeline.brain(self.tid)
+        brain.submit(node.id, by="junior")
+        brain.approve(node.id, by="senior")
+        return node
+
+    def plan(self, response, question="how many sessions converted?"):
+        return self.svc._plan_turn(MockLLM([response]), self.tid, "c1", question,
+                                   [], [], schema_ctx=self.schema_ctx)
+
+    def clarification(self, response, conversation_id="c1",
+                      question="how many sessions converted?"):
+        plan = self.svc._plan_turn(MockLLM([response]), self.tid, conversation_id,
+                                   question, [], [], schema_ctx=self.schema_ctx)
+        return self.svc._timeframe_clarification(self.tid, conversation_id, plan,
+                                                 self.schema_ctx)
+
+    # -- the contract with the planner ----------------------------------------
+    def test_the_planner_is_asked_to_report_whether_a_timeframe_was_stated(self):
+        """Without the field in the contract the model never emits it, and the
+        pipeline would have nothing to branch on."""
+        self.assertIn("timeframe_stated", self.svc.PLAN_SYSTEM_PROMPT)
+
+    def test_the_plan_carries_what_the_planner_reported(self):
+        self.assertFalse(self.plan(NO_TIMEFRAME_PLAN).timeframe_stated)
+        self.assertTrue(self.plan(STATED_TIMEFRAME_PLAN).timeframe_stated)
+
+    def test_a_planner_that_omits_the_field_is_treated_as_having_stated_one(self):
+        """Back-compat, and the safe direction: a missing field must not turn
+        every turn into an interrogation."""
+        self.assertTrue(self.plan(SILENT_TIMEFRAME_PLAN).timeframe_stated)
+
+    # -- when the question is asked -------------------------------------------
+    def test_an_unstated_timeframe_produces_a_question(self):
+        self.assertTrue(self.clarification(NO_TIMEFRAME_PLAN))
+
+    def test_a_stated_timeframe_produces_no_question(self):
+        self.assertEqual(self.clarification(STATED_TIMEFRAME_PLAN), "")
+
+    def test_the_question_names_the_time_column_and_the_range_the_data_covers(self):
+        """A bare 'which period?' makes the user guess what is even available."""
+        asked = self.clarification(NO_TIMEFRAME_PLAN)
+        self.assertIn("date", asked)
+        self.assertIn("2025-06-01", asked)
+        self.assertIn("2026-08-17", asked)
+
+    def test_a_base_view_with_no_time_column_is_never_questioned(self):
+        """There is nothing to slice by, so there is nothing to ask about."""
+        self.view.time_column = ""
+        self.approve_view()
+        self.assertEqual(self.clarification(NO_TIMEFRAME_PLAN), "")
+
+    def test_a_turn_with_no_base_view_is_never_questioned(self):
+        """The aggregate path is an operational one-off, not a population."""
+        from analytics_platform.domain import TurnPlan
+        plan = TurnPlan(path="aggregate", timeframe_stated=False)
+        self.assertEqual(
+            self.svc._timeframe_clarification(self.tid, "c1", plan, self.schema_ctx), "")
+
+    def test_a_follow_up_inherits_the_window_of_a_cube_already_in_the_workspace(self):
+        """'now break that down by country' states no timeframe and does not need
+        to: the cube it re-cuts already carries one."""
+        import pandas as pd
+        from analytics_platform.execution.extract_store import ExtractMeta
+        self.svc.data_cache.put(
+            self.tid, "c2", "df_1", "sessions in July",
+            pd.DataFrame({"n": [1]}),
+            meta=ExtractMeta(label="df_1", grain=["session_id"], columns=["n"],
+                             base_view="checkout_sessions", row_count=1,
+                             population_hash=self.svc.base_views.population_hash(self.view),
+                             time_column="date", time_start="2026-07-19",
+                             time_end="2026-08-17", created_at="2026-08-19T00:00:00Z"))
+        self.assertEqual(self.clarification(NO_TIMEFRAME_PLAN, conversation_id="c2"), "")
+
+    def test_a_cube_that_asked_for_a_window_suppresses_the_question(self):
+        """The measured window is only populated when the time column is one of
+        the cube's own columns. A cube filtered to July but grouped by country
+        carries no event_date column, so it records no measured window -- and it
+        is still a cube the user gave a timeframe for. Asking again would be a
+        false positive on the commonest follow-up there is."""
+        import pandas as pd
+        from analytics_platform.execution.extract_store import ExtractMeta
+        self.svc.data_cache.put(
+            self.tid, "c6", "df_1", "sessions in July", pd.DataFrame({"n": [1]}),
+            meta=ExtractMeta(label="df_1", grain=["session_id"], columns=["n"],
+                             base_view="checkout_sessions", row_count=1,
+                             time_column="date", requested_time_start="2026-07-19",
+                             requested_time_end="2026-08-17",
+                             created_at="2026-08-19T00:00:00Z"))
+        self.assertEqual(self.clarification(NO_TIMEFRAME_PLAN, conversation_id="c6"), "")
+
+    def test_a_retrieve_records_the_window_the_turn_asked_for(self):
+        """Recorded separately from the measured one: coverage must keep judging
+        what the warehouse actually returned, not what was requested."""
+        from analytics_platform.domain import CubeMeasure, CubeSpec, TurnPlan
+        import pandas as pd
+
+        class _Res:
+            ok, error, warnings, truncated = True, "", [], False
+            data = pd.DataFrame({"n": [1]})
+
+        spec = CubeSpec(base_name="checkout_sessions", dimensions=["country"],
+                        measures=[CubeMeasure("n", "COUNT(*)", True)],
+                        time_column="date", time_start="2026-07-19",
+                        time_end="2026-08-17")
+        plan = TurnPlan(path="retrieve", base_view=self.view, cube=spec)
+        meta = self.svc._extract_meta("df_1", "q", plan, _Res(), "SELECT 1")
+        self.assertEqual(meta.requested_time_start, "2026-07-19")
+        self.assertEqual(meta.requested_time_end, "2026-08-17")
+        # unchanged: nothing was measured, because the frame has no date column
+        self.assertEqual(meta.time_start, "")
+
+    def test_an_unbounded_cube_in_the_workspace_does_not_suppress_the_question(self):
+        """A cube with no window answers nothing about which window was meant."""
+        import pandas as pd
+        from analytics_platform.execution.extract_store import ExtractMeta
+        self.svc.data_cache.put(
+            self.tid, "c3", "df_1", "all sessions", pd.DataFrame({"n": [1]}),
+            meta=ExtractMeta(label="df_1", grain=["session_id"], columns=["n"],
+                             base_view="checkout_sessions", row_count=1,
+                             created_at="2026-08-19T00:00:00Z"))
+        self.assertTrue(self.clarification(NO_TIMEFRAME_PLAN, conversation_id="c3"))
+
+    # -- what the turn does with it -------------------------------------------
+    def test_the_pipeline_asks_instead_of_answering(self):
+        out = self.svc._run_analyst_pipeline(
+            MockLLM([NO_TIMEFRAME_PLAN]), self.tid, "c4",
+            "how many sessions converted?", "u1", "general", "trace-1", [], [])
+        self.assertIsNotNone(out)
+        self.assertEqual(out["status"], "NEEDS_CLARIFICATION")
+        self.assertEqual(out["answer_mode"], AnswerMode.NEEDS_CLARIFICATION.value)
+        # The wording of the extent is the unit test's business; what matters
+        # here is that the turn came back asking rather than answering.
+        self.assertIn("Which period", out["answer"])
+        self.assertIn("date", out["answer"])
+
+    def test_asking_costs_no_warehouse_query(self):
+        """The whole point is to ask BEFORE spending a full-history scan on a
+        window nobody chose."""
+        self.svc._run_analyst_pipeline(
+            MockLLM([NO_TIMEFRAME_PLAN]), self.tid, "c5",
+            "how many sessions converted?", "u1", "general", "trace-2", [], [])
+        self.assertEqual(self.spy.all_sql, [])
+
+
+# --------------------------------------------------------------------------- #
+# Never improvise a new population mid-conversation
+#
+# When the planner returns something unparseable the turn used to fall through
+# to a one-off query that re-derives its own FROM and WHERE from the question
+# text. Caught live: turn 1 answered over DE for the last 30 days from a
+# governed base; turn 2 ("now split that same drop-off by checkout type") got an
+# unparseable plan, improvised, and silently answered over all 8 natcos and all
+# 443 days -- 2,702,510 consent sessions where turn 1 had 136,573. It was
+# correctly flagged unreconcilable, but nothing in the prose said the ground had
+# moved, and a reader would naturally combine the two.
+#
+# The planner failure is intermittent and its cause is not established, so this
+# guards the consequence rather than the trigger.
+# --------------------------------------------------------------------------- #
+GOVERNED_FOLLOW_UP = (
+    '{"base_view":"checkout_sessions","timeframe_stated":true,'
+    '"cube":{"dimensions":[],"measures":[{"name":"n","expr":"COUNT(*)"}],'
+    '"filters":{},"time_column":"date","time_start":"2026-07-19",'
+    '"time_end":"2026-08-17"},"analysis":"python"}')
+
+AGGREGATE_ONLY = (
+    '{"base_view":"checkout_sessions","aggregate_only":true,'
+    '"cube":{"dimensions":[],"measures":[]},"rationale":"operational lookup"}')
+
+
+class TestPlannerFailureDoesNotImprovise(unittest.TestCase):
+    def setUp(self):
+        from analytics_platform.domain import BaseView, ColumnProfile
+        from analytics_platform.schema_context import SchemaContext
+
+        self.ctx, self.base = app_ctx()
+        self.tid = self.ctx.tenants.create_tenant("SeatbeltCo").id
+        self.app = create_app(self.ctx)
+        self.svc = self.ctx.stakeholder
+        self.spy = SpyExecutor()
+        self.svc.executor = self.spy
+        self.ctx.tenants.add_datasource(self.tid, "Orders", DataSourceKind.DIRECT_DB,
+                                        dialect="athena", tables=["orders"])
+
+        self.view = BaseView(
+            grain_verified=True, name="checkout_sessions", grain=["session_id"],
+            source_sql="SELECT session_id, country, date, revenue FROM orders",
+            dimension_columns=["country"], measure_columns=["revenue"],
+            time_column="date", row_count_estimate=1_200_000)
+        self.view.grain_checked_hash = self.svc.base_views.population_hash(self.view)
+        node = self.svc.base_views.upsert(self.tid, self.view, by="senior")
+        brain = self.ctx.pipeline.brain(self.tid)
+        brain.submit(node.id, by="junior")
+        brain.approve(node.id, by="senior")
+
+        self.profiles = {"country": ColumnProfile(
+            column="country", dtype="object", distinct_count=30, null_fraction=0.0,
+            values=[], values_complete=False)}
+        self.schema_ctx = SchemaContext(profiles=self.profiles, rendered="RENDERED")
+
+    def tearDown(self):
+        self.svc.workspace.close_all()
+        self.base.close()
+
+    def govern(self, conversation_id):
+        """Put a cube from a real base view into the conversation, as turn 1 would."""
+        import pandas as pd
+        from analytics_platform.execution.extract_store import ExtractMeta
+        self.svc.data_cache.put(
+            self.tid, conversation_id, "df_1", "consent drop-off in DE, last 30 days",
+            pd.DataFrame({"n": [1]}),
+            meta=ExtractMeta(label="df_1", grain=["session_id"], columns=["n"],
+                             base_view="checkout_sessions", row_count=1,
+                             population_hash=self.svc.base_views.population_hash(self.view),
+                             time_column="date", requested_time_start="2026-07-19",
+                             requested_time_end="2026-08-17",
+                             filters={"natco_code": ["de"]},
+                             created_at="2026-08-19T00:00:00Z"))
+
+    def plan(self, responses, conversation_id="c1"):
+        return self.svc._plan_turn(MockLLM(responses), self.tid, conversation_id,
+                                   "now split that by checkout type", [], [],
+                                   schema_ctx=self.schema_ctx)
+
+    # -- ask again before giving up -------------------------------------------
+    def test_an_unparseable_plan_is_asked_for_a_second_time(self):
+        """The failure is intermittent -- the same call usually succeeds. One
+        retry recovers most of them for the price of one planning call."""
+        self.govern("c1")
+        plan = self.plan(["I think the user wants...", GOVERNED_FOLLOW_UP])
+        self.assertEqual(plan.base_view.name, "checkout_sessions")
+        self.assertFalse(plan.planner_failed)
+
+    def test_a_plan_that_parses_first_time_is_not_asked_twice(self):
+        llm = MockLLM([GOVERNED_FOLLOW_UP])
+        self.svc._plan_turn(llm, self.tid, "c1", "q", [], [], schema_ctx=self.schema_ctx)
+        self.assertEqual(llm.calls, 1)
+
+    def test_two_failures_mark_the_plan_as_failed(self):
+        self.govern("c1")
+        plan = self.plan(["prose", "more prose"])
+        self.assertTrue(plan.planner_failed)
+        self.assertEqual(plan.path, "aggregate")
+
+    def test_an_ungoverned_conversation_is_not_retried(self):
+        """Nothing there for a fallback answer to contradict, so a second
+        planning call would be cost without a benefit."""
+        llm = MockLLM(["prose"])
+        plan = self.svc._plan_turn(llm, self.tid, "fresh", "q", [], [],
+                                   schema_ctx=self.schema_ctx)
+        self.assertEqual(llm.calls, 1)
+        self.assertTrue(plan.planner_failed)
+
+    def test_a_deliberate_aggregate_only_choice_is_not_a_failure(self):
+        """The planner saying "no base view applies" is an answer, not a
+        breakdown, and must keep working."""
+        self.assertFalse(self.plan([AGGREGATE_ONLY]).planner_failed)
+
+    # -- the seatbelt ----------------------------------------------------------
+    def test_a_governed_conversation_refuses_to_improvise(self):
+        self.govern("c2")
+        out = self.svc._run_analyst_pipeline(
+            MockLLM(["prose", "more prose"]), self.tid, "c2",
+            "now split that by checkout type", "u1", "general", "t1", [], [])
+        self.assertEqual(out["status"], "NEEDS_CLARIFICATION")
+        self.assertEqual(out["answer_mode"], AnswerMode.NEEDS_CLARIFICATION.value)
+
+    def test_refusing_costs_no_warehouse_query(self):
+        """The whole harm was a query that RAN and answered a different question,
+        so the improvised SQL is supplied here -- without it the mock runs dry
+        before the one-off path is reached and the test proves nothing."""
+        self.govern("c3")
+        improvised = "SELECT country, COUNT(*) AS n FROM orders GROUP BY country"
+        self.svc._run_analyst_pipeline(
+            MockLLM(["prose", "more prose", improvised, "an answer"]), self.tid, "c3",
+            "now split that by checkout type", "u1", "general", "t2", [], [])
+        self.assertEqual(self.spy.all_sql, [])
+
+    def test_the_refusal_says_which_population_it_would_have_left(self):
+        """A bare "I did not understand" gives the reader nothing to act on."""
+        self.govern("c4")
+        out = self.svc._run_analyst_pipeline(
+            MockLLM(["prose", "more prose"]), self.tid, "c4",
+            "now split that by checkout type", "u1", "general", "t3", [], [])
+        self.assertIn("checkout_sessions", out["answer"])
+
+    def test_an_ungoverned_conversation_still_falls_back_as_before(self):
+        """Nothing to contradict, so a one-off is the honest best effort and the
+        existing behaviour is left alone."""
+        out = self.svc._run_analyst_pipeline(
+            MockLLM(["prose", "more prose"]), self.tid, "c5",
+            "how many orders yesterday?", "u1", "general", "t4", [], [])
+        self.assertNotEqual((out or {}).get("status"), "NEEDS_CLARIFICATION")
+
+    def test_a_governed_conversation_is_unaffected_when_planning_succeeds(self):
+        self.govern("c6")
+        plan = self.plan([GOVERNED_FOLLOW_UP], conversation_id="c6")
+        self.assertFalse(plan.planner_failed)
+        self.assertEqual(
+            self.svc._planner_failure_refusal(self.tid, "c6", plan), "")
+
+
+# --------------------------------------------------------------------------- #
+# The planner must be told the SLICE, not asked to infer it
+#
+# ExtractMeta records exactly what a cube was filtered to. _plan_prompt did not
+# pass any of it on -- the only trace of "DE, last 30 days" reaching the planner
+# was the previous question text, truncated at 200 characters, which in the live
+# run cut off inside the phrase "last 30 days worth of ". So a follow-up had to
+# reverse-engineer the filters from a chopped-off paraphrase while the exact
+# values sat unused in memory.
+# --------------------------------------------------------------------------- #
+class TestPlannerSeesTheSlice(unittest.TestCase):
+    def setUp(self):
+        self.ctx, self.base = app_ctx()
+        self.tid = self.ctx.tenants.create_tenant("SliceCo").id
+        self.app = create_app(self.ctx)
+        self.svc = self.ctx.stakeholder
+
+    def tearDown(self):
+        self.svc.workspace.close_all()
+        self.base.close()
+
+    def prompt(self, **frame):
+        base = {"label": "df_1", "description": "consent drop-off", "base_view": "cs",
+                "dimensions": ["service_line"], "columns": ["service_line", "n"],
+                "row_count": 24, "truncated": False, "sample": []}
+        base.update(frame)
+        from analytics_platform.schema_context import SchemaContext
+        return self.svc._plan_prompt("split that by checkout type",
+                                     SchemaContext(rendered=""), [base])
+
+    def test_the_filters_a_cube_was_sliced_to_are_named(self):
+        self.assertIn("natco_code", self.prompt(filters={"natco_code": ["de"]}))
+
+    def test_the_filter_values_are_named_exactly(self):
+        """'filtered somehow' is no more usable than nothing -- the planner has to
+        be able to repeat the literal back. Asserted as one fragment: a bare "de"
+        also matches the word "description"."""
+        self.assertIn("natco_code=de", self.prompt(filters={"natco_code": ["de"]}))
+
+    def test_the_time_window_a_cube_was_asked_for_is_named(self):
+        out = self.prompt(time_column="event_date",
+                          requested_time_start="2026-07-19",
+                          requested_time_end="2026-08-17")
+        self.assertIn("2026-07-19", out)
+        self.assertIn("2026-08-17", out)
+
+    def test_a_measured_window_is_used_when_no_requested_one_was_recorded(self):
+        """Older sidecars predate the requested pair and carry only the measured
+        one. They must not read as unfiltered."""
+        out = self.prompt(time_column="event_date", time_start="2026-01-01",
+                          time_end="2026-01-31")
+        self.assertIn("2026-01-01", out)
+
+    def test_an_unfiltered_cube_says_so_rather_than_staying_silent(self):
+        """Silence is ambiguous: the planner cannot tell 'no filters' from 'the
+        filters were not passed on', and that ambiguity is what let a follow-up
+        quietly drop one."""
+        out = self.prompt(filters={}, time_column="")
+        self.assertIn("no filters", out.lower())
+
+    def test_the_recorded_description_is_not_cut_mid_question(self):
+        """The live cut landed inside 'last 30 days worth of ', losing the very
+        timeframe the user had stated. Tested where the truncation actually
+        happens -- ExtractMeta stores whatever it is handed."""
+        from analytics_platform.domain import CubeMeasure, CubeSpec, TurnPlan
+        from analytics_platform.domain import BaseView
+        import pandas as pd
+
+        class _Res:
+            ok, error, warnings, truncated = True, "", [], False
+            data = pd.DataFrame({"n": [1]})
+
+        question = ("why are users dropping off after reaching consent page and not "
+                    "going on to place the order. break this down by service line and "
+                    "category and limit to DE. Also let's just work on last 30 days "
+                    "worth of data.")
+        self.assertGreater(len(question), 200)   # the old ceiling cut inside it
+        plan = TurnPlan(path="retrieve", base_view=BaseView(name="cs", grain=["s"]),
+                        cube=CubeSpec(base_name="cs", measures=[CubeMeasure("n", "COUNT(*)")]))
+        meta = self.svc._extract_meta("df_1", question, plan, _Res(), "SELECT 1")
+        self.assertIn("last 30 days worth of data", meta.description)
+
+
+# --------------------------------------------------------------------------- #
+# The planner call is a conversation, not a fresh acquaintance every turn
+#
+# Until now every planning call was stateless: the model saw the current
+# question, the schema, and one summary line per cached cube. It never saw what
+# the user had actually asked before, what it had decided in reply, or what it
+# had asked the user to clarify. So a follow-up like "now split that by checkout
+# type" had to reconstruct the whole intent from a summary -- and "that" pointed
+# at something the model was never shown.
+# --------------------------------------------------------------------------- #
+class TestPlannerConversationThread(unittest.TestCase):
+    def setUp(self):
+        self.ctx, self.base = app_ctx()
+        self.tid = self.ctx.tenants.create_tenant("ThreadCo").id
+        self.app = create_app(self.ctx)
+        self.svc = self.ctx.stakeholder
+        self.conv = self.svc._ensure_conversation(self.tid, "", "first question")
+
+    def tearDown(self):
+        self.svc.workspace.close_all()
+        self.base.close()
+
+    def turn(self, question, answer="an answer", requirement=None, status="ANSWERED",
+             mode=AnswerMode.ADAPTED_APPROVED_QUERY):
+        analysis = {"requirement": requirement} if requirement else {}
+        return self.svc._record(self.tid, question, "u1", "general", "t", answer,
+                                mode, status, False, [], analysis=analysis,
+                                conversation_id=self.conv)
+
+    REQ = {"base_view": "checkout_sessions", "dimensions": ["service_line", "category"],
+           "measures": [{"name": "consent_sessions", "expr": "SUM(reached_consent)"}],
+           "filters": {"natco_code": ["de"]}, "time_column": "event_date",
+           "time_start": "2026-07-19", "time_end": "2026-08-17"}
+
+    def thread(self):
+        return self.svc._conversation_thread(self.tid, self.conv)
+
+    # -- what the thread contains ---------------------------------------------
+    def test_a_first_turn_has_nothing_to_send(self):
+        self.assertEqual(self.thread(), [])
+
+    def test_the_previous_question_is_sent_verbatim(self):
+        """Not the 600-character summary of it -- the question."""
+        self.turn("break consent drop-off down by service line, DE, last 30 days",
+                  requirement=self.REQ)
+        user = [m for m in self.thread() if m["role"] == "user"]
+        self.assertEqual(len(user), 1)
+        self.assertIn("last 30 days", user[0]["content"])
+
+    def test_the_plan_it_produced_comes_back_as_the_assistant_turn(self):
+        """In the same JSON shape the planner is asked to emit, so the model is
+        reading its own prior output in the format it must answer in."""
+        import json
+        self.turn("q1", requirement=self.REQ)
+        assistant = [m for m in self.thread() if m["role"] == "assistant"]
+        parsed = json.loads(assistant[0]["content"])
+        self.assertEqual(parsed["base_view"], "checkout_sessions")
+        self.assertEqual(parsed["cube"]["filters"], {"natco_code": ["de"]})
+        self.assertEqual(parsed["cube"]["time_start"], "2026-07-19")
+
+    def test_the_turns_are_oldest_first(self):
+        self.turn("oldest", requirement=self.REQ)
+        self.turn("newest", requirement=self.REQ)
+        users = [m["content"] for m in self.thread() if m["role"] == "user"]
+        self.assertEqual(users, ["oldest", "newest"])
+
+    def test_a_clarification_stays_in_the_thread(self):
+        """Otherwise the user's next message -- which is the ANSWER to it -- reads
+        as a non-sequitur: 'last 30 days' following nothing."""
+        self.turn("why the drop-off?", answer="Which period should this cover?",
+                  status="NEEDS_CLARIFICATION", mode=AnswerMode.NEEDS_CLARIFICATION)
+        assistant = [m for m in self.thread() if m["role"] == "assistant"]
+        self.assertIn("Which period", assistant[0]["content"])
+
+    def test_a_turn_with_no_plan_does_not_masquerade_as_one(self):
+        """A one-off query decided nothing about a population, and presenting it
+        as a plan would invite the model to build on a decision never made."""
+        self.turn("a one-off lookup", requirement=None)
+        assistant = [m for m in self.thread() if m["role"] == "assistant"]
+        self.assertNotIn("base_view", assistant[0]["content"])
+
+    def test_the_thread_is_bounded(self):
+        """Tokens are cheap but context windows are not infinite."""
+        for i in range(40):
+            self.turn(f"question {i}", requirement=self.REQ)
+        self.assertLessEqual(len(self.thread()), 2 * self.svc.PLANNER_HISTORY_TURNS)
+
+    def test_the_bound_keeps_the_most_recent_turns(self):
+        for i in range(40):
+            self.turn(f"question {i}", requirement=self.REQ)
+        users = [m["content"] for m in self.thread() if m["role"] == "user"]
+        self.assertEqual(users[-1], "question 39")
+
+    # -- how it reaches the model ---------------------------------------------
+    def test_the_planner_call_sends_the_thread_as_messages(self):
+        from analytics_platform.schema_context import SchemaContext
+        self.turn("the earlier question", requirement=self.REQ)
+        llm = RecordingLLM(['{"base_view":"x","cube":{"dimensions":[]}}'])
+        self.svc._ask_planner(llm, "the new question", SchemaContext(rendered="SCHEMA"),
+                              history=self.thread())
+        roles = [m["role"] for m in llm.last_messages]
+        self.assertEqual(roles, ["system", "user", "assistant", "user"])
+
+    def test_the_system_prompt_travels_inside_the_messages(self):
+        """The gateway IGNORES system_prompt whenever messages are supplied, so a
+        system prompt left outside the list is silently dropped -- taking the
+        entire planner contract with it."""
+        from analytics_platform.schema_context import SchemaContext
+        llm = RecordingLLM(['{"base_view":"x","cube":{"dimensions":[]}}'])
+        self.svc._ask_planner(llm, "q", SchemaContext(rendered="SCHEMA"), history=[])
+        self.assertEqual(llm.last_messages[0]["role"], "system")
+        self.assertIn("timeframe_stated", llm.last_messages[0]["content"])
+
+    def test_planning_a_turn_sends_the_conversation_it_belongs_to(self):
+        """The end that matters: _plan_turn is what production calls, and a
+        history only _ask_planner knows how to accept would never be sent."""
+        from analytics_platform.schema_context import SchemaContext
+        self.turn("the earlier question", requirement=self.REQ)
+        llm = RecordingLLM(['{"base_view":"nope","cube":{"dimensions":[]}}'])
+        self.svc._plan_turn(llm, self.tid, self.conv, "the new question", [], [],
+                            schema_ctx=SchemaContext(rendered="SCHEMA"))
+        sent = "\n".join(m["content"] for m in llm.last_messages)
+        self.assertIn("the earlier question", sent)
+        self.assertIn("the new question", sent)
+
+    def test_the_new_question_is_the_last_message(self):
+        from analytics_platform.schema_context import SchemaContext
+        self.turn("earlier", requirement=self.REQ)
+        llm = RecordingLLM(['{"base_view":"x","cube":{"dimensions":[]}}'])
+        self.svc._ask_planner(llm, "THE NEW ONE", SchemaContext(rendered="SCHEMA"),
+                              history=self.thread())
+        self.assertIn("THE NEW ONE", llm.last_messages[-1]["content"])
+
+
+# --------------------------------------------------------------------------- #
+# A date literal has to be a date
+#
+# compose_cube emits `<col> BETWEEN DATE '<literal>' AND DATE '<literal>'`, and
+# Trino/Athena accept a DATE literal only as YYYY-MM-DD. The planner sometimes
+# answers with a full ISO timestamp instead -- observed live, returning
+# "2026-07-19T00:00:00Z" -- which composes to `DATE '2026-07-19T00:00:00Z'` and
+# fails at the warehouse. Feeding prior turns back into the planner makes this
+# likelier, because whatever shape one turn used is what the next turn sees.
+# --------------------------------------------------------------------------- #
+class TestCubeDatesAreDates(unittest.TestCase):
+    def parse(self, **raw):
+        from analytics_platform.domain import BaseView
+        from analytics_platform.stakeholder import StakeholderService
+        view = BaseView(name="cs", grain=["session_id"], time_column="event_date")
+        return StakeholderService._parse_cube(raw, view)
+
+    def test_an_iso_timestamp_is_reduced_to_its_date(self):
+        spec = self.parse(time_start="2026-07-19T00:00:00Z",
+                          time_end="2026-08-17T00:00:00Z")
+        self.assertEqual(spec.time_start, "2026-07-19")
+        self.assertEqual(spec.time_end, "2026-08-17")
+
+    def test_a_space_separated_timestamp_is_reduced_too(self):
+        self.assertEqual(self.parse(time_start="2026-07-19 13:45:00").time_start,
+                         "2026-07-19")
+
+    def test_a_plain_date_is_left_alone(self):
+        self.assertEqual(self.parse(time_start="2026-07-19").time_start, "2026-07-19")
+
+    def test_an_empty_window_stays_empty(self):
+        self.assertEqual(self.parse().time_start, "")
+
+    def test_something_that_is_not_a_date_is_dropped_rather_than_passed_through(self):
+        """A DATE literal the warehouse cannot parse fails the whole query. An
+        unusable window is better dropped -- the turn then reads as unfiltered,
+        which is visible, instead of erroring out of the governed path."""
+        self.assertEqual(self.parse(time_start="last tuesday").time_start, "")
+
+    def test_the_composed_predicate_is_a_valid_date_literal(self):
+        from analytics_platform.base_view import BaseViewRegistry
+        spec = self.parse(time_start="2026-07-19T00:00:00Z",
+                          time_end="2026-08-17T00:00:00Z")
+        where = BaseViewRegistry(brain_for=lambda t: None)._where(spec)
+        self.assertIn("DATE '2026-07-19'", where)
+        self.assertNotIn("T00:00:00Z", where)

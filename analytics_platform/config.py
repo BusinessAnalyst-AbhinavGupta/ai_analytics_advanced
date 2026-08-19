@@ -6,13 +6,70 @@ from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional
 
 
+# -- cube sizing -------------------------------------------------------------
+# MAX_CUBE_CELLS and PolicySettings.max_transport_rows are different numbers ON
+# PURPOSE and must not be reconciled to each other. The first answers "is this
+# cube worth composing at all"; the second answers "what fits in one round trip".
+# A cube between them is legal and is fetched in keyset pages. Lowering
+# MAX_CUBE_CELLS to the transport size would refuse cubes the system can
+# perfectly well retrieve, and push the analyst toward narrower, less reusable
+# cuts -- which is the behaviour this whole design exists to move away from.
+MAX_CUBE_CELLS = 200_000            # a composed cube may not exceed this many rows
+MAX_DIMENSION_CARDINALITY = 5_000   # a column above this is a key or free text, not a dimension
+
+
 @dataclass
 class PolicySettings:
     allow_ddl_dml: bool = False       # hard default: read-only
-    default_row_limit: int = 50000
+    # The LIMIT injected when a caller names none. It is a PER-ROUND-TRIP limit,
+    # so it can never exceed max_transport_rows -- __post_init__ enforces that,
+    # because the two drifting apart silently rejects every un-limited query.
+    default_row_limit: int = 10_000
     require_date_filter_tables: List[str] = field(default_factory=list)
     block_multi_statement: bool = True
     forge_dialect: str = "athena"        # sqlglot dialect used for validation
+    # -- what one round trip may carry -------------------------------------
+    # MEASURED, and not where it was assumed to be.
+    #
+    # The old comment here blamed AppleScript and guessed 50,000. Both were
+    # wrong. scripts/measure_applescript_ceiling.py carries 20,000,000 chars
+    # through Chrome -> AppleScript -> osascript intact, so the transport is not
+    # the binding constraint at all.
+    #
+    # The real cap is METABASE'S OWN, applied server-side to /api/dataset before
+    # anything reaches this process: 10,000 rows for an aggregated query and
+    # 2,000 for an unaggregated one, by default. It is applied SILENTLY -- a
+    # valid 200 carrying fewer rows than the query matched -- and no row_limit we
+    # send can lift it. (This is also why a Metabase CSV *export* returns far
+    # more: the export endpoints bypass these limits and use absolute-max-results
+    # of 1,048,575 instead.)
+    #
+    # 10,000 matches the aggregated default, which is what every composed cube
+    # is. If your server sets MB_AGGREGATED_QUERY_ROW_LIMIT higher, raise this to
+    # match it -- and only to match it. Anything above the server's value buys
+    # nothing and re-opens silent truncation. BrowserSessionExecutor now reads
+    # Metabase's `rows_truncated` field, so an overshoot is at least reported
+    # rather than absorbed.
+    max_transport_rows: int = 10_000
+    # Keyset page size. Must be <= max_transport_rows: a page IS one round trip,
+    # and a page above Metabase's own cap comes back silently short.
+    extract_chunk_rows: int = 10_000
+    # The ceiling on a MATERIALISED cube or extract -- the sum across chunks,
+    # never a single round trip. Deliberately far above max_transport_rows.
+    raw_extract_row_limit: int = 1_000_000
+    extract_retention_days: int = 30
+
+    def __post_init__(self) -> None:
+        # A default row limit above the transport ceiling is not a preference,
+        # it is a contradiction: every query that does not name its own limit
+        # would be rejected by the ceiling check, and the failure surfaces
+        # nowhere near the setting that caused it. max_transport_rows == 0 means
+        # "no transport" (the in-process DuckDB workspace), where no clamp
+        # applies.
+        if self.max_transport_rows and self.default_row_limit > self.max_transport_rows:
+            self.default_row_limit = self.max_transport_rows
+        if self.max_transport_rows and self.extract_chunk_rows > self.max_transport_rows:
+            self.extract_chunk_rows = self.max_transport_rows
 
 
 @dataclass
@@ -35,6 +92,11 @@ class Settings:
     metabase_base_url: str = ""        # Metabase URL (informational; same-origin fetch uses the tab)
     metabase_database_id: Any = ""     # Metabase DB id (str or int) to query
     metabase_expected_host: str = ""   # hostname guard (anti-tenant-bleed)
+    # How long one warehouse round trip may take, in seconds. This was hardcoded
+    # to 30s, which is below what a real query costs: a base view over full
+    # history scans for ~45s, so every cube built on one timed out and came back
+    # as a bare "metabase error" with nothing naming the ceiling as the cause.
+    metabase_timeout_s: float = 300.0  # ANALYTICS_MB_TIMEOUT_S
     # P8 governance ---------------------------------------------------------
     auth_secret: str = ""              # HMAC secret for issue/verify (env ANALYTICS_AUTH_SECRET)
     auth_enabled: bool = False         # when True, guarded routes require an Authorization token
@@ -58,6 +120,13 @@ class Settings:
     junior_llm_cache_ttl_minutes: int = 60  # LLM enrichment cached per tenant (bill guard)
     llm_daily_cap: int = 20         # at most N LLM generations per tenant per UTC day (persisted)
     junior_human_signoff_days: int = 7 # initial window: every analysis -> human review
+    # Column profiling: rows sampled per table. Bigger is a better measurement
+    # and a slower one; a saturated sample forfeits every completeness claim.
+    profile_sample_rows: int = 50_000
+    # A column that fans out above this share of grain keys needs a business
+    # ranking before it can be carried onto the grain. 1% is deliberately low:
+    # the junior only proposes the question, a human answers it.
+    attribution_fanout_threshold: float = 0.01
 
     def resolve_db_path(self) -> str:
         """DEPRECATED: the single shared database. Use resolve_control_db_path()
@@ -92,7 +161,18 @@ class Settings:
         _provider = os.environ.get("ANALYTICS_LLM_PROVIDER", "").strip()
         if not _provider and os.environ.get("OPENROUTER_API_KEY"):
             _provider = "openrouter"
+        _policy_defaults = PolicySettings()
         return cls(
+            policy=PolicySettings(
+                max_transport_rows=int(os.environ.get(
+                    "ANALYTICS_MAX_TRANSPORT_ROWS", _policy_defaults.max_transport_rows)),
+                extract_chunk_rows=int(os.environ.get(
+                    "ANALYTICS_EXTRACT_CHUNK_ROWS", _policy_defaults.extract_chunk_rows)),
+                raw_extract_row_limit=int(os.environ.get(
+                    "ANALYTICS_RAW_EXTRACT_ROW_LIMIT", _policy_defaults.raw_extract_row_limit)),
+                extract_retention_days=int(os.environ.get(
+                    "ANALYTICS_EXTRACT_RETENTION_DAYS", _policy_defaults.extract_retention_days)),
+            ),
             data_dir=os.environ.get("ANALYTICS_DATA_DIR", ""),
             db_path=os.environ.get("ANALYTICS_DB_PATH", ""),
             llm_provider=_provider or "null",
@@ -109,6 +189,8 @@ class Settings:
             metabase_base_url=os.environ.get("ANALYTICS_MB_HOST", ""),
             metabase_database_id=os.environ.get("ANALYTICS_MB_DATABASE_ID", ""),
             metabase_expected_host=os.environ.get("ANALYTICS_MB_EXPECTED_HOST", ""),
+            metabase_timeout_s=float(os.environ.get("ANALYTICS_MB_TIMEOUT_S")
+                                     or Settings.metabase_timeout_s),
             auth_secret=os.environ.get("ANALYTICS_AUTH_SECRET", ""),
             auth_enabled=os.environ.get("ANALYTICS_AUTH_ENABLED") == "1",
             oidc_issuer=os.environ.get("ANALYTICS_OIDC_ISSUER", ""),
@@ -135,6 +217,10 @@ class Settings:
                 os.environ.get("ANALYTICS_LLM_DAILY_CAP", "20")),
             junior_human_signoff_days=int(
                 os.environ.get("ANALYTICS_JUNIOR_HUMAN_SIGNOFF_DAYS", "7")),
+            profile_sample_rows=int(
+                os.environ.get("ANALYTICS_PROFILE_SAMPLE_ROWS", "50000")),
+            attribution_fanout_threshold=float(
+                os.environ.get("ANALYTICS_ATTRIBUTION_FANOUT_THRESHOLD", "0.01")),
         )
 
     def to_dict(self) -> Dict[str, Any]:

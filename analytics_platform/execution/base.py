@@ -42,12 +42,18 @@ class QueryResult:
     row_count: int = 0
     columns: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
+    # The rows returned are a PREFIX of the rows that matched, not all of them.
+    # Every downstream population claim (a total, a share, "the top N") is wrong
+    # on a truncated result, so this travels with the data rather than being
+    # inferred by string-matching `warnings`.
+    truncated: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "ok": self.ok, "error": self.error, "execution_ms": self.execution_ms,
             "db_query_id": self.db_query_id, "row_count": self.row_count,
             "columns": self.columns, "warnings": self.warnings,
+            "truncated": self.truncated,
         }
 
 

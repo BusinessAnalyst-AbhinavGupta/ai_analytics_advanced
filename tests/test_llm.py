@@ -112,3 +112,62 @@ class TestGatewayClient(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# --------------------------------------------------------------------------- #
+# Reasoning-model responses
+#
+# A reasoning model can come back with an EMPTY `content` and put everything it
+# produced under `reasoning_details` -- which OpenRouter sends as a list of
+# typed blocks, not a string. The gateway used to fall back with
+# `str(reasoning_details)`, so the caller received the Python repr of a list of
+# dicts: "[{'type': 'reasoning.text', 'text': '...'}]". Nothing downstream can
+# parse that. It is what silently dropped every turn plan onto the ungoverned
+# aggregate path while the log showed the model had chosen correctly.
+# --------------------------------------------------------------------------- #
+class TestReasoningText(unittest.TestCase):
+    def extract(self, msg):
+        return _gateway_mod._reasoning_text(msg)
+
+    def test_typed_blocks_yield_their_text_not_a_python_repr(self):
+        out = self.extract({"reasoning_details": [
+            {"type": "reasoning.text", "text": '{"base_view":"checkout_sessions"}',
+             "index": 0, "format": "unknown"}]})
+        self.assertEqual(out, '{"base_view":"checkout_sessions"}')
+
+    def test_several_blocks_are_joined_in_order(self):
+        out = self.extract({"reasoning_details": [
+            {"type": "reasoning.text", "text": "first"},
+            {"type": "reasoning.text", "text": "second"}]})
+        self.assertEqual(out, "first\nsecond")
+
+    def test_a_summary_block_is_used_when_it_carries_no_text(self):
+        self.assertEqual(
+            self.extract({"reasoning_details": [{"type": "reasoning.summary",
+                                                 "summary": "summarised"}]}),
+            "summarised")
+
+    def test_the_plain_string_form_is_used_when_there_are_no_blocks(self):
+        self.assertEqual(self.extract({"reasoning": "plain reasoning"}),
+                         "plain reasoning")
+
+    def test_blocks_win_over_the_plain_string(self):
+        """The blocks are the full trace; `reasoning` is the same thing flattened."""
+        self.assertEqual(
+            self.extract({"reasoning_details": [{"text": "from blocks"}],
+                          "reasoning": "from string"}),
+            "from blocks")
+
+    def test_an_empty_block_list_falls_back_to_the_plain_string(self):
+        self.assertEqual(self.extract({"reasoning_details": [],
+                                       "reasoning": "plain"}), "plain")
+
+    def test_unusable_blocks_fall_back_to_the_plain_string(self):
+        self.assertEqual(
+            self.extract({"reasoning_details": [{"type": "reasoning.encrypted"}],
+                          "reasoning": "plain"}), "plain")
+
+    def test_a_message_with_no_reasoning_at_all_yields_empty(self):
+        self.assertEqual(self.extract({"content": ""}), "")
+
+    def test_a_non_string_reasoning_field_does_not_leak_a_repr(self):
+        self.assertEqual(self.extract({"reasoning": {"unexpected": "shape"}}), "")

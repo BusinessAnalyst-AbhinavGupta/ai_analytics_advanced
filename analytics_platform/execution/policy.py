@@ -84,9 +84,17 @@ class QueryPolicy:
 
         tables: List[str] = []
         if ast is not None:
+            # CTE aliases are not real tables. Every composed cube is
+            # `WITH base AS (...) SELECT ... FROM base`, so counting `base` as a
+            # table made it fail every allow-list -- and the same is true of any
+            # hand-written CTE. brain/ingest.extract already excludes them; this
+            # does too.
+            ctes = {c.alias for c in ast.find_all(sqlglot.exp.CTE) if c.alias}
             for node in ast.walk():
                 if isinstance(node, sqlglot.exp.Table):
                     t = node.name
+                    if t in ctes:
+                        continue
                     if t and re.match(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$", t):
                         tables.append(t)
         self._tables = list(dict.fromkeys(tables))
@@ -111,10 +119,25 @@ class QueryPolicy:
 
         limit = row_limit if row_limit is not None else self.settings.default_row_limit
 
-        # 6. row limiting — inject LIMIT where it is absent and it is a plain SELECT
+        # 5b. the transport ceiling. This is the guard that makes the ceiling real
+        # rather than documentary: no caller may ask a single round trip for more
+        # than the transport carries. Above this, compose a cube (base_view.py) or
+        # page it with keyset chunks -- do not raise the number.
+        max_transport = getattr(self.settings, "max_transport_rows", 0)
+        if max_transport and limit > max_transport:
+            reasons.append(
+                f"Row limit {limit} exceeds the transport ceiling of {max_transport} rows "
+                f"for a single round trip. Compose a cube or fetch it in keyset pages.")
+
+        # 6. row limiting — inject LIMIT where it is absent.
+        # This covers CTE-headed SELECTs too. Every composed cube starts
+        # `WITH base AS (...)`, and the LIMIT injected here is the ONLY thing that
+        # bounds the warehouse (browser_session's max_rows slice runs after the
+        # payload has already crossed the AppleScript boundary), so skipping CTEs
+        # would let the cube path issue completely unbounded queries.
         final_sql = sql
         has_limit = bool(re.search(r"\blimit\s+\d+", sql, re.IGNORECASE))
-        if not has_limit and not re.search(r"\bwith\b", sql, re.IGNORECASE):
+        if not has_limit:
             try:
                 parsed = sqlglot.parse_one(sql, read=dialect)
                 if isinstance(parsed, sqlglot.exp.Select) and parsed.args.get("limit") is None:

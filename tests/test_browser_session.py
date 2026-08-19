@@ -23,8 +23,11 @@ def probe_payload(**overrides):
     return json.dumps(d)
 
 
-def exec_payload(ok=True, rows=None, cols=None, error=""):
-    return json.dumps({"ok": ok, "rows": rows or [], "cols": cols or [], "error": error})
+def exec_payload(ok=True, rows=None, cols=None, error="", rows_truncated=None):
+    d = {"ok": ok, "rows": rows or [], "cols": cols or [], "error": error}
+    if rows_truncated is not None:
+        d["rows_truncated"] = rows_truncated
+    return json.dumps(d)
 
 
 def make_runner(probe, exec_resp):
@@ -110,6 +113,45 @@ class TestBrowserSession(unittest.TestCase):
                                                        exec_payload(rows=rows, cols=["x"])))
         r = ex.execute("SELECT 1", ExecutionContext(tenant_id="t"))
         self.assertEqual(r.row_count, 10)
+
+    def test_truncation_sets_a_warning_not_just_a_shorter_frame(self):
+        """Silent truncation is how a 50,000-row slice becomes a confidently wrong
+        total. Callers read this warning to set ExtractMeta.truncated."""
+        rows = [[i] for i in range(60)]
+        ex = BrowserSessionExecutor(database_id=1, max_rows=10,
+                                    runner=make_runner(probe_payload(),
+                                                       exec_payload(rows=rows, cols=["x"])))
+        r = ex.execute("SELECT 1", ExecutionContext(tenant_id="t"))
+        self.assertTrue(any("truncated" in w for w in r.warnings), r.warnings)
+        self.assertTrue(any("10" in w for w in r.warnings), r.warnings)
+
+    def test_an_untruncated_result_carries_no_truncation_warning(self):
+        ex = BrowserSessionExecutor(database_id=1, max_rows=10,
+                                    runner=make_runner(probe_payload(),
+                                                       exec_payload(rows=[[1]], cols=["x"])))
+        r = ex.execute("SELECT 1", ExecutionContext(tenant_id="t"))
+        self.assertEqual(r.warnings, [])
+
+    def test_the_per_request_row_limit_wins_when_no_max_rows_is_configured(self):
+        """max_rows defaults to None, meaning 'take it from ctx.row_limit', so a
+        cube page asking for 50,000 is not silently clipped by a stale default."""
+        rows = [[i] for i in range(60)]
+        ex = BrowserSessionExecutor(database_id=1,
+                                    runner=make_runner(probe_payload(),
+                                                       exec_payload(rows=rows, cols=["x"])))
+        r = ex.execute("SELECT 1", ExecutionContext(tenant_id="t", row_limit=25))
+        self.assertEqual(r.row_count, 25)
+        self.assertTrue(any("truncated" in w for w in r.warnings), r.warnings)
+
+    def test_an_explicit_max_rows_still_bounds_memory_below_the_request(self):
+        """max_rows is a memory guard, not a transport limit -- when it is set it
+        is the tighter of the two."""
+        rows = [[i] for i in range(60)]
+        ex = BrowserSessionExecutor(database_id=1, max_rows=5,
+                                    runner=make_runner(probe_payload(),
+                                                       exec_payload(rows=rows, cols=["x"])))
+        r = ex.execute("SELECT 1", ExecutionContext(tenant_id="t", row_limit=50))
+        self.assertEqual(r.row_count, 5)
 
     def test_concurrent_roundtrips_are_serialized(self):
         """window.__mb is one shared slot in the real browser tab -- e.g. a
@@ -260,6 +302,23 @@ class TestBrowserFromEnv(unittest.TestCase):
         self.assertEqual(ex.config.database_id, 7)
         self.assertEqual(ex.config.expected_host, "mb.example.com")
 
+    def test_make_live_executor_carries_the_configured_timeout(self):
+        """A query slower than the ceiling comes back as a bare 'metabase error'
+        with nothing naming the timeout, so the ceiling has to be settable."""
+        s = Settings(metabase_database_id="7", metabase_timeout_s=600.0)
+        self.assertEqual(make_live_executor(s).config.timeout_s, 600.0)
+
+    def test_the_default_timeout_outlasts_a_real_warehouse_query(self):
+        """The old hardcoded 30s was below the ~45s a full-history base view
+        scan takes, so every cube over one failed and reported nothing useful."""
+        self.assertGreaterEqual(make_live_executor(Settings()).config.timeout_s, 120.0)
+
+    def test_the_polling_deadline_uses_the_configured_timeout(self):
+        """config.timeout_s alone would be decorative: the roundtrip polls
+        against _timeout_s and the osascript runner is bound to it."""
+        ex = make_live_executor(Settings(metabase_timeout_s=600.0))
+        self.assertEqual(ex._timeout_s, 600.0)
+
     def test_make_live_executor_defaults_env(self):
         os.environ["ANALYTICS_MB_DATABASE_ID"] = "99"
         os.environ["ANALYTICS_MB_EXPECTED_HOST"] = "mb.env.example"
@@ -329,3 +388,47 @@ class TestOsascriptTargeting(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class TestMetabaseTruncationIsDetected(unittest.TestCase):
+    """Metabase caps /api/dataset itself -- 2,000 rows unaggregated and 10,000
+    aggregated by default -- well below anything this platform used to assume.
+    It caps SILENTLY: the response is a valid 200 with fewer rows than the query
+    matched. The only signal is `rows_truncated`, so dropping that field (which
+    this executor did) turns a partial result into a confidently wrong total.
+    """
+
+    def _run(self, payload):
+        ex = BrowserSessionExecutor(database_id=1, runner=make_runner(probe_payload(), payload))
+        return ex.execute("SELECT country, SUM(revenue) FROM t GROUP BY 1",
+                          ExecutionContext(tenant_id="t1", question="q"))
+
+    def test_a_truncated_response_is_flagged_truncated(self):
+        res = self._run(exec_payload(rows=[[1], [2]], cols=["x"], rows_truncated=2))
+        self.assertTrue(res.ok)
+        self.assertTrue(res.truncated)
+
+    def test_the_warning_names_metabase_as_the_cap(self):
+        """The reader has to know WHERE to raise the limit. Naming our own
+        row_limit here would send them to the wrong knob entirely."""
+        res = self._run(exec_payload(rows=[[1]], cols=["x"], rows_truncated=2000))
+        joined = " ".join(res.warnings)
+        self.assertIn("2000", joined)
+        self.assertIn("Metabase", joined)
+
+    def test_an_untruncated_response_is_not_flagged(self):
+        res = self._run(exec_payload(rows=[[1], [2]], cols=["x"]))
+        self.assertFalse(res.truncated)
+        self.assertEqual(res.warnings, [])
+
+    def test_our_own_memory_guard_still_flags_separately(self):
+        ex = BrowserSessionExecutor(
+            database_id=1, max_rows=1,
+            runner=make_runner(probe_payload(), exec_payload(rows=[[1], [2]], cols=["x"])))
+        res = ex.execute("SELECT 1", ExecutionContext(tenant_id="t1", question="q"))
+        self.assertTrue(res.truncated)
+        self.assertTrue(any("1 rows" in w for w in res.warnings), res.warnings)
+
+    def test_the_kick_js_actually_asks_for_rows_truncated(self):
+        """A field the browser never extracts cannot be reported on."""
+        from analytics_platform.execution.browser_session import _build_execute_kick_js
+        self.assertIn("rows_truncated", _build_execute_kick_js({"database": 1}))

@@ -26,6 +26,13 @@ import pandas as pd
 
 DEFAULT_TIMEOUT_S = 10.0
 DEFAULT_MEMORY_MB = 512
+# The extract path works over a materialised cube, which may run to the
+# raw_extract_row_limit ceiling. Reading that from Parquet does not fit in the
+# 512MB default, and the read itself is not instant -- so the cube-analysis
+# callers pass these instead. The defaults above are untouched: every other
+# caller depends on them.
+EXTRACT_MEMORY_MB = 4096
+EXTRACT_TIMEOUT_S = 30.0
 MAX_RESULT_ROWS = 20
 MAX_RESULT_CHARS = 4000
 
@@ -42,13 +49,17 @@ class PythonExecResult:
     ok: bool
     result_summary: Any = None
     result_shape: Optional[Dict[str, int]] = None
+    # A chart SPEC the cell optionally assigned -- data describing a chart, never
+    # an image. Sanitised on the way out of the sandbox like every other value
+    # that crosses this boundary.
+    chart_spec: Optional[Dict[str, Any]] = None
     stdout: str = ""
     error: str = ""
     execution_ms: float = 0.0
 
 
 def _worker(code: str, dataframes: Dict[str, pd.DataFrame], memory_mb: int,
-            timeout_s: float, conn) -> None:
+            timeout_s: float, conn, dataframe_paths: Optional[Dict[str, str]] = None) -> None:
     try:
         import resource
         cpu_limit = int(timeout_s) + 5
@@ -57,19 +68,56 @@ def _worker(code: str, dataframes: Dict[str, pd.DataFrame], memory_mb: int,
     except (ImportError, ValueError, OSError):
         pass  # best-effort: not all platforms support these rlimits
 
-    scope: Dict[str, Any] = {"pd": pd, **dataframes}
+    # Loaded AFTER the rlimits above, deliberately: a runaway read of a huge or
+    # corrupt Parquet file is then bounded by the same memory ceiling as the
+    # user's code. User code still just sees `df_1` -- it never learns the path.
+    loaded: Dict[str, Any] = {}
+    for label, path in (dataframe_paths or {}).items():
+        try:
+            loaded[label] = pd.read_parquet(path)
+        except Exception as exc:  # noqa: BLE001
+            conn.send(("error", f"could not load DataFrame {label!r} from disk: {exc}",
+                       "", None))
+            conn.close()
+            return
+
+    scope: Dict[str, Any] = {"pd": pd, **loaded, **(dataframes or {})}
     stdout_buf = io.StringIO()
     try:
         with contextlib.redirect_stdout(stdout_buf):
             exec(compile(code, "<python_cell>", "exec"), {"__builtins__": _SAFE_BUILTINS}, scope)
         if "result" not in scope:
-            conn.send(("error", "code did not assign a 'result' variable", stdout_buf.getvalue()))
+            conn.send(("error", "code did not assign a 'result' variable",
+                       stdout_buf.getvalue(), None))
             return
-        conn.send(("ok", scope["result"], stdout_buf.getvalue()))
+        conn.send(("ok", scope["result"], stdout_buf.getvalue(), scope.get("chart")))
     except Exception:
-        conn.send(("error", traceback.format_exc(limit=3), stdout_buf.getvalue()))
+        conn.send(("error", traceback.format_exc(limit=3), stdout_buf.getvalue(), None))
     finally:
         conn.close()
+
+
+CHART_KEYS = ("kind", "x", "y", "series", "title")
+CHART_VALUE_CHARS = 120
+
+
+def _sanitise_chart(chart: Any) -> Optional[Dict[str, Any]]:
+    """A chart spec is arbitrary output from user code, and it goes on to be
+    persisted and rendered. Keep only the known keys, and only as short strings
+    (or a list of them for `series`) -- never a DataFrame, an object, or a blob
+    that would smuggle raw rows past every other cap on this boundary."""
+    if not isinstance(chart, dict):
+        return None
+    out: Dict[str, Any] = {}
+    for key in CHART_KEYS:
+        if key not in chart:
+            continue
+        value = chart[key]
+        if isinstance(value, (list, tuple)):
+            out[key] = [str(v)[:CHART_VALUE_CHARS] for v in list(value)[:MAX_RESULT_ROWS]]
+        elif isinstance(value, (str, int, float, bool)):
+            out[key] = str(value)[:CHART_VALUE_CHARS]
+    return out or None
 
 
 def _cap_structured_summary(value: Any) -> Any:
@@ -110,12 +158,18 @@ def _summarize(value: Any):
         return str(value)[:MAX_RESULT_CHARS], None
 
 
-def run_python_sandboxed(code: str, dataframes: Dict[str, pd.DataFrame],
+def run_python_sandboxed(code: str, dataframes: Optional[Dict[str, pd.DataFrame]] = None,
                           timeout_s: float = DEFAULT_TIMEOUT_S,
-                          memory_mb: int = DEFAULT_MEMORY_MB) -> PythonExecResult:
+                          memory_mb: int = DEFAULT_MEMORY_MB,
+                          dataframe_paths: Optional[Dict[str, str]] = None) -> PythonExecResult:
+    """`dataframes` keeps its positional slot and semantics so every existing
+    caller is untouched. `dataframe_paths` labels are read with `pd.read_parquet`
+    inside the child, before `exec`, so a large frame never crosses the pipe."""
     ctx = mp.get_context("spawn")
     parent_conn, child_conn = ctx.Pipe(duplex=False)
-    proc = ctx.Process(target=_worker, args=(code, dataframes, memory_mb, timeout_s, child_conn))
+    proc = ctx.Process(target=_worker,
+                       args=(code, dataframes or {}, memory_mb, timeout_s, child_conn,
+                             dataframe_paths or {}))
     start = time.monotonic()
     proc.start()
     child_conn.close()  # only the child writes; parent must not hold this open
@@ -131,7 +185,7 @@ def run_python_sandboxed(code: str, dataframes: Dict[str, pd.DataFrame],
                                     execution_ms=(time.monotonic() - start) * 1000)
 
         try:
-            status, payload, stdout = parent_conn.recv()
+            status, payload, stdout, chart = parent_conn.recv()
         except EOFError:
             proc.join(2)
             if proc.is_alive():
@@ -162,6 +216,7 @@ def run_python_sandboxed(code: str, dataframes: Dict[str, pd.DataFrame],
 
         summary, shape = _summarize(payload)
         return PythonExecResult(ok=True, result_summary=summary, result_shape=shape,
+                                chart_spec=_sanitise_chart(chart),
                                 stdout=capped_stdout, execution_ms=elapsed_ms)
     finally:
         parent_conn.close()

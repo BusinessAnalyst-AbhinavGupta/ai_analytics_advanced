@@ -4,12 +4,15 @@ a capped summary of its `result` variable."""
 from __future__ import annotations
 
 import json
+import tempfile
 import time
 import unittest
+from pathlib import Path
 
 import pandas as pd
 
-from analytics_platform.execution.python_sandbox import MAX_RESULT_CHARS, run_python_sandboxed
+from analytics_platform.execution.python_sandbox import (
+    EXTRACT_MEMORY_MB, EXTRACT_TIMEOUT_S, MAX_RESULT_CHARS, run_python_sandboxed)
 
 
 class TestRunPythonSandboxed(unittest.TestCase):
@@ -87,6 +90,70 @@ class TestRunPythonSandboxed(unittest.TestCase):
         serialized_len = len(json.dumps(res.result_summary)) \
             if not isinstance(res.result_summary, str) else len(res.result_summary)
         self.assertLess(serialized_len, MAX_RESULT_CHARS * 2)
+
+
+class TestSandboxLoadsFromParquet(unittest.TestCase):
+    """Task 3 -- at the 1,000,000-row ceiling, pickling every row through a pipe
+    into a child with a 512MB RLIMIT_AS is both very slow and an immediate
+    MemoryError. The child opens the Parquet file itself instead."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_dataframe_paths_are_loaded_in_the_child(self):
+        p = self.tmp / "df_1.parquet"
+        pd.DataFrame({"revenue": [1, 2, 3, 4]}).to_parquet(p, index=False)
+        res = run_python_sandboxed("result = int(df_1['revenue'].sum())",
+                                   dataframe_paths={"df_1": str(p)})
+        self.assertTrue(res.ok, res.error)
+        self.assertEqual(res.result_summary, 10)
+
+    def test_unreadable_parquet_reports_an_error_not_a_crash(self):
+        bad = self.tmp / "df_1.parquet"
+        bad.write_text("not parquet")
+        res = run_python_sandboxed("result = 1", dataframe_paths={"df_1": str(bad)})
+        self.assertFalse(res.ok)
+        self.assertIn("df_1", res.error)
+
+    def test_a_missing_parquet_reports_an_error_not_a_crash(self):
+        res = run_python_sandboxed("result = 1",
+                                   dataframe_paths={"df_1": str(self.tmp / "gone.parquet")})
+        self.assertFalse(res.ok)
+        self.assertIn("df_1", res.error)
+
+    def test_paths_and_inline_frames_can_be_mixed(self):
+        p = self.tmp / "df_1.parquet"
+        pd.DataFrame({"revenue": [5]}).to_parquet(p, index=False)
+        res = run_python_sandboxed(
+            "result = int(df_1['revenue'].sum() + df_2['revenue'].sum())",
+            dataframes={"df_2": pd.DataFrame({"revenue": [7]})},
+            dataframe_paths={"df_1": str(p)})
+        self.assertTrue(res.ok, res.error)
+        self.assertEqual(res.result_summary, 12)
+
+    def test_dataframes_is_now_optional(self):
+        """Every existing caller passes it positionally; the extract path does not."""
+        res = run_python_sandboxed("result = 1 + 1")
+        self.assertTrue(res.ok, res.error)
+        self.assertEqual(res.result_summary, 2)
+
+    def test_the_result_cap_still_applies_on_the_parquet_path(self):
+        """Only a summary crosses back, however the frame got into scope."""
+        p = self.tmp / "df_1.parquet"
+        pd.DataFrame({"n": range(500)}).to_parquet(p, index=False)
+        res = run_python_sandboxed("result = df_1", dataframe_paths={"df_1": str(p)})
+        self.assertTrue(res.ok, res.error)
+        self.assertLessEqual(len(res.result_summary), 20)
+        self.assertEqual(res.result_shape["rows"], 500)
+
+    def test_the_extract_constants_are_larger_than_the_defaults(self):
+        """A million-row cube does not fit in the 512MB default."""
+        self.assertGreater(EXTRACT_MEMORY_MB, 512)
+        self.assertGreaterEqual(EXTRACT_TIMEOUT_S, 30.0)
 
 
 if __name__ == "__main__":

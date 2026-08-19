@@ -144,7 +144,12 @@ def _build_execute_kick_js(payload: Any, nonce: Optional[str] = None) -> str:
         "if(j.error){result=JSON.stringify({ok:false,error:j.error||'metabase_error'});}"
         "else{const cols=(j.data&&j.data.cols||[]).map(c=>c.name);"
         "const rows=(j.data&&j.data.rows||[]).map(r=>r.slice());"
-        "result=JSON.stringify({ok:true,cols:cols,rows:rows});}"
+        # `rows_truncated` is Metabase's ONLY signal that it applied its own row
+        # cap. It caps silently otherwise -- a valid 200 carrying fewer rows than
+        # the query matched -- so dropping this field (as this JS used to) turns
+        # a partial result into a confidently wrong total downstream.
+        "const trunc=(j.data&&j.data.rows_truncated)||null;"
+        "result=JSON.stringify({ok:true,cols:cols,rows:rows,rows_truncated:trunc});}"
         "if(window.__mbNonce===myNonce){window.__mb.payload=result;window.__mb.ready=true;}"
         "}catch(e){if(window.__mbNonce===myNonce){window.__mb.payload=JSON.stringify({ok:false,error:String(e)});window.__mb.ready=true;}}"
         "})();return 'kick';}catch(e){window.__mb={payload:JSON.stringify({ok:false,error:String(e)}),ready:true};return 'kick';}})();"
@@ -156,13 +161,15 @@ class BrowserExecutorConfig:
     database_id: Any = None
     expected_host: str = ""
     timeout_s: float = 30.0
-    max_rows: int = 50000
+    # None means "take the bound from ctx.row_limit". This is a MEMORY GUARD on
+    # an already-received payload, not a transport limit -- see execute().
+    max_rows: Optional[int] = None
 
 
 class BrowserSessionExecutor(QueryExecutor):
     def __init__(self, metabase_base_url: str = "", database_id: Any = None,
                  expected_host: str = "", runner: Optional[Runner] = None,
-                 timeout_s: float = 30.0, max_rows: int = 50000):
+                 timeout_s: float = 30.0, max_rows: Optional[int] = None):
         self.base_url = metabase_base_url.rstrip("/")
         self.config = BrowserExecutorConfig(database_id=database_id,
                                             expected_host=expected_host,
@@ -302,10 +309,43 @@ class BrowserSessionExecutor(QueryExecutor):
             return QueryResult(ok=False, error=res.get("error", "metabase error"))
         rows = res.get("rows", [])
         cols = res.get("cols", [])
-        if len(rows) > self.config.max_rows:
-            rows = rows[: self.config.max_rows]
+        # WARNING TO THE NEXT READER: this slice runs AFTER the entire payload has
+        # already crossed the AppleScript boundary -- Metabase's whole response was
+        # JSON.stringify'd into window.__mb.payload and returned as one `osascript`
+        # string, which was then json.loads'd above. It is therefore a MEMORY
+        # GUARD, not a transport limit: raising it does not make that boundary
+        # carry more, it only stops discarding what already arrived. The only
+        # thing that bounds the *warehouse* is the LIMIT QueryPolicy injects,
+        # which is why cubes are sized to fit and ID-grain rows are keyset-paged.
+        bounds = [b for b in (self.config.max_rows, ctx.row_limit) if b]
+        cap = min(bounds) if bounds else None
+        warnings: List[str] = []
+        truncated = False
+
+        # Metabase's OWN cap, applied before anything reached this process.
+        # Unaggregated queries default to 2,000 rows and aggregated ones to
+        # 10,000 -- far below what this platform historically assumed, and
+        # applied without an error. This is the authoritative truncation signal;
+        # everything below is about what WE then discarded.
+        metabase_cap = res.get("rows_truncated")
+        if metabase_cap:
+            truncated = True
+            warnings.append(
+                f"Metabase truncated this result at {metabase_cap} rows before it "
+                f"reached us (its own MB_AGGREGATED_QUERY_ROW_LIMIT / "
+                f"MB_UNAGGREGATED_QUERY_ROW_LIMIT). Totals and rates over it are "
+                f"understated. Fetch it in keyset pages, or raise the limit on the "
+                f"Metabase server -- our row_limit cannot lift it.")
+
+        if cap is not None and len(rows) > cap:
+            rows = rows[:cap]
+            truncated = True
+            # Callers set ExtractMeta.truncated off this. A silently shorter frame
+            # is how a partial result becomes a confidently wrong total.
+            warnings.append(f"result truncated at {cap} rows")
         df = pd.DataFrame(rows, columns=cols)
-        return QueryResult(ok=True, data=df, row_count=len(df), columns=cols)
+        return QueryResult(ok=True, data=df, row_count=len(df), columns=cols,
+                           warnings=warnings, truncated=truncated)
 
     def cancel(self, execution_id: str) -> bool:
         return True
@@ -330,6 +370,7 @@ def make_live_executor(settings: Optional["Settings"] = None) -> BrowserSessionE
         metabase_base_url=settings.metabase_base_url,
         database_id=database_id or None,
         expected_host=settings.metabase_expected_host,
+        timeout_s=float(getattr(settings, "metabase_timeout_s", 300.0)),
     )
 
 

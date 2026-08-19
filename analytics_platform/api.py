@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 import sys
 import logging
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,8 @@ from .brain.index import BrainIndex
 from .brain.store import CompanyBrain
 from .config import Settings
 from .database import Store
-from .domain import (AnswerMode, DataSourceKind, KnowledgeNode, NodeKind, ReviewStatus, RunStatus)
+from .domain import (AnswerMode, AttributionRule, BaseView, DataSourceKind, KnowledgeNode,
+                     NodeKind, ReviewStatus, RunStatus, SemanticDimension, SemanticMetric)
 from .execution.base import QueryExecutor
 from .execution.sampler import SamplerExecutor
 from .junior import JuniorEngine
@@ -63,6 +64,8 @@ from .research import ResearchService
 from .retention import RetentionService
 from .scheduler import Scheduler
 from .senior import SeniorService
+from .base_view import BaseViewRegistry
+from .semantic import SemanticLayer
 from .stakeholder import StakeholderService
 from .stores import TenantStoreProvider
 from .storyline import (DocxRendererUnavailable, assemble_storyline, render_docx,
@@ -132,6 +135,67 @@ class IngestSQL(BaseModel):
     sql: str
     source_ref: str = ""
     title: Optional[str] = None
+
+
+class SemanticMetricIn(BaseModel):
+    """A metric definition. Created unapproved; promote it through the existing
+    POST /knowledge/{tenant_id}/{node_id}/review endpoint."""
+    name: str
+    definition: str = ""
+    grain: List[str] = []
+    dimensions: List[str] = []
+    source_tables: List[str] = []
+    filters: List[str] = []          # ALWAYS applied to any query touching this metric
+    caveats: List[str] = []
+    freshness: str = ""
+    owner: str = ""
+    aliases: List[str] = []
+    by: str = "analyst"
+
+
+class AttributionRuleIn(BaseModel):
+    column: str
+    grain: List[str] = []
+    strategy: str = "most_frequent"   # highest_intent | most_frequent | latest | first
+    priority_values: List[str] = []   # ranked, highest business value first
+    tiebreakers: List[str] = []
+    source: str = ""
+    rationale: str = ""
+
+
+class ReconcileIn(BaseModel):
+    """Two answers from one conversation, and the measure to compare."""
+    answer_a: str
+    answer_b: str
+    measure: str = ""      # empty -> the measure both cubes carry
+
+
+class BaseViewIn(BaseModel):
+    """An ID-grain row population. Created unapproved; promote it through the
+    existing review endpoint. Answers built on an unapproved base are marked
+    provisional."""
+    name: str
+    grain: List[str] = []
+    source_sql: str = ""
+    dimension_columns: List[str] = []
+    measure_columns: List[str] = []
+    attributions: List[AttributionRuleIn] = []
+    time_column: str = ""
+    row_count_estimate: int = 0
+    description: str = ""
+    owner: str = ""
+    aliases: List[str] = []
+    by: str = "analyst"
+
+
+class SemanticDimensionIn(BaseModel):
+    name: str
+    column: str = ""
+    source_tables: List[str] = []
+    description: str = ""
+    values: List[str] = []
+    aliases: List[str] = []
+    by: str = "analyst"
 
 
 class LegacyItem(BaseModel):
@@ -334,7 +398,8 @@ def make_context(settings: Optional[Settings] = None,
     research = ResearchService(stores, observability=obs, embedder=embedder)
     auth = AuthGate(settings)
     billing = BillingService(stores, settings=settings, observability=obs)
-    retention = RetentionService(stores, tenants=tenants, observability=obs)
+    retention = RetentionService(stores, tenants=tenants, observability=obs,
+                                 settings=settings)
     junior = JuniorEngine(stores, executor=executor, tenants=tenants,
                           observability=obs, settings=settings, embedder=embedder)
     junior_worker = _make_junior_worker(settings, stores, junior, obs, embedder)
@@ -403,7 +468,8 @@ def ensure_services(ctx: AppContext) -> AppContext:
                                      observability=ctx.observability)
     if ctx.retention is None:
         ctx.retention = RetentionService(ctx.stores, tenants=ctx.tenants,
-                                         observability=ctx.observability)
+                                         observability=ctx.observability,
+                                         settings=ctx.settings)
     if ctx.junior is None:
         from .junior import JuniorEngine
         ctx.junior = JuniorEngine(ctx.stores, executor=ctx.executor,
@@ -763,6 +829,89 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
         k = NodeKind(kind) if kind else None
         return [n.to_dict() for n in brain.search(q, kind=k, usable_only=usable_only, limit=limit)]
 
+    # -- the semantic layer (Task 6) ----------------------------------------
+    # Approval deliberately reuses POST /knowledge/{tenant_id}/{node_id}/review
+    # below -- no parallel approval path, so one review flow governs every kind
+    # of company knowledge.
+    @app.get("/knowledge/{tenant_id}/semantic")
+    def get_semantic_layer(tenant_id: str, approved_only: bool = True) -> Dict[str, Any]:
+        tenant_or_404(tenant_id)
+        layer = SemanticLayer(C.pipeline.brain)
+        return {
+            "metrics": [asdict(m) for m in layer.metrics(tenant_id, approved_only=approved_only)],
+            "dimensions": [asdict(d) for d in
+                           layer.dimensions(tenant_id, approved_only=approved_only)],
+        }
+
+    @app.post("/knowledge/{tenant_id}/semantic/metrics")
+    def upsert_semantic_metric(tenant_id: str, body: SemanticMetricIn) -> Dict[str, Any]:
+        tenant_or_404(tenant_id)
+        payload = body.model_dump()
+        by = payload.pop("by", "analyst")
+        node = SemanticLayer(C.pipeline.brain).upsert_metric(
+            tenant_id, SemanticMetric(**payload), by=by)
+        C.observability.event(tenant_id=tenant_id, stage="knowledge.semantic.metric",
+                              actor=by, resource=node.id, status="OK")
+        return node.to_dict()
+
+    @app.post("/knowledge/{tenant_id}/semantic/dimensions")
+    def upsert_semantic_dimension(tenant_id: str, body: SemanticDimensionIn) -> Dict[str, Any]:
+        tenant_or_404(tenant_id)
+        payload = body.model_dump()
+        by = payload.pop("by", "analyst")
+        node = SemanticLayer(C.pipeline.brain).upsert_dimension(
+            tenant_id, SemanticDimension(**payload), by=by)
+        C.observability.event(tenant_id=tenant_id, stage="knowledge.semantic.dimension",
+                              actor=by, resource=node.id, status="OK")
+        return node.to_dict()
+
+    # -- base views (Task 7) -------------------------------------------------
+    @app.get("/knowledge/{tenant_id}/base-views")
+    def list_base_views(tenant_id: str, approved_only: bool = True) -> List[Dict[str, Any]]:
+        tenant_or_404(tenant_id)
+        registry = BaseViewRegistry(C.pipeline.brain)
+        out = []
+        for v in registry.all(tenant_id, approved_only=approved_only):
+            d = asdict(v)
+            d["approved"] = registry.is_approved(tenant_id, v.name)
+            d["population_hash"] = registry.population_hash(v)
+            out.append(d)
+        return out
+
+    @app.post("/knowledge/{tenant_id}/base-views")
+    def upsert_base_view(tenant_id: str, body: BaseViewIn) -> Dict[str, Any]:
+        tenant_or_404(tenant_id)
+        payload = body.model_dump()
+        by = payload.pop("by", "analyst")
+        payload["attributions"] = [AttributionRule(**r) for r in payload.get("attributions", [])]
+        view = BaseView(**payload)
+        # Grain verification is measured by the probe, never asserted by whoever
+        # posts the definition. A caller that could set these would be certifying
+        # its own base view.
+        view.grain_verified, view.grain_violation_ratio = False, 0.0
+        view.grain_checked_at, view.grain_checked_hash = "", ""
+        node = BaseViewRegistry(C.pipeline.brain).upsert(tenant_id, view, by=by)
+        C.observability.event(tenant_id=tenant_id, stage="knowledge.base_view",
+                              actor=by, resource=node.id, status="OK")
+        return node.to_dict()
+
+    # -- attribution proposals (Task 13) -------------------------------------
+    @app.post("/knowledge/{tenant_id}/attribution/propose")
+    def propose_attribution(tenant_id: str,
+                            tables: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """The junior measures which columns fan out and proposes DRAFT rules.
+
+        Review and approval go through the existing /review endpoint -- this adds
+        no parallel approval path, because the ranking these rules carry is a
+        business judgement and has to pass the same gate as any other one.
+        """
+        tenant_or_404(tenant_id)
+        nodes = C.junior.propose_attribution_rules(tenant_id, tables)
+        C.observability.event(tenant_id=tenant_id, stage="knowledge.attribution_propose",
+                              actor="junior", resource=tenant_id, status="OK",
+                              meta={"proposed": len(nodes)})
+        return [n.to_dict() for n in nodes]
+
     @app.post("/knowledge/{tenant_id}/{node_id}/review")
     def review(tenant_id: str, node_id: str, body: ReviewIn) -> Dict[str, Any]:
         tenant_or_404(tenant_id)
@@ -1074,6 +1223,58 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
         if not C.stakeholder.delete_conversation(tenant_id, conversation_id):
             raise HTTPException(status_code=404, detail="conversation not found")
         return {"deleted": conversation_id}
+
+    @app.get("/stakeholder/{tenant_id}/conversations/{conversation_id}"
+             "/extracts/{label}/download")
+    def download_extract(tenant_id: str, conversation_id: str, label: str) -> Response:
+        """The materialised cube behind an answer, as CSV.
+
+        At the materialised ceiling this is a large body -- that is the accepted
+        cost of "let me download the data". It is never silently sampled; if the
+        extract was truncated, `extract_meta.truncated` already says so and the
+        CSV is left alone.
+        """
+        tenant_or_404(tenant_id)
+        try:
+            df = C.stakeholder.extract_frame(tenant_id, conversation_id, label)
+        except ValueError as exc:
+            # ExtractStore's id validation. Never a 500, and never a path.
+            raise HTTPException(status_code=400, detail=str(exc))
+        if df is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"no extract {label!r} in conversation {conversation_id!r}")
+        # Same dual-form filename as the storyline export: Starlette encodes
+        # response headers as latin-1, so the ASCII slug carries the plain
+        # `filename=` and the RFC 5987 form carries the real one.
+        raw_name = f"{label}"[:60]
+        ascii_slug = "".join(
+            c if (c.isascii() and c.isalnum()) else "-" for c in raw_name
+        ).strip("-") or "extract"
+        utf8_name = quote(f"{raw_name}.csv", safe="")
+        return Response(
+            content=df.to_csv(index=False).encode("utf-8"), media_type="text/csv",
+            headers={"Content-Disposition":
+                     f'attachment; filename="{ascii_slug}.csv"; '
+                     f"filename*=UTF-8''{utf8_name}"})
+
+    @app.post("/stakeholder/{tenant_id}/conversations/{conversation_id}/reconcile")
+    def reconcile_answers(tenant_id: str, conversation_id: str,
+                          body: ReconcileIn) -> Dict[str, Any]:
+        """Do two answers in this conversation rest on the same rows, and do
+        their numbers agree? An answer with no base view is a 200 saying exactly
+        that -- a real, expected state, not an error."""
+        tenant_or_404(tenant_id)
+        try:
+            result = C.stakeholder.reconcile_answers(
+                tenant_id, conversation_id, body.answer_a, body.answer_b, body.measure)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        if result is None:
+            raise HTTPException(
+                status_code=404,
+                detail="one or both answers were not found in this conversation")
+        return asdict(result)
 
     @app.post("/stakeholder/{tenant_id}/conversations/{conversation_id}/export")
     def stakeholder_export_storyline(tenant_id: str, conversation_id: str,

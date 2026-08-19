@@ -18,8 +18,10 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
+from .config import Settings
 from .database import Store
 from .domain import new_id, now_iso
+from .execution.extract_store import ExtractStore
 from .observability import Observability
 from .stores import TenantStoreProvider
 from .tenancy import TenantService
@@ -42,10 +44,18 @@ def _cutoff_iso(retention_days: int) -> str:
 
 class RetentionService:
     def __init__(self, stores: TenantStoreProvider, tenants: Optional[TenantService] = None,
-                 observability: Optional[Observability] = None):
+                 observability: Optional[Observability] = None,
+                 settings: Optional[Settings] = None):
         self.stores = stores
         self.tenants = tenants or TenantService(stores)
         self.obs = observability or Observability(stores)
+        # Extract Parquet is the one thing here that is not a database row, and
+        # it does not disappear when its answer is purged: a 1,000,000-row
+        # ceiling per extract accumulates fast. It ages out on its own
+        # `extract_retention_days`, not the tenant's row-retention window --
+        # raw data is worth keeping for less time than the answers built on it.
+        self.settings = settings or Settings()
+        self.extract_store = ExtractStore(self.settings.resolve_tenants_root())
 
     # -- review ---------------------------------------------------------------
     def review(self) -> Dict[str, Any]:
@@ -97,7 +107,26 @@ class RetentionService:
             if not dry_run:
                 self.obs.event(tenant_id=t["id"], stage="retention.purge", actor="system",
                                status="OK", meta={"removed": table_counts})
+        removed["extracts"] = 0 if dry_run else self._sweep_extracts()
         return {"dry_run": dry_run, "removed": removed}
+
+    def _sweep_extracts(self) -> int:
+        """Drop conversation extract directories past the extract retention
+        window. Swallows filesystem errors: a permission problem on one
+        directory must not abandon the rest of the purge."""
+        days = int(getattr(self.settings.policy, "extract_retention_days", 0) or 0)
+        if days <= 0:
+            return 0        # no policy configured -- NOT "delete everything"
+        try:
+            swept = self.extract_store.sweep(days)
+        except OSError as exc:
+            self.obs.event(tenant_id="", stage="retention.extracts", actor="system",
+                           status="ERROR", meta={"error": str(exc)})
+            return 0
+        if swept:
+            self.obs.event(tenant_id="", stage="retention.extracts", actor="system",
+                           status="OK", meta={"conversations_removed": swept})
+        return swept
 
     # -- tenant deletion (GDPR) ------------------------------------------------
     def delete_tenant(self, tenant_id: str, by: str = "owner") -> Dict[str, Any]:

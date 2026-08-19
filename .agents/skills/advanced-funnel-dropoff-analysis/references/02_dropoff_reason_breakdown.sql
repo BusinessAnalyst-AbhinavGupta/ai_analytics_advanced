@@ -67,4 +67,4 @@ SELECT
 FROM reason_bucketed
 GROUP BY reason_bucket
 ORDER BY sessions_affected DESC
-LIMIT 5;
+;
