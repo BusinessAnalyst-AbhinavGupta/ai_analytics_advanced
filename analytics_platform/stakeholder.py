@@ -44,6 +44,12 @@ from .skills import SkillRegistry, SkillEngine
 
 logger = logging.getLogger(__name__)
 
+# How much of the question a cube records as its description. This was 200, which
+# cut the live question inside the phrase "last 30 days worth of " -- losing the
+# very timeframe the user had stated, in the one field a follow-up turn reads to
+# find out what the previous turn was about.
+CUBE_DESCRIPTION_CHARS = 600
+
 CATEGORY_MARKERS: Dict[str, List[str]] = {
     "metric_lookup": ["how many", "count", "number of", "what is the value", "measure", "metric"],
     "trend": ["trend", "over time", "month over month", "week over week", "growth", "seasonal"],
@@ -839,7 +845,8 @@ class StakeholderService:
 
         label = self.data_cache.next_label(tenant_id, conversation_id)
         meta = self._extract_meta(label, question, plan, exec_res, sql)
-        self.data_cache.put(tenant_id, conversation_id, label, question[:200],
+        self.data_cache.put(tenant_id, conversation_id, label,
+                            question[:CUBE_DESCRIPTION_CHARS],
                             exec_res.data, meta=meta)
         self.workspace.register(tenant_id, conversation_id, label)
         artifact.datasets_used.append(label)
@@ -873,7 +880,7 @@ class StakeholderService:
                          or len(df) >= ceiling
                          or any("truncated" in w for w in (exec_res.warnings or [])))
         return ExtractMeta(
-            label=label, description=question[:200],
+            label=label, description=question[:CUBE_DESCRIPTION_CHARS],
             grain=list(plan.base_view.grain) if plan.base_view else [],
             columns=[str(c) for c in df.columns],
             dtypes={str(c): str(t) for c, t in df.dtypes.items()},
@@ -1308,15 +1315,44 @@ WITH ranked_{rule.column} AS (
                 lines.append(
                     f"- {f['label']}: {f.get('description', '')} | base_view="
                     f"{f.get('base_view') or 'none'} | dimensions={dims} "
-                    f"| measures={measures} "
+                    f"| measures={measures} | slice={self._render_slice(f)} "
                     f"| rows={f.get('row_count')} | truncated={f.get('truncated')} "
                     f"| sample={f.get('sample')}")
             lines.append(
                 "If a measure you need is already listed above, name it EXACTLY as "
                 "that cube names it. A measure that means the same thing under a new "
                 "name counts as missing and costs a fresh warehouse query.")
+            lines.append(
+                "`slice` is what that cube was actually filtered to. A follow-up that "
+                "re-cuts it MUST repeat those filters and that window verbatim unless "
+                "the question asks to change them -- dropping one silently answers a "
+                "different question over different rows, while reading as a breakdown "
+                "of the previous answer.")
             lines.append("")
         return "\n".join(lines)
+
+    @staticmethod
+    def _render_slice(frame: Dict[str, Any]) -> str:
+        """What a cached cube was filtered to, as the planner needs to repeat it.
+
+        Said explicitly even when there is nothing, because silence is ambiguous:
+        the planner cannot tell "this cube is unfiltered" from "its filters were
+        not passed on", and that ambiguity is exactly what let a follow-up drop a
+        country filter and answer over eight of them.
+        """
+        parts = [f"{column}={','.join(str(v) for v in values)}"
+                 for column, values in sorted((frame.get("filters") or {}).items())
+                 if values]
+        # The requested window is preferred over the measured one: the measured
+        # pair is only populated when the time column is among the cube's own
+        # columns, so a cube filtered to July but grouped by country measures
+        # nothing while still very much having a window.
+        start = frame.get("requested_time_start") or frame.get("time_start")
+        end = frame.get("requested_time_end") or frame.get("time_end")
+        column = frame.get("time_column")
+        if column and start and end:
+            parts.append(f"{column}={start}..{end}")
+        return "; ".join(parts) if parts else "no filters, no time window"
 
     def _ask_planner(self, llm: Any, prompt: str,
                      schema_ctx: SchemaContext) -> Optional[Dict[str, Any]]:

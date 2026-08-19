@@ -2141,3 +2141,86 @@ class TestPlannerFailureDoesNotImprovise(unittest.TestCase):
         self.assertFalse(plan.planner_failed)
         self.assertEqual(
             self.svc._planner_failure_refusal(self.tid, "c6", plan), "")
+
+
+# --------------------------------------------------------------------------- #
+# The planner must be told the SLICE, not asked to infer it
+#
+# ExtractMeta records exactly what a cube was filtered to. _plan_prompt did not
+# pass any of it on -- the only trace of "DE, last 30 days" reaching the planner
+# was the previous question text, truncated at 200 characters, which in the live
+# run cut off inside the phrase "last 30 days worth of ". So a follow-up had to
+# reverse-engineer the filters from a chopped-off paraphrase while the exact
+# values sat unused in memory.
+# --------------------------------------------------------------------------- #
+class TestPlannerSeesTheSlice(unittest.TestCase):
+    def setUp(self):
+        self.ctx, self.base = app_ctx()
+        self.tid = self.ctx.tenants.create_tenant("SliceCo").id
+        self.app = create_app(self.ctx)
+        self.svc = self.ctx.stakeholder
+
+    def tearDown(self):
+        self.svc.workspace.close_all()
+        self.base.close()
+
+    def prompt(self, **frame):
+        base = {"label": "df_1", "description": "consent drop-off", "base_view": "cs",
+                "dimensions": ["service_line"], "columns": ["service_line", "n"],
+                "row_count": 24, "truncated": False, "sample": []}
+        base.update(frame)
+        from analytics_platform.schema_context import SchemaContext
+        return self.svc._plan_prompt("split that by checkout type",
+                                     SchemaContext(rendered=""), [base])
+
+    def test_the_filters_a_cube_was_sliced_to_are_named(self):
+        self.assertIn("natco_code", self.prompt(filters={"natco_code": ["de"]}))
+
+    def test_the_filter_values_are_named_exactly(self):
+        """'filtered somehow' is no more usable than nothing -- the planner has to
+        be able to repeat the literal back. Asserted as one fragment: a bare "de"
+        also matches the word "description"."""
+        self.assertIn("natco_code=de", self.prompt(filters={"natco_code": ["de"]}))
+
+    def test_the_time_window_a_cube_was_asked_for_is_named(self):
+        out = self.prompt(time_column="event_date",
+                          requested_time_start="2026-07-19",
+                          requested_time_end="2026-08-17")
+        self.assertIn("2026-07-19", out)
+        self.assertIn("2026-08-17", out)
+
+    def test_a_measured_window_is_used_when_no_requested_one_was_recorded(self):
+        """Older sidecars predate the requested pair and carry only the measured
+        one. They must not read as unfiltered."""
+        out = self.prompt(time_column="event_date", time_start="2026-01-01",
+                          time_end="2026-01-31")
+        self.assertIn("2026-01-01", out)
+
+    def test_an_unfiltered_cube_says_so_rather_than_staying_silent(self):
+        """Silence is ambiguous: the planner cannot tell 'no filters' from 'the
+        filters were not passed on', and that ambiguity is what let a follow-up
+        quietly drop one."""
+        out = self.prompt(filters={}, time_column="")
+        self.assertIn("no filters", out.lower())
+
+    def test_the_recorded_description_is_not_cut_mid_question(self):
+        """The live cut landed inside 'last 30 days worth of ', losing the very
+        timeframe the user had stated. Tested where the truncation actually
+        happens -- ExtractMeta stores whatever it is handed."""
+        from analytics_platform.domain import CubeMeasure, CubeSpec, TurnPlan
+        from analytics_platform.domain import BaseView
+        import pandas as pd
+
+        class _Res:
+            ok, error, warnings, truncated = True, "", [], False
+            data = pd.DataFrame({"n": [1]})
+
+        question = ("why are users dropping off after reaching consent page and not "
+                    "going on to place the order. break this down by service line and "
+                    "category and limit to DE. Also let's just work on last 30 days "
+                    "worth of data.")
+        self.assertGreater(len(question), 200)   # the old ceiling cut inside it
+        plan = TurnPlan(path="retrieve", base_view=BaseView(name="cs", grain=["s"]),
+                        cube=CubeSpec(base_name="cs", measures=[CubeMeasure("n", "COUNT(*)")]))
+        meta = self.svc._extract_meta("df_1", question, plan, _Res(), "SELECT 1")
+        self.assertIn("last 30 days worth of data", meta.description)

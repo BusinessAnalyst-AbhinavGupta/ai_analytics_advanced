@@ -47,7 +47,7 @@ class ExtractMeta:
     """
 
     label: str
-    description: str = ""          # the question that produced it, truncated to 200 chars
+    description: str = ""          # the question that produced it (see CUBE_DESCRIPTION_CHARS)
     grain: List[str] = field(default_factory=list)     # ["session_id"]
     columns: List[str] = field(default_factory=list)
     dtypes: Dict[str, str] = field(default_factory=dict)
