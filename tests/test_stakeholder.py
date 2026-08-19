@@ -1914,6 +1914,44 @@ class TestTimeframeClarification(unittest.TestCase):
                              time_end="2026-08-17", created_at="2026-08-19T00:00:00Z"))
         self.assertEqual(self.clarification(NO_TIMEFRAME_PLAN, conversation_id="c2"), "")
 
+    def test_a_cube_that_asked_for_a_window_suppresses_the_question(self):
+        """The measured window is only populated when the time column is one of
+        the cube's own columns. A cube filtered to July but grouped by country
+        carries no event_date column, so it records no measured window -- and it
+        is still a cube the user gave a timeframe for. Asking again would be a
+        false positive on the commonest follow-up there is."""
+        import pandas as pd
+        from analytics_platform.execution.extract_store import ExtractMeta
+        self.svc.data_cache.put(
+            self.tid, "c6", "df_1", "sessions in July", pd.DataFrame({"n": [1]}),
+            meta=ExtractMeta(label="df_1", grain=["session_id"], columns=["n"],
+                             base_view="checkout_sessions", row_count=1,
+                             time_column="date", requested_time_start="2026-07-19",
+                             requested_time_end="2026-08-17",
+                             created_at="2026-08-19T00:00:00Z"))
+        self.assertEqual(self.clarification(NO_TIMEFRAME_PLAN, conversation_id="c6"), "")
+
+    def test_a_retrieve_records_the_window_the_turn_asked_for(self):
+        """Recorded separately from the measured one: coverage must keep judging
+        what the warehouse actually returned, not what was requested."""
+        from analytics_platform.domain import CubeMeasure, CubeSpec, TurnPlan
+        import pandas as pd
+
+        class _Res:
+            ok, error, warnings, truncated = True, "", [], False
+            data = pd.DataFrame({"n": [1]})
+
+        spec = CubeSpec(base_name="checkout_sessions", dimensions=["country"],
+                        measures=[CubeMeasure("n", "COUNT(*)", True)],
+                        time_column="date", time_start="2026-07-19",
+                        time_end="2026-08-17")
+        plan = TurnPlan(path="retrieve", base_view=self.view, cube=spec)
+        meta = self.svc._extract_meta("df_1", "q", plan, _Res(), "SELECT 1")
+        self.assertEqual(meta.requested_time_start, "2026-07-19")
+        self.assertEqual(meta.requested_time_end, "2026-08-17")
+        # unchanged: nothing was measured, because the frame has no date column
+        self.assertEqual(meta.time_start, "")
+
     def test_an_unbounded_cube_in_the_workspace_does_not_suppress_the_question(self):
         """A cube with no window answers nothing about which window was meant."""
         import pandas as pd

@@ -695,6 +695,10 @@ class StakeholderService:
         for frame in self.data_cache.list_available(tenant_id, conversation_id):
             if frame.get("time_start") and frame.get("time_end"):
                 return ""
+            # A cube filtered to July but grouped by country carries no date
+            # column, so it measured no window -- and the user still gave it one.
+            if frame.get("requested_time_start") and frame.get("requested_time_end"):
+                return ""
 
         column = view.time_column
         extent = ""
@@ -831,6 +835,8 @@ class StakeholderService:
             non_additive=list(cube_sql.non_additive) if cube_sql else [],
             filters=dict(plan.cube.filters) if (plan.cube and cube_sql) else {},
             time_column=time_column, time_start=start, time_end=end,
+            requested_time_start=(plan.cube.time_start if plan.cube else ""),
+            requested_time_end=(plan.cube.time_end if plan.cube else ""),
             grain_violated=bool(getattr(self, "_grain_violated", False)))
 
     # -- the population, and what it obliges us to say -------------------------

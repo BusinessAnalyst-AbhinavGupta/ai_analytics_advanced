@@ -63,8 +63,17 @@ class ExtractMeta:
     non_additive: List[str] = field(default_factory=list)    # measures that cannot roll up
     filters: Dict[str, List[str]] = field(default_factory=dict)   # the SLICE, not the population
     time_column: str = ""
-    time_start: str = ""
+    time_start: str = ""          # MEASURED off the frame -- what the warehouse returned
     time_end: str = ""
+    # What the turn ASKED for. Distinct from the measured pair above, which is
+    # deliberately taken off the frame so coverage can never reuse a cube for a
+    # window it did not actually contain. The measured pair is only populated
+    # when the time column is one of the cube's own columns, so a cube filtered
+    # to July but grouped by country records no window at all -- yet the user
+    # plainly did give it a timeframe. That question, "has a period been
+    # established in this conversation", is what these two answer.
+    requested_time_start: str = ""
+    requested_time_end: str = ""
     grain_violated: bool = False   # an ID-grain extract came back with duplicate keys
 
     @classmethod

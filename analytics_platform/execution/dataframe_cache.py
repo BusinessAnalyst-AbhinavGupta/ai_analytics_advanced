@@ -73,6 +73,8 @@ def _describe_meta(meta: Optional[ExtractMeta], label: str,
         "time_column": meta.time_column if meta else "",
         "time_start": meta.time_start if meta else "",
         "time_end": meta.time_end if meta else "",
+        "requested_time_start": meta.requested_time_start if meta else "",
+        "requested_time_end": meta.requested_time_end if meta else "",
     }
 
 
