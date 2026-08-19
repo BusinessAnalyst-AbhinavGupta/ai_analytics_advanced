@@ -455,6 +455,12 @@ class TurnPlan:
     # one? Defaults True so a planner that never reports it behaves exactly as
     # before -- a missing field must not turn every turn into an interrogation.
     timeframe_stated: bool = True
+    # The planner returned nothing usable, as opposed to deliberately choosing
+    # the aggregate path. Both end up with path="aggregate", but only one of them
+    # means "nobody decided this turn" -- and improvising a fresh population on
+    # top of a conversation that already has a governed one is how an answer
+    # silently stops being about the same rows as the answer before it.
+    planner_failed: bool = False
     df_label: str = ""            # the cube to compute over, from the verdict
     base_view: Optional["BaseView"] = None
     base_view_approved: bool = False      # False -> the answer is provisional

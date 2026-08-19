@@ -574,14 +574,17 @@ class StakeholderService:
         plan = self._plan_turn(llm, tenant_id, conversation_id, question,
                                query_nodes, defn_nodes, schema_ctx=schema_ctx)
 
-        clarification = self._timeframe_clarification(tenant_id, conversation_id, plan,
-                                                      schema_ctx)
+        clarification = (self._planner_failure_refusal(tenant_id, conversation_id, plan)
+                         or self._timeframe_clarification(tenant_id, conversation_id,
+                                                          plan, schema_ctx))
         if clarification:
             out = self._record(
                 tenant_id, question, user_id, category, trace, clarification,
                 AnswerMode.NEEDS_CLARIFICATION, "NEEDS_CLARIFICATION", False,
                 [n.id for n in (query_nodes + defn_nodes)],
-                caveats=["no timeframe was given, and none was assumed"],
+                caveats=["the population this conversation is built on was not "
+                         "changed to answer this turn"] if plan.planner_failed else
+                        ["no timeframe was given, and none was assumed"],
                 conversation_id=conversation_id)
             self.obs.event(tenant_id=tenant_id, trace_id=trace,
                            stage="stakeholder.clarify", actor="stakeholder",
@@ -669,6 +672,53 @@ class StakeholderService:
         return out
 
     # -- stage: is the question even answerable as asked? ----------------------
+    def _planner_failure_refusal(self, tenant_id: str, conversation_id: str,
+                                 plan: TurnPlan) -> str:
+        """The refusal to put back to the user, or "" to carry on.
+
+        When the planner returns nothing usable the turn falls through to a
+        one-off query that re-derives its own FROM and WHERE from the question
+        text. On a fresh conversation that is an honest best effort: the answer
+        is marked unreconcilable, and there is no earlier number for it to
+        contradict.
+
+        Inside a conversation that already has a governed population it is
+        something else. Caught live: turn 1 answered over DE for the last 30 days
+        from a governed base, turn 2 asked to split "that same drop-off" by
+        checkout type, and the improvised query dropped both filters and answered
+        over all eight natcos and all 443 days -- 2,702,510 consent sessions
+        where turn 1 had 136,573. It was correctly flagged unreconcilable, but
+        nothing in the prose said the ground had moved, and the two read as one
+        analysis. So: do not improvise a population on top of a governed one.
+        Ask instead.
+        """
+        if not plan.planner_failed:
+            return ""
+        governed = [f for f in self.data_cache.list_available(tenant_id, conversation_id)
+                    if f.get("population_hash")]
+        if not governed:
+            # Nothing to contradict. Leave the existing fallback alone.
+            return ""
+        names = sorted({f.get("base_view") for f in governed if f.get("base_view")})
+        population = ", ".join(names) or "a governed population"
+        applied: Dict[str, List[str]] = {}
+        for frame in governed:
+            for column, values in (frame.get("filters") or {}).items():
+                applied.setdefault(column, list(values))
+        slice_note = ""
+        if applied:
+            slice_note = (" It was filtered to "
+                          + "; ".join(f"{c} = {', '.join(v)}" for c, v in sorted(applied.items()))
+                          + ".")
+        return (
+            f"I could not work out what this follow-up is asking for, and I would "
+            f"rather say so than guess. Everything in this conversation so far was "
+            f"computed over {population}.{slice_note} To answer this one I would have "
+            f"to write a fresh query and re-derive those filters from your wording -- "
+            f"and if I got them wrong the result would read as a breakdown of the "
+            f"previous answer while actually resting on a different set of rows. "
+            f"Could you restate it, naming the breakdown you want?")
+
     def _timeframe_clarification(self, tenant_id: str, conversation_id: str,
                                  plan: TurnPlan, schema_ctx: SchemaContext) -> str:
         """The question to put back to the user, or "" to carry on.
@@ -1187,13 +1237,21 @@ WITH ranked_{rule.column} AS (
         prompt = self._plan_prompt(question, schema_ctx, frames)
 
         parsed = self._ask_planner(llm, prompt, schema_ctx)
+        if parsed is None and any(f.get("population_hash") for f in frames):
+            # Ask once more, but ONLY where giving up would cost something. This
+            # failure is intermittent -- the same call, same prompt, usually
+            # returns perfectly good JSON -- so one retry recovers most of them
+            # for the price of one planning call. On a conversation with no
+            # governed cube in it there is nothing for a fallback answer to
+            # contradict, so the retry would be cost without a benefit.
+            parsed = self._ask_planner(llm, prompt, schema_ctx)
         if parsed is None:
-            return TurnPlan(path="aggregate", analysis="python",
+            return TurnPlan(path="aggregate", analysis="python", planner_failed=True,
                             rationale="the planner produced no usable plan")
 
         plan = self._resolve_plan(tenant_id, parsed, schema_ctx)
         if plan is None:
-            return TurnPlan(path="aggregate", analysis="python",
+            return TurnPlan(path="aggregate", analysis="python", planner_failed=True,
                             rationale="the planner named a base view that does not exist")
 
         # The guard refused: feed the culprit back once. Do not silently drop a

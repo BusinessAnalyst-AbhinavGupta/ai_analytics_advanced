@@ -1983,3 +1983,161 @@ class TestTimeframeClarification(unittest.TestCase):
             MockLLM([NO_TIMEFRAME_PLAN]), self.tid, "c5",
             "how many sessions converted?", "u1", "general", "trace-2", [], [])
         self.assertEqual(self.spy.all_sql, [])
+
+
+# --------------------------------------------------------------------------- #
+# Never improvise a new population mid-conversation
+#
+# When the planner returns something unparseable the turn used to fall through
+# to a one-off query that re-derives its own FROM and WHERE from the question
+# text. Caught live: turn 1 answered over DE for the last 30 days from a
+# governed base; turn 2 ("now split that same drop-off by checkout type") got an
+# unparseable plan, improvised, and silently answered over all 8 natcos and all
+# 443 days -- 2,702,510 consent sessions where turn 1 had 136,573. It was
+# correctly flagged unreconcilable, but nothing in the prose said the ground had
+# moved, and a reader would naturally combine the two.
+#
+# The planner failure is intermittent and its cause is not established, so this
+# guards the consequence rather than the trigger.
+# --------------------------------------------------------------------------- #
+GOVERNED_FOLLOW_UP = (
+    '{"base_view":"checkout_sessions","timeframe_stated":true,'
+    '"cube":{"dimensions":[],"measures":[{"name":"n","expr":"COUNT(*)"}],'
+    '"filters":{},"time_column":"date","time_start":"2026-07-19",'
+    '"time_end":"2026-08-17"},"analysis":"python"}')
+
+AGGREGATE_ONLY = (
+    '{"base_view":"checkout_sessions","aggregate_only":true,'
+    '"cube":{"dimensions":[],"measures":[]},"rationale":"operational lookup"}')
+
+
+class TestPlannerFailureDoesNotImprovise(unittest.TestCase):
+    def setUp(self):
+        from analytics_platform.domain import BaseView, ColumnProfile
+        from analytics_platform.schema_context import SchemaContext
+
+        self.ctx, self.base = app_ctx()
+        self.tid = self.ctx.tenants.create_tenant("SeatbeltCo").id
+        self.app = create_app(self.ctx)
+        self.svc = self.ctx.stakeholder
+        self.spy = SpyExecutor()
+        self.svc.executor = self.spy
+        self.ctx.tenants.add_datasource(self.tid, "Orders", DataSourceKind.DIRECT_DB,
+                                        dialect="athena", tables=["orders"])
+
+        self.view = BaseView(
+            grain_verified=True, name="checkout_sessions", grain=["session_id"],
+            source_sql="SELECT session_id, country, date, revenue FROM orders",
+            dimension_columns=["country"], measure_columns=["revenue"],
+            time_column="date", row_count_estimate=1_200_000)
+        self.view.grain_checked_hash = self.svc.base_views.population_hash(self.view)
+        node = self.svc.base_views.upsert(self.tid, self.view, by="senior")
+        brain = self.ctx.pipeline.brain(self.tid)
+        brain.submit(node.id, by="junior")
+        brain.approve(node.id, by="senior")
+
+        self.profiles = {"country": ColumnProfile(
+            column="country", dtype="object", distinct_count=30, null_fraction=0.0,
+            values=[], values_complete=False)}
+        self.schema_ctx = SchemaContext(profiles=self.profiles, rendered="RENDERED")
+
+    def tearDown(self):
+        self.svc.workspace.close_all()
+        self.base.close()
+
+    def govern(self, conversation_id):
+        """Put a cube from a real base view into the conversation, as turn 1 would."""
+        import pandas as pd
+        from analytics_platform.execution.extract_store import ExtractMeta
+        self.svc.data_cache.put(
+            self.tid, conversation_id, "df_1", "consent drop-off in DE, last 30 days",
+            pd.DataFrame({"n": [1]}),
+            meta=ExtractMeta(label="df_1", grain=["session_id"], columns=["n"],
+                             base_view="checkout_sessions", row_count=1,
+                             population_hash=self.svc.base_views.population_hash(self.view),
+                             time_column="date", requested_time_start="2026-07-19",
+                             requested_time_end="2026-08-17",
+                             filters={"natco_code": ["de"]},
+                             created_at="2026-08-19T00:00:00Z"))
+
+    def plan(self, responses, conversation_id="c1"):
+        return self.svc._plan_turn(MockLLM(responses), self.tid, conversation_id,
+                                   "now split that by checkout type", [], [],
+                                   schema_ctx=self.schema_ctx)
+
+    # -- ask again before giving up -------------------------------------------
+    def test_an_unparseable_plan_is_asked_for_a_second_time(self):
+        """The failure is intermittent -- the same call usually succeeds. One
+        retry recovers most of them for the price of one planning call."""
+        self.govern("c1")
+        plan = self.plan(["I think the user wants...", GOVERNED_FOLLOW_UP])
+        self.assertEqual(plan.base_view.name, "checkout_sessions")
+        self.assertFalse(plan.planner_failed)
+
+    def test_a_plan_that_parses_first_time_is_not_asked_twice(self):
+        llm = MockLLM([GOVERNED_FOLLOW_UP])
+        self.svc._plan_turn(llm, self.tid, "c1", "q", [], [], schema_ctx=self.schema_ctx)
+        self.assertEqual(llm.calls, 1)
+
+    def test_two_failures_mark_the_plan_as_failed(self):
+        self.govern("c1")
+        plan = self.plan(["prose", "more prose"])
+        self.assertTrue(plan.planner_failed)
+        self.assertEqual(plan.path, "aggregate")
+
+    def test_an_ungoverned_conversation_is_not_retried(self):
+        """Nothing there for a fallback answer to contradict, so a second
+        planning call would be cost without a benefit."""
+        llm = MockLLM(["prose"])
+        plan = self.svc._plan_turn(llm, self.tid, "fresh", "q", [], [],
+                                   schema_ctx=self.schema_ctx)
+        self.assertEqual(llm.calls, 1)
+        self.assertTrue(plan.planner_failed)
+
+    def test_a_deliberate_aggregate_only_choice_is_not_a_failure(self):
+        """The planner saying "no base view applies" is an answer, not a
+        breakdown, and must keep working."""
+        self.assertFalse(self.plan([AGGREGATE_ONLY]).planner_failed)
+
+    # -- the seatbelt ----------------------------------------------------------
+    def test_a_governed_conversation_refuses_to_improvise(self):
+        self.govern("c2")
+        out = self.svc._run_analyst_pipeline(
+            MockLLM(["prose", "more prose"]), self.tid, "c2",
+            "now split that by checkout type", "u1", "general", "t1", [], [])
+        self.assertEqual(out["status"], "NEEDS_CLARIFICATION")
+        self.assertEqual(out["answer_mode"], AnswerMode.NEEDS_CLARIFICATION.value)
+
+    def test_refusing_costs_no_warehouse_query(self):
+        """The whole harm was a query that RAN and answered a different question,
+        so the improvised SQL is supplied here -- without it the mock runs dry
+        before the one-off path is reached and the test proves nothing."""
+        self.govern("c3")
+        improvised = "SELECT country, COUNT(*) AS n FROM orders GROUP BY country"
+        self.svc._run_analyst_pipeline(
+            MockLLM(["prose", "more prose", improvised, "an answer"]), self.tid, "c3",
+            "now split that by checkout type", "u1", "general", "t2", [], [])
+        self.assertEqual(self.spy.all_sql, [])
+
+    def test_the_refusal_says_which_population_it_would_have_left(self):
+        """A bare "I did not understand" gives the reader nothing to act on."""
+        self.govern("c4")
+        out = self.svc._run_analyst_pipeline(
+            MockLLM(["prose", "more prose"]), self.tid, "c4",
+            "now split that by checkout type", "u1", "general", "t3", [], [])
+        self.assertIn("checkout_sessions", out["answer"])
+
+    def test_an_ungoverned_conversation_still_falls_back_as_before(self):
+        """Nothing to contradict, so a one-off is the honest best effort and the
+        existing behaviour is left alone."""
+        out = self.svc._run_analyst_pipeline(
+            MockLLM(["prose", "more prose"]), self.tid, "c5",
+            "how many orders yesterday?", "u1", "general", "t4", [], [])
+        self.assertNotEqual((out or {}).get("status"), "NEEDS_CLARIFICATION")
+
+    def test_a_governed_conversation_is_unaffected_when_planning_succeeds(self):
+        self.govern("c6")
+        plan = self.plan([GOVERNED_FOLLOW_UP], conversation_id="c6")
+        self.assertFalse(plan.planner_failed)
+        self.assertEqual(
+            self.svc._planner_failure_refusal(self.tid, "c6", plan), "")
