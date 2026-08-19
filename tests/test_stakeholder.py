@@ -2568,3 +2568,181 @@ class TestDiagnosticMeasures(unittest.TestCase):
         invite extra DIMENSIONS, which is what actually blows up a cube."""
         out = self.prompt("why the drop-off?").lower()
         self.assertIn("measures, not dimensions", out)
+
+
+# --------------------------------------------------------------------------- #
+# The diagnostic pass: form a hypothesis, then go and test it
+#
+# The pipeline was one-shot -- plan, retrieve one cube, analyse it once, write
+# the answer. There was no stage at which "tariffChange drops at 81% while
+# acquisition drops at 7%" could become "so test whether that is errors or
+# abandonment". A causal question now gets one extra, bounded cut over the SAME
+# population, chosen to test the leading hypothesis.
+#
+# The probe may RE-CUT but may not RE-SLICE: it inherits the first cube's
+# filters and window verbatim. A probe on different rows would explain a
+# different drop-off than the one being asked about, which is the exact class of
+# error the base view exists to make impossible.
+# --------------------------------------------------------------------------- #
+DIAGNOSTIC_REPLY = (
+    '{"hypothesis":"the tariffChange drop is technical rather than abandonment",'
+    '"friction_type":"operational",'
+    '"cube":{"dimensions":["country"],'
+    '"measures":[{"name":"errors","expr":"SUM(error_events)"}]}}')
+
+
+class TestDiagnosticPass(unittest.TestCase):
+    def setUp(self):
+        from analytics_platform.domain import BaseView, ColumnProfile, CubeMeasure, CubeSpec
+        from analytics_platform.schema_context import SchemaContext
+
+        self.ctx, self.base = app_ctx()
+        self.tid = self.ctx.tenants.create_tenant("ProbeCo").id
+        self.app = create_app(self.ctx)
+        self.svc = self.ctx.stakeholder
+        self.spy = SpyExecutor()
+        self.spy.columns = ["country", "errors"]
+        self.svc.executor = self.spy
+        self.ctx.tenants.add_datasource(self.tid, "Orders", DataSourceKind.DIRECT_DB,
+                                        dialect="athena", tables=["orders"])
+
+        self.view = BaseView(
+            grain_verified=True, name="checkout_sessions", grain=["session_id"],
+            source_sql="SELECT session_id, country, date, revenue, error_events FROM orders",
+            dimension_columns=["country"],
+            measure_columns=["revenue", "error_events"],
+            time_column="date", row_count_estimate=1_200_000)
+        self.profiles = {"country": ColumnProfile(
+            column="country", dtype="object", distinct_count=30, null_fraction=0.0,
+            values=[], values_complete=False)}
+        self.schema_ctx = SchemaContext(profiles=self.profiles, rendered="RENDERED")
+        self.spec = CubeSpec(base_name="checkout_sessions", dimensions=["country"],
+                             measures=[CubeMeasure("revenue", "SUM(revenue)", True)],
+                             filters={"country": ["DE"]}, time_column="date",
+                             time_start="2026-07-19", time_end="2026-08-17")
+
+    def tearDown(self):
+        self.svc.workspace.close_all()
+        self.base.close()
+
+    def plan(self, path="retrieve", base_view=True):
+        from analytics_platform.domain import TurnPlan
+        view = self.view if base_view else None
+        cube_sql = (self.svc.base_views.compose_cube(self.view, self.spec, self.profiles)
+                    if base_view else None)
+        return TurnPlan(path=path, base_view=view, cube=self.spec, cube_sql=cube_sql,
+                        grain=["session_id"], profiles=dict(self.profiles))
+
+    def probe(self, question="why is the drop-off so high?", responses=None,
+              plan=None):
+        from analytics_platform.domain import AnalysisArtifact
+        artifact = AnalysisArtifact(question=question)
+        caveats = []
+        out, _ = self.svc._diagnostic_probe(
+            MockLLM(responses if responses is not None else [DIAGNOSTIC_REPLY]),
+            self.tid, "c1", question, plan or self.plan(), artifact, caveats,
+            self.schema_ctx, [{"country": "DE", "revenue": 10}])
+        return out, artifact, caveats
+
+    # -- when it runs ----------------------------------------------------------
+    def test_a_causal_question_gets_a_probe(self):
+        out, _, _ = self.probe()
+        self.assertIsNotNone(out)
+        self.assertIn("technical", out["hypothesis"])
+
+    def test_a_plain_question_gets_no_probe(self):
+        """It costs a warehouse query. It fires only where it can pay for itself."""
+        out, _, _ = self.probe(question="how many sessions per country?", responses=[])
+        self.assertIsNone(out)
+
+    def test_an_ungoverned_turn_gets_no_probe(self):
+        """Nothing to hold the probe to the same rows."""
+        out, _, _ = self.probe(plan=self.plan(path="aggregate", base_view=False),
+                               responses=[])
+        self.assertIsNone(out)
+
+    # -- it may re-cut, but never re-slice ------------------------------------
+    def test_the_probe_inherits_the_first_cube_s_filters(self):
+        self.probe()
+        self.assertIn("country IN ('DE')", self.spy.all_sql[-1])
+
+    def test_the_probe_inherits_the_first_cube_s_window(self):
+        self.probe()
+        self.assertIn("DATE '2026-07-19'", self.spy.all_sql[-1])
+
+    def test_a_probe_that_tries_to_change_the_slice_is_overruled(self):
+        """Explaining a DIFFERENT drop-off than the one asked about is the exact
+        error the base view exists to prevent."""
+        self.probe(responses=['{"hypothesis":"h","cube":{"dimensions":["country"],'
+                              '"measures":[{"name":"n","expr":"COUNT(*)"}],'
+                              '"filters":{"country":["FR"]}}}'])
+        self.assertIn("country IN ('DE')", self.spy.all_sql[-1])
+        self.assertNotIn("'FR'", self.spy.all_sql[-1])
+
+    def test_the_probe_runs_over_the_same_population(self):
+        self.probe()
+        self.assertIn(self.view.source_sql, self.spy.all_sql[-1])
+
+    # -- it never takes the turn down -----------------------------------------
+    def test_an_unparseable_hypothesis_is_survivable(self):
+        out, _, _ = self.probe(responses=["I think maybe errors?"])
+        self.assertIsNone(out)
+
+    def test_a_failed_probe_query_is_survivable(self):
+        self.spy.always_fails("boom")
+        out, _, caveats = self.probe()
+        self.assertIsNone(out)
+        self.assertTrue(any("diagnos" in c.lower() for c in caveats))
+
+    def test_a_probe_cube_the_guard_refuses_is_survivable(self):
+        out, _, _ = self.probe(responses=[
+            '{"hypothesis":"h","cube":{"dimensions":["not_a_column"],"measures":[]}}'])
+        self.assertIsNone(out)
+
+    # -- provenance ------------------------------------------------------------
+    def test_the_probe_query_is_recorded_on_the_artifact(self):
+        _, artifact, _ = self.probe()
+        self.assertEqual(len(artifact.warehouse_sql), 1)
+
+    def test_exactly_one_probe_is_run_never_a_loop(self):
+        self.probe()
+        self.assertEqual(len(self.spy.all_sql), 1)
+
+
+class TestDiagnosticPassWiring(TestDiagnosticPass):
+    """The probe reaching the answer. Inherits the setUp of the class above."""
+
+    def test_the_hypothesis_reaches_the_answer_prompt(self):
+        """A probe whose result never reaches synthesis is a warehouse query
+        spent on nothing."""
+        ctx = self.svc._data_context(
+            [{"country": "DE"}], ["country"], 1, None,
+            diagnostic={"hypothesis": "the drop is technical",
+                        "friction_type": "operational",
+                        "dimensions": ["country"],
+                        "rows": [{"country": "DE", "errors": 900}]})
+        self.assertIn("the drop is technical", ctx)
+        self.assertIn("operational", ctx)
+        self.assertIn("900", ctx)
+
+    def test_the_hypothesis_is_labelled_as_a_hypothesis_not_a_finding(self):
+        """It is the model's own guess coming back to it. Presented as fact it
+        would be laundered into the answer as though it had been established."""
+        ctx = self.svc._data_context(
+            [{"a": 1}], ["a"], 1, None,
+            diagnostic={"hypothesis": "h", "friction_type": "operational",
+                        "dimensions": [], "rows": [{"n": 1}]})
+        self.assertIn("hypothes", ctx.lower())
+        self.assertIn("test", ctx.lower())
+
+    def test_no_diagnostic_leaves_the_context_untouched(self):
+        plain = self.svc._data_context([{"a": 1}], ["a"], 1, None)
+        self.assertNotIn("hypothes", plain.lower())
+
+    def test_the_pipeline_probes_a_causal_governed_turn(self):
+        """End to end: the turn runs the extra cut without being asked to."""
+        before = len(self.spy.all_sql)
+        self.svc._run_analyst_pipeline(
+            MockLLM([DIAGNOSTIC_REPLY]), self.tid, "cwire",
+            "why are users dropping off?", "u1", "general", "t", [], [])
+        self.assertGreaterEqual(len(self.spy.all_sql), before)

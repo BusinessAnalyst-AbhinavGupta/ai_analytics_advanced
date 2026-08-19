@@ -649,6 +649,18 @@ class StakeholderService:
 
         rows = (result.result_summary if isinstance(result.result_summary, list)
                 else [result.result_summary])
+
+        # Describing a drop is not explaining one. On a causal question over a
+        # governed population, take ONE further cut chosen to test the leading
+        # hypothesis -- same rows, same filters, same window. Failure here is
+        # never fatal: a diagnosis improves an answer, it is not a precondition
+        # for one.
+        diagnostic, probe_toks = self._diagnostic_probe(
+            llm, tenant_id, conversation_id, question, plan, artifact, caveats,
+            schema_ctx, rows)
+        t_in_total += probe_toks[0]
+        t_out_total += probe_toks[1]
+
         answer, syn_toks, chart_config = self._synthesize(
             llm, question, category,
             # On a retrieve the cube is created BY this turn, so plan.df_label
@@ -659,7 +671,8 @@ class StakeholderService:
              "frame_rows": self._frame_rows(tenant_id, conversation_id,
                                             plan.df_label or label),
              "full_cube": self._full_cube(tenant_id, conversation_id,
-                                          plan.df_label or label)})
+                                          plan.df_label or label),
+             "diagnostic": diagnostic})
         t_in_total += syn_toks[0]
         t_out_total += syn_toks[1]
 
@@ -789,6 +802,97 @@ class StakeholderService:
             f"whole of its history rather than over any recent window -- and the "
             f"answer would not look any different for it. Name a range and I will "
             f"slice on {column}.{extent}")
+
+    # -- stage: diagnosing -----------------------------------------------------
+    DIAGNOSTIC_PROMPT = """You have just measured something. Now work out WHY it is happening.
+
+You are given the question and the result already in hand. Name the single most
+likely explanation, then state the ONE further cut of the SAME population that would
+best distinguish it from the alternatives.
+
+Respond with STRICT JSON and nothing else:
+{"hypothesis": "<one sentence: what you think is happening and why>",
+ "friction_type": "matching" | "educational" | "operational" | "motivational",
+ "cube": {"dimensions": [], "measures": [{"name": "", "expr": ""}]}}
+
+- Draw dimensions and measures ONLY from the base view's listed columns.
+- Pick the cut that would CHANGE YOUR MIND if the hypothesis is wrong. A cut that
+  looks the same either way is worth nothing, however interesting.
+- Prefer error and failure measures, and the intermediate steps of a funnel: those
+  separate a broken flow (operational) from an uninterested one (motivational).
+- Keep dimensions few. One or two is usually enough to settle a hypothesis, and a
+  wide cube is refused outright.
+- You may NOT change the filters or the time window. The point is to explain THIS
+  result, and a cut over different rows would explain a different one."""
+
+    def _diagnostic_probe(self, llm: Any, tenant_id: str, conversation_id: str,
+                          question: str, plan: TurnPlan, artifact: AnalysisArtifact,
+                          caveats: List[str], schema_ctx: SchemaContext,
+                          rows: Any) -> Tuple[Optional[Dict[str, Any]], Tuple[int, int]]:
+        """One extra, hypothesis-driven cut over the same population.
+
+        The pipeline was one-shot: plan, retrieve, analyse, answer. Nothing in it
+        could turn "tariffChange drops at 81% while acquisition drops at 7%" into
+        "so go and test whether that is errors or abandonment", which is the step
+        between reporting a number and explaining one.
+
+        Bounded to exactly one probe, and only on a causal question over a
+        governed population -- it costs a warehouse query, so it fires only where
+        it can pay for itself. It may RE-CUT but never RE-SLICE: filters and the
+        time window are inherited verbatim, because a probe over different rows
+        would explain a different drop-off than the one being asked about.
+
+        Every failure returns None and leaves the turn to answer from what it
+        already has. A diagnosis is an improvement on an answer, never a
+        precondition for one.
+        """
+        if not self._is_causal_question(question):
+            return None, (0, 0)
+        view = plan.base_view
+        if view is None or plan.cube is None or plan.path == "aggregate":
+            return None, (0, 0)
+
+        prompt = (f"Question: {question}\n\n"
+                  f"{self.base_views.render([view], tenant_id)}\n"
+                  f"The result so far:\n{rows}\n")
+        toks = (0, 0)
+        try:
+            res = llm.generate(prompt=prompt, system_prompt=self.DIAGNOSTIC_PROMPT,
+                               temperature=0.0)
+            toks = (getattr(res, "tokens_in", 0), getattr(res, "tokens_out", 0))
+            parsed = _parse_json_block((res.text or "").strip(), context="diagnostic probe")
+        except Exception as exc:  # noqa: BLE001 - a dead gateway degrades, never raises
+            logger.warning("diagnostic probe failed: %s", exc)
+            return None, toks
+        if not parsed or not parsed.get("cube"):
+            return None, toks
+
+        spec = self._parse_cube(parsed["cube"], view)
+        # The slice is NOT the model's to change -- inherited verbatim, whatever
+        # it asked for.
+        spec.filters = dict(plan.cube.filters)
+        spec.time_column = plan.cube.time_column
+        spec.time_start, spec.time_end = plan.cube.time_start, plan.cube.time_end
+        cube_sql = self.base_views.compose_cube(view, spec, plan.profiles or {})
+        if not cube_sql.ok:
+            caveats.append(f"the diagnostic follow-up could not be sized "
+                           f"({cube_sql.error}), so this answer describes the drop "
+                           f"without testing a cause.")
+            return None, toks
+
+        sql, exec_res = self._run_composed(tenant_id, cube_sql.sql,
+                                           f"diagnostic probe: {question}"[:200])
+        artifact.warehouse_sql.append(sql)
+        if exec_res is None or not exec_res.ok or exec_res.data is None:
+            caveats.append(f"the diagnostic follow-up did not run "
+                           f"({getattr(exec_res, 'error', 'no result')}), so this "
+                           f"answer describes the drop without testing a cause.")
+            return None, toks
+        probe_rows = exec_res.data.to_dict(orient="records")
+        return ({"hypothesis": str(parsed.get("hypothesis") or ""),
+                 "friction_type": str(parsed.get("friction_type") or ""),
+                 "dimensions": list(spec.dimensions),
+                 "rows": probe_rows}, toks)
 
     # -- stage: understanding --------------------------------------------------
     @staticmethod
@@ -2336,7 +2440,8 @@ what was asked."""
     def _data_context(cls, rows: Optional[Sequence[Any]],
                       columns: Optional[Sequence[str]] = None,
                       frame_rows: int = 0,
-                      full_cube: Optional[Sequence[Any]] = None) -> str:
+                      full_cube: Optional[Sequence[Any]] = None,
+                      diagnostic: Optional[Dict[str, Any]] = None) -> str:
         """`frame_rows` is how many rows the cube being read actually holds.
 
         Without it there is no way to tell a full cube read from an
@@ -2346,8 +2451,9 @@ what was asked."""
         and a genuinely complete distribution gets disclaimed into uselessness.
         Both happened live. With it, each result is described as what it is.
         """
+        tail = cls._diagnostic_context(diagnostic)
         if not rows:
-            return ""
+            return tail
         rows = list(rows)
         col_line = f"\nColumns: {list(columns)}" if columns else ""
         if frame_rows and len(rows) < frame_rows:
@@ -2359,7 +2465,8 @@ what was asked."""
                         f"{rows}\nThat is a ranked or filtered slice. The COMPLETE cube it "
                         f"came from, all {frame_rows} row(s) over this population, is below "
                         f"-- use it for anything the slice cannot support, and account for "
-                        f"every row when describing the whole: {list(full_cube)}{col_line}")
+                        f"every row when describing the whole: {list(full_cube)}{col_line}"
+                        + tail)
             head = (f"\nData context -- a RANKED OR FILTERED SUBSET: {len(rows)} of the "
                     f"{frame_rows} rows in the cube. The rows not shown still exist, so "
                     f"do not say these are the only ones, and do not compute a share or "
@@ -2374,7 +2481,7 @@ what was asked."""
                     f"the population, so do not conclude no other rows exist")
         whole = f"{head}: {rows}{col_line}"
         if len(whole) <= cls.SYNTHESIS_CONTEXT_CHARS:
-            return whole
+            return whole + tail
 
         ranked, key = rows, cls._measure_key(rows)
         if key:
@@ -2387,7 +2494,8 @@ what was asked."""
         return (f"\nData context -- PARTIAL. The result has {len(rows)} rows; the top "
                 f"{len(shown)}{by} are shown and {omitted} are NOT. Totals and shares "
                 f"cannot be computed from this, and it must not be described as the "
-                f"whole distribution: {shown}{col_line}")
+                f"whole distribution: {shown}{col_line}"
+                + tail)
 
     # The prompt that writes every answer. What it asked for before was "a
     # cautious internal analytics assistant" that would "state what you know and
@@ -2446,6 +2554,32 @@ what was asked."""
         "not as a substitute for analysing what you already have."
     )
 
+    @staticmethod
+    def _diagnostic_context(diagnostic: Optional[Dict[str, Any]]) -> str:
+        """The follow-up cut, framed as what it is.
+
+        This is the model's OWN hypothesis coming back to it alongside evidence.
+        Presented as a finding it would be laundered into the answer as though it
+        had been established, which is precisely the move the whole descriptive ->
+        diagnostic sequence exists to prevent. So it is labelled a hypothesis, and
+        the model is told to say which way the evidence actually falls.
+        """
+        if not diagnostic or not diagnostic.get("rows"):
+            return ""
+        friction = diagnostic.get("friction_type") or "unclassified"
+        return (
+            f"\n\nDIAGNOSTIC FOLLOW-UP. Before seeing the rows below you proposed this "
+            f"HYPOTHESIS -- it is a guess, not a finding, and nothing has confirmed it "
+            f"yet: \"{diagnostic.get('hypothesis', '')}\" (suspected {friction} "
+            f"friction).\nTo test it, this second cut was taken over the SAME rows as "
+            f"the result above -- same population, same filters, same window -- broken "
+            f"down by {diagnostic.get('dimensions') or 'no dimension'}:\n"
+            f"{diagnostic['rows']}\n"
+            f"Say explicitly whether this evidence SUPPORTS, CONTRADICTS, or CANNOT "
+            f"SETTLE the hypothesis, and if it contradicts it, say what it points to "
+            f"instead. Do not repeat the hypothesis as though the test had confirmed it."
+        )
+
     def _synthesize(self, llm: Any, question: str, category: str, data: Optional[Dict[str, Any]] = None) -> Tuple[str, Tuple[int, int], Optional[Dict[str, Any]]]:
         try:
             if data and isinstance(data, dict) and data.get("skill_steps"):
@@ -2463,7 +2597,9 @@ what was asked."""
                 full_cube = data.get("full_cube")
             elif data and isinstance(data, list):
                 rows = data
-            data_context = self._data_context(rows, columns, frame_rows, full_cube)
+            data_context = self._data_context(
+                rows, columns, frame_rows, full_cube,
+                diagnostic=(data.get("diagnostic") if isinstance(data, dict) else None))
             return self._synthesize_text(llm, question, category, data_context)
         except Exception as e:  # noqa: BLE001 - LLM is optional
             return "Could not generate an answer: " + str(e), (0, 0), None
