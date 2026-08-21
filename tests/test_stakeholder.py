@@ -1,6 +1,7 @@
 """P6 — Stakeholder analyst tests (reuse approved, refresh, escalate, feedback)."""
 from __future__ import annotations
 
+import json
 import re
 import sys
 import unittest
@@ -11,7 +12,7 @@ from fastapi import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from analytics_platform.api import (FeedbackIn, StakeholderIn, ConversationPatchIn,
                                     StorylineExportIn, create_app)
-from analytics_platform.domain import AnswerMode, DataSourceKind, NodeKind
+from analytics_platform.domain import AnswerMode, DataSourceKind, NodeKind, ReviewStatus
 from analytics_platform.fixtures import WEEKLY_ORDER_SQL, build_retail_warehouse
 from tests.test_api import app_ctx, call
 
@@ -92,6 +93,30 @@ class TestStakeholder(unittest.TestCase):
         res = self.ctx.stakeholder.answer(self.tid, "list the personally identifiable info we store")
         self.assertTrue(res["escalated"])
         self.assertEqual(res["answer_mode"], AnswerMode.REQUIRES_SENIOR_REVIEW.value)
+
+    def test_high_risk_escalation_keeps_matched_sources_approved(self):
+        """Escalating must not knock the approved knowledge it matched out of review.
+
+        `_retrieve` only ever returns usable nodes -- APPROVED or
+        APPROVED_WITH_CAVEATS -- and neither has UNDER_REVIEW as a legal
+        successor, so re-submitting the top source raised BrainConflict on every
+        high-risk question that matched anything. "revenue" is high-risk by
+        category, so that was most of them.
+        """
+        node = self.ctx.pipeline.register_approved_query(
+            self.tid, WEEKLY_ORDER_SQL, "monthly revenue",
+            "how much revenue do we book per month", by="admin")
+        res = self.ctx.stakeholder.answer(self.tid, "what is revenue by country?")
+        self.assertTrue(res["escalated"])
+        self.assertEqual(res["answer_mode"], AnswerMode.REQUIRES_SENIOR_REVIEW.value)
+        # The node it matched is still usable knowledge for everyone else.
+        self.assertEqual(self.ctx.pipeline.brain(self.tid).get(node.id).status,
+                         ReviewStatus.APPROVED)
+        # ...and the escalation still records what it matched, for the reviewer.
+        row = self.ctx.stores.for_tenant(self.tid).query_one(
+            "SELECT source_node_ids FROM stakeholder_answers WHERE id=?",
+            (res["answer_id"],))
+        self.assertIn(node.id, json.loads(row["source_node_ids"]))
 
     def test_no_approved_knowledge_cannot_answer(self):
         res = self.ctx.stakeholder.answer(self.tid, "explain our warehouse picking policy in "
