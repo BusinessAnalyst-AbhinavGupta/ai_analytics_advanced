@@ -9,6 +9,7 @@ import {
 
 import { AnalystMessageBody } from '@/components/analyst/AnalystMessage';
 import { ConversationSidebar } from '@/components/analyst/ConversationSidebar';
+import { StepTrail } from '@/components/analyst/StepTrail';
 import { useStakeholderRuntime } from '@/runtime/useStakeholderRuntime';
 import { useStore } from '@/store/useStore';
 import type { StakeholderMessage } from '@/types/analysis';
@@ -91,6 +92,8 @@ export function AnalystThread() {
   const runtime = useStakeholderRuntime();
   const reportBuilderOpen = useStore((s) => s.stakeholder.reportBuilderOpen);
   const streamError = useStore((s) => s.stakeholder.streamError);
+  const steps = useStore((s) => s.stakeholder.steps);
+  const loading = useStore((s) => s.stakeholder.loading);
   const toggleReportBuilder = useStore((s) => s.toggleReportBuilder);
 
   return (
@@ -122,6 +125,11 @@ export function AnalystThread() {
             <ThreadPrimitive.Messages
               components={{ UserMessage, AssistantMessage }}
             />
+
+            {/* The live trail for the turn in flight. It sits below the thread
+                because it describes the answer being written, not one already
+                written -- historical turns collapse their own trail instead. */}
+            <StepTrail steps={steps} running={loading} />
 
             {/* A failed turn has to say so. Without this the composer just sits
                 there and a dead backend is indistinguishable from a slow one. */}
