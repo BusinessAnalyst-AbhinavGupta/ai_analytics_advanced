@@ -4,6 +4,8 @@ import { ThumbsDown, ThumbsUp } from 'lucide-react';
 import Markdown from 'react-markdown';
 
 import { AnalysisDisclosures } from '@/components/analyst/AnalysisDisclosures';
+import { MessageChart } from '@/components/analyst/AnalysisChart';
+import { ExtractDownload } from '@/components/analyst/ExtractDownload';
 import { useStore } from '@/store/useStore';
 import type { StakeholderMessage } from '@/types/analysis';
 
@@ -97,6 +99,9 @@ function FeedbackButtons({ message }: { message: StakeholderMessage }) {
  * wraps it with the message pulled off assistant-ui's context.
  */
 export function AnalystMessageBody({ message }: { message: StakeholderMessage }) {
+  const tenantId = useStore((s) => s.tenantId);
+  const conversationId = useStore((s) => s.stakeholder.activeConversationId);
+
   return (
     <div
       style={{
@@ -124,9 +129,22 @@ export function AnalystMessageBody({ message }: { message: StakeholderMessage })
           treating an undefined metric as a defined one. */}
       <Caveats caveats={message.caveats ?? []} />
 
+      <MessageChart
+        spec={message.analysis?.chart_spec}
+        legacyConfig={message.chart_config}
+        data={message.chart_data}
+      />
+
       <AnalysisDisclosures
         analysis={message.analysis}
         extractMeta={message.extract_meta}
+        download={
+          <ExtractDownload
+            tenantId={tenantId}
+            conversationId={conversationId}
+            meta={message.extract_meta}
+          />
+        }
       />
 
       <FeedbackButtons message={message} />
