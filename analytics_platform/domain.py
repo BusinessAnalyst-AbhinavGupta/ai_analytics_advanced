@@ -354,6 +354,45 @@ class BaseView:
         return view
 
 
+# The six steps of the analyst pipeline, in the order they run. The UI renders
+# them in this order and greys out the ones a given turn skipped -- a reuse turn
+# never retrieves, and saying so is the whole point rather than an omission.
+PIPELINE_STEPS = ("understanding", "planning", "checking_workspace",
+                  "retrieving", "analysing", "interpreting")
+
+# Kept beside the tuple so a step can never be emitted with a label invented at
+# the call site, which is how two spellings of the same step reach the UI.
+STEP_LABELS = {
+    "understanding": "Understanding the question",
+    "planning": "Planning the turn",
+    "checking_workspace": "Checking the workspace",
+    "retrieving": "Retrieving",
+    "analysing": "Analysing",
+    "interpreting": "Interpreting",
+}
+
+
+@dataclass
+class StepEvent:
+    """One observable moment in a turn.
+
+    `detail` is the field that earns this its place. "Analysing" on its own is a
+    spinner with extra steps; "reused df_1 (412,003 rows) -- no warehouse query
+    needed" is the sentence that tells someone why this answer took two seconds
+    instead of ninety, and makes a stall diagnosable instead of mysterious.
+    """
+
+    step: str                     # one of PIPELINE_STEPS
+    state: str = "done"           # "start" | "done" | "skipped"
+    label: str = ""               # human-facing; defaults from STEP_LABELS
+    detail: str = ""
+    elapsed_ms: float = 0.0
+
+    def __post_init__(self):
+        if not self.label:
+            self.label = STEP_LABELS.get(self.step, self.step)
+
+
 @dataclass
 class AnalysisArtifact:
     """The provenance record for one analytical turn.
