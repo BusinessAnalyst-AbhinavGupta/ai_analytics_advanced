@@ -51,7 +51,7 @@ interface AppState {
   toggleAnswerSelected: (answerId: string) => void;
   selectAllAnswers: () => void;
   clearSelectedAnswers: () => void;
-  exportStoryline: (format: 'markdown' | 'docx') => Promise<void>;
+  exportStoryline: (format: 'markdown' | 'docx', narrate?: boolean) => Promise<void>;
 
   // Junior Activity
   junior: {
@@ -311,7 +311,7 @@ export const useStore = create<AppState>((set) => ({
   clearSelectedAnswers: () => set(state => ({
     stakeholder: { ...state.stakeholder, selectedAnswerIds: [] },
   })),
-  exportStoryline: async (format) => {
+  exportStoryline: async (format, narrate = false) => {
     // Clear first: without this a stale error from the previous attempt reads as a
     // failure of the one the user just started.
     set((state) => ({ stakeholder: { ...state.stakeholder, exportError: '' } }));
@@ -324,7 +324,7 @@ export const useStore = create<AppState>((set) => ({
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ answer_ids: selectedAnswerIds, format }),
+          body: JSON.stringify({ answer_ids: selectedAnswerIds, format, narrate }),
         });
       if (!res.ok) {
         // Every export failure the backend raises (400 unknown/empty answer_ids,
