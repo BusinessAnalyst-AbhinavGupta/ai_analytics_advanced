@@ -94,6 +94,14 @@ function Composer() {
             border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px',
             color: '#fff', resize: 'none', display: 'block',
             fontFamily: 'inherit', fontSize: '1rem', lineHeight: 1.4,
+            // The first-paint height, before autosize has measured. Without it
+            // the composer can briefly render at three rows and snap to one,
+            // because the clone measurement runs against a not-yet-settled
+            // layout. autosize replaces this with its own `height: ...px
+            // !important` the moment it measures, so it only governs the very
+            // first frame. Typed as a number (px) by TextareaAutosizeProps:
+            // 48 = one 22.4px row plus 24px of vertical padding.
+            height: 48,
           }}
         />
       </div>
