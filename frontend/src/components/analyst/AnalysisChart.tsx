@@ -64,15 +64,28 @@ export function AnalysisChart({
   );
 }
 
+/** Is this already a recharts config rather than a neutral spec? */
+export function asChartConfig(value: unknown): ChartConfig | null {
+  const c = value as Partial<ChartConfig> | undefined;
+  if (c?.type && c?.xKey && Array.isArray(c.series) && c.series.length) {
+    return c as ChartConfig;
+  }
+  return null;
+}
+
 /**
- * Chart for one turn, preferring the artifact and falling back to the legacy
- * path so historical turns keep their charts.
+ * Chart for one turn.
  *
- * The discrimination is on *shape*, not on which field is populated, because
- * `chart_config` is not one thing. stakeholder.py assigns it the neutral
- * artifact spec on the analyst path (`out["chart_config"] = artifact.chart_spec`)
- * and a recharts-shaped config on the older synthesis paths. Testing for
- * `type` + `xKey` tells the two apart without guessing.
+ * Discrimination is on *shape*, never on which field happens to be populated,
+ * because neither field is one thing. stakeholder.py sets
+ * `artifact.chart_spec = result.chart_spec or chart_config`: the sandbox emits
+ * the neutral {kind, x, y} spec, but when it emits none the synthesis step's
+ * recharts-shaped {type, xKey, series} lands in the same field. Then
+ * `out["chart_config"] = artifact.chart_spec`, so both fields can carry either
+ * shape. Real turns in this database do exactly that.
+ *
+ * So each candidate is tested against both shapes, in order of preference, and
+ * the first that yields a renderable config wins.
  */
 export function MessageChart({
   spec, legacyConfig, data,
@@ -81,23 +94,20 @@ export function MessageChart({
   legacyConfig?: unknown;
   data?: unknown[];
 }) {
-  if (specToConfig(spec)) {
-    return <AnalysisChart spec={spec} data={data} />;
-  }
+  if (!data?.length) return null;
 
-  const legacy = legacyConfig as Partial<ChartConfig> | undefined;
-  if (legacy?.type && legacy?.xKey && Array.isArray(legacy?.series) && data?.length) {
-    return (
-      <div style={{ marginTop: '1.5rem', padding: '1rem', background: 'rgba(0,0,0,0.1)', borderRadius: '8px' }}>
-        <ChartRenderer data={data as Record<string, unknown>[]} config={legacy as ChartConfig} />
-      </div>
-    );
-  }
-
-  // The neutral spec may also arrive only via chart_config on an older row.
-  const asSpec = legacyConfig as ChartSpec | undefined;
-  if (asSpec?.kind && specToConfig(asSpec)) {
-    return <AnalysisChart spec={asSpec} data={data} />;
+  for (const candidate of [spec, legacyConfig]) {
+    if (specToConfig(candidate as ChartSpec)) {
+      return <AnalysisChart spec={candidate as ChartSpec} data={data} />;
+    }
+    const config = asChartConfig(candidate);
+    if (config) {
+      return (
+        <div style={{ marginTop: '1.5rem', padding: '1rem', background: 'rgba(0,0,0,0.1)', borderRadius: '8px' }}>
+          <ChartRenderer data={data as Record<string, unknown>[]} config={config} />
+        </div>
+      );
+    }
   }
 
   return null;
