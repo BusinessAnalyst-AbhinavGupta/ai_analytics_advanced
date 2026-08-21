@@ -103,9 +103,9 @@ export type StepEvent = {
  * the store would make the two modules import each other.
  *
  * `chart_config` and `chart_data` stay `any`: they are the pre-Plan-A chart
- * path, still consumed by the outgoing StakeholderChat, and tightening them
- * would only churn a component Task 13 deletes. The artifact is strictly typed,
- * which is where it matters -- that is the pattern not to extend.
+ * path, kept so historical turns keep their charts (see MessageChart, which
+ * discriminates on shape). The artifact below is strictly typed, which is where
+ * it matters -- that is the pattern not to extend.
  */
 export type StakeholderMessage = {
   answer_id: string; question: string; answer: string; answer_mode: string;
