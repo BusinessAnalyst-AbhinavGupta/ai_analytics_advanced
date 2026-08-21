@@ -8,6 +8,7 @@ so the /metrics endpoint shows the pipeline as if each hop were a monitored API.
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 import logging
@@ -34,11 +35,13 @@ try:
 except Exception as e:
     print(f"Failed to setup file logger in tmp: {e}")
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, Iterator, List, Optional
 from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Header, Query, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import asyncio
 
@@ -568,6 +571,40 @@ broadcaster = EventBroadcaster()
 # --------------------------------------------------------------------------- #
 # App
 # --------------------------------------------------------------------------- #
+def _sse_frame(event: str, payload: Any) -> str:
+    """One SSE frame: an `event:` line, a `data:` line, a blank line.
+
+    `json.dumps` is what keeps the framing honest. An analyst answer is markdown
+    and routinely contains newlines; escaped inside a JSON string they stay two
+    characters, so the payload remains exactly one `data:` line and a client can
+    parse each line on its own. Encoding through `jsonable_encoder` first is not
+    optional -- chart_data comes off a pandas frame, and plain json.dumps raises
+    on the numpy scalars the blocking route serialises without complaint.
+    """
+    data = json.dumps(jsonable_encoder(payload), ensure_ascii=False)
+    return f"event: {event}\ndata: {data}\n\n"
+
+
+def _sse_stream(events: Iterable[Dict[str, Any]]) -> Iterator[str]:
+    """Relay service events as SSE frames, ending on `error` if the pipeline
+    raises.
+
+    The service deliberately lets exceptions propagate so that `answer()` keeps
+    raising the way it always did. This is where a crash becomes something the
+    browser can act on: a client that receives steps and then silence cannot
+    tell a dead backend from a slow warehouse, so the stream always terminates
+    with either an `answer` frame or an `error` one.
+    """
+    try:
+        for ev in events:
+            kind = ev.get("type")
+            if kind in ("step", "answer"):
+                yield _sse_frame(kind, ev["payload"])
+    except Exception as exc:                     # noqa: BLE001 -- terminal frame or nothing
+        logger.exception("stakeholder answer stream failed")
+        yield _sse_frame("error", {"detail": str(exc)})
+
+
 def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
     ctx = ctx or make_context()
     app = FastAPI(title="AI Analytics Platform", version="0.1.0")
@@ -1193,6 +1230,36 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
         tenant_or_404(tenant_id)
         return C.stakeholder.answer(tenant_id, body.question, user_id=body.user_id,
                                     conversation_id=body.conversation_id)
+
+    @app.post("/stakeholder/{tenant_id}/answer/stream")
+    def stakeholder_answer_stream(tenant_id: str, body: StakeholderIn) -> StreamingResponse:
+        """The same turn as POST /answer, narrated while it happens.
+
+        POST rather than the GET sketched in Plan A: EventSource is GET-only,
+        which would put the user's question into the query string -- and so into
+        tmp/api.log, every proxy log, and browser history -- and leaves nowhere
+        clean for conversation_id. The wire format stays SSE-shaped so swapping
+        to EventSource or sse-starlette later costs nothing.
+        """
+        # Resolve the tenant BEFORE building the generator, so an unknown tenant
+        # is a clean 404 rather than a 200 with the failure buried in the body.
+        tenant_or_404(tenant_id)
+        events = C.stakeholder.answer_stream(
+            tenant_id, body.question, user_id=body.user_id,
+            conversation_id=body.conversation_id)
+        # A sync iterator on purpose: Starlette runs it in a threadpool, and the
+        # service stays synchronous.
+        return StreamingResponse(
+            _sse_stream(events),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                # Without this an nginx in front of the app buffers the whole
+                # response and the feature silently degrades into a slow
+                # blocking request that looks identical to a hung one.
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            })
 
     @app.get("/stakeholder/{tenant_id}/conversations")
     def stakeholder_list_conversations(tenant_id: str) -> List[Dict[str, Any]]:

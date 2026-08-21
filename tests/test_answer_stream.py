@@ -25,7 +25,10 @@ from __future__ import annotations
 
 from analytics_platform.domain import PIPELINE_STEPS
 
-from tests.test_extract_flow import CUBE_1, NARRATIVE, PY_CELL, SequencedLLM, _FlowCase, _llm_patched
+from analytics_platform.api import StakeholderIn
+
+from tests.test_extract_flow import (CUBE_1, NARRATIVE, PY_CELL, SequencedLLM,
+                                     _FlowCase, _llm_patched)
 
 
 REUSE_PLAN = ('{"base_view":"checkout_sessions","cube":{"dimensions":["device"],'
@@ -211,3 +214,152 @@ class TestFailuresStillTerminate(_StreamCase):
         self.assertEqual(evs[-1]["type"], "answer")
         payload = evs[-1]["payload"]
         self.assertTrue(payload["caveats"] or payload["status"] != "ANSWERED")
+
+
+# ---------------------------------------------------------------------------
+# Task 2 -- the streaming route.
+#
+# `call()` invokes the route closure directly and bypasses middleware, so the
+# wire format is asserted by draining the StreamingResponse's body_iterator
+# rather than by round-tripping through a client. The framing helpers are pure
+# and tested directly, because a chunk boundary landing inside a JSON payload is
+# where this feature would actually break.
+# ---------------------------------------------------------------------------
+
+import asyncio
+import json
+
+from fastapi import HTTPException
+
+from analytics_platform.api import _sse_frame, _sse_stream
+
+from tests.test_api import call
+
+
+def drain(response) -> str:
+    """Consume a StreamingResponse body the way the server would."""
+    async def _go():
+        parts = []
+        async for chunk in response.body_iterator:
+            parts.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+        return "".join(parts)
+
+    return asyncio.run(_go())
+
+
+class TestSseFraming(_StreamCase):
+    def test_a_frame_is_one_event_line_and_one_data_line(self):
+        frame = _sse_frame("step", {"step": "planning", "state": "done"})
+        self.assertTrue(frame.startswith("event: step\n"))
+        self.assertTrue(frame.endswith("\n\n"))
+        self.assertEqual(len(frame.rstrip().splitlines()), 2)
+
+    def test_a_multiline_answer_still_frames_as_a_single_data_line(self):
+        """The bug this prevents: a markdown answer with newlines in it would
+        otherwise split into several `data:` lines and arrive as broken JSON."""
+        frame = _sse_frame("answer", {"answer": "line one\nline two\n\nline three"})
+        body = frame.rstrip().splitlines()
+        self.assertEqual(len(body), 2)
+        self.assertEqual(json.loads(body[1][6:])["answer"],
+                         "line one\nline two\n\nline three")
+
+    def test_a_frame_encodes_exactly_what_the_blocking_route_would(self):
+        """The two routes must not disagree about what a turn produced, so the
+        frame goes through the same jsonable_encoder FastAPI applies to the
+        return value of POST /answer.
+
+        Note what this deliberately does NOT claim: neither route survives a
+        numpy scalar -- jsonable_encoder raises on one. That is fine because the
+        sandbox JSON-round-trips its results, so payloads arrive as plain str /
+        float / int. Making the stream more tolerant than the blocking route
+        would be its own bug: the same turn would then succeed streamed and 500
+        blocking.
+        """
+        from fastapi.encoders import jsonable_encoder
+        payload = {"answer": "**bold**\nand a list", "rows": [{"c": "DE", "r": 1.5}],
+                   "caveats": [], "chart_config": None}
+        line = _sse_frame("answer", payload).rstrip().splitlines()[1]
+        self.assertEqual(json.loads(line[6:]), jsonable_encoder(payload))
+
+    def test_an_exception_mid_stream_becomes_a_terminal_error_frame(self):
+        """Task 1 lets exceptions propagate; this is where they become an event
+        the client can act on, instead of a stream that just stops."""
+        def boom():
+            yield {"type": "step", "payload": {"step": "planning", "state": "start"}}
+            raise RuntimeError("the warehouse fell over")
+
+        text = "".join(_sse_stream(boom()))
+        self.assertIn("event: step", text)
+        self.assertIn("event: error", text)
+        self.assertNotIn("event: answer", text)
+        detail = json.loads(text.rstrip().splitlines()[-1][6:])["detail"]
+        self.assertIn("warehouse fell over", detail)
+
+
+class TestStreamRoute(_StreamCase):
+    def _stream_call(self, question, conversation_id=None, llm=None):
+        llm = llm or SequencedLLM(["sales by country", CUBE_1, PY_CELL, NARRATIVE])
+        self.svc.llm = llm
+        with _llm_patched(self.svc, llm):
+            resp = call(self.app, "POST", "/stakeholder/{tenant_id}/answer/stream",
+                        self.tid, StakeholderIn(question=question,
+                                                conversation_id=conversation_id or self.c1))
+            return resp, drain(resp)
+
+    def test_stream_route_yields_sse_framed_events(self):
+        self.approve_base()
+        resp, text = self._stream_call("what are sales by country?")
+        self.assertEqual(resp.media_type, "text/event-stream")
+        self.assertIn("event: step", text)
+        self.assertEqual(text.count("event: answer"), 1)
+
+    def test_the_answer_event_is_last(self):
+        self.approve_base()
+        _, text = self._stream_call("what are sales by country?")
+        frames = [f for f in text.split("\n\n") if f.strip()]
+        self.assertTrue(frames[-1].startswith("event: answer"))
+
+    def test_no_data_line_contains_a_raw_newline(self):
+        """Every `data:` line has to be complete JSON on its own."""
+        self.approve_base()
+        _, text = self._stream_call("what are sales by country?")
+        seen = 0
+        for line in text.splitlines():
+            if line.startswith("data: "):
+                json.loads(line[6:])
+                seen += 1
+        self.assertGreater(seen, 1)
+
+    def test_stream_answer_event_matches_the_blocking_route(self):
+        self.approve_base()
+        blocking, _ = self.first_turn(conversation_id=self.c1)
+        _, text = self._stream_call("what are sales by country?", conversation_id=self.c2)
+        answer_frame = [f for f in text.split("\n\n") if f.startswith("event: answer")][0]
+        streamed = json.loads(answer_frame.splitlines()[1][6:])
+        self.assertEqual(sorted(streamed.keys()), sorted(blocking.keys()))
+
+    def test_stream_404s_for_an_unknown_tenant_before_streaming(self):
+        """A clean 404, not a 200 with the failure buried inside the stream."""
+        with self.assertRaises(HTTPException) as e:
+            call(self.app, "POST", "/stakeholder/{tenant_id}/answer/stream",
+                 "no-such-tenant", StakeholderIn(question="q"))
+        self.assertEqual(e.exception.status_code, 404)
+
+    def test_proxy_buffering_is_disabled(self):
+        """Without X-Accel-Buffering an nginx in front of this buffers the whole
+        response and the feature silently degrades to a slow blocking request."""
+        self.approve_base()
+        resp, _ = self._stream_call("what are sales by country?")
+        self.assertEqual(resp.headers["x-accel-buffering"], "no")
+        self.assertEqual(resp.headers["cache-control"], "no-cache")
+
+    def test_the_blocking_route_still_exists(self):
+        """It is the documented fallback for a client that cannot stream."""
+        self.approve_base()
+        llm = SequencedLLM(["sales by country", CUBE_1, PY_CELL, NARRATIVE])
+        self.svc.llm = llm
+        with _llm_patched(self.svc, llm):
+            out = call(self.app, "POST", "/stakeholder/{tenant_id}/answer", self.tid,
+                       StakeholderIn(question="what are sales by country?",
+                                     conversation_id=self.c1))
+        self.assertTrue(out["answer_id"])
