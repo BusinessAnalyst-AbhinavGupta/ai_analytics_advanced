@@ -11,6 +11,8 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@assistant-ui/react": "^0.15.16",
+    "@assistant-ui/react-markdown": "^0.14.12",
     "@tanstack/react-table": "^8.21.3",
     "lucide-react": "^1.31.0",
     "next": "16.3.0",
