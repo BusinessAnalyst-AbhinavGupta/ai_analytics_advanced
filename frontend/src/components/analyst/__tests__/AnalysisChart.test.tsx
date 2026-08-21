@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, test } from 'vitest';
 
-import { AnalysisChart, specToConfig } from '@/components/analyst/AnalysisChart';
+import { AnalysisChart, MessageChart, specToConfig } from '@/components/analyst/AnalysisChart';
 import { ExtractDownload } from '@/components/analyst/ExtractDownload';
 
 describe('specToConfig', () => {
@@ -94,5 +94,45 @@ describe('ExtractDownload', () => {
     render(<ExtractDownload tenantId="t/x" conversationId="c 1"
                             meta={{ label: 'df_1', row_count: 1 }} />);
     expect(screen.getByRole('link')).toHaveAttribute('href', expect.stringContaining('t%2Fx'));
+  });
+});
+
+describe('MessageChart', () => {
+  // Shapes taken from real rows in the tenant database: stakeholder.py sets
+  // artifact.chart_spec = result.chart_spec or chart_config, so the recharts
+  // shape genuinely turns up in the artifact field, not only in the legacy one.
+  const RECHARTS = {
+    type: 'BarChart', xKey: 'attribute_checkout_type',
+    series: [{ key: 'purchase_success' }, { key: 'purchase_failed' }],
+  };
+  const NEUTRAL = { kind: 'bar', x: 'country', y: 'sessions' };
+  const rows = [{ attribute_checkout_type: 'new', purchase_success: 3, purchase_failed: 1, country: 'DE', sessions: 4 }];
+
+  test('renders a recharts-shaped config arriving in analysis.chart_spec', () => {
+    const { container } = render(<MessageChart spec={RECHARTS as never} data={rows} />);
+    expect(container).not.toBeEmptyDOMElement();
+  });
+
+  test('renders a neutral spec arriving in analysis.chart_spec', () => {
+    const { container } = render(<MessageChart spec={NEUTRAL} data={rows} />);
+    expect(container).not.toBeEmptyDOMElement();
+  });
+
+  test('renders a recharts-shaped config arriving only in the legacy field', () => {
+    const { container } = render(<MessageChart legacyConfig={RECHARTS} data={rows} />);
+    expect(container).not.toBeEmptyDOMElement();
+  });
+
+  test('renders nothing when there are no rows to plot', () => {
+    // A replayed turn carries the spec but not chart_data, which is why
+    // historical answers show no chart -- same as the old chat.
+    const { container } = render(<MessageChart spec={RECHARTS as never} data={[]} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  test('renders nothing for a config with no series', () => {
+    const { container } = render(
+      <MessageChart legacyConfig={{ type: 'BarChart', xKey: 'x', series: [] }} data={rows} />);
+    expect(container).toBeEmptyDOMElement();
   });
 });
