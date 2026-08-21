@@ -142,3 +142,17 @@ button:disabled {
 .animate-fade-in {
   animation: fadeIn 0.4s ease-out forwards;
 }
+
+/* A user who has asked their OS for less motion gets it. The step trail updates
+   several times a second while a turn runs, so this is the one surface where an
+   ignored preference is actually unpleasant rather than merely impolite. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
