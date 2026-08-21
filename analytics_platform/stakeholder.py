@@ -424,9 +424,14 @@ class StakeholderService:
         query_nodes, defn_nodes = self._retrieve(tenant_id, search_intent)
 
         if self.is_high_risk(question, category):
+            # What escalates is the ANSWER, not the knowledge behind it. The
+            # sources are recorded below so the reviewer sees what was matched,
+            # but they are left alone: `_retrieve` only ever returns APPROVED /
+            # APPROVED_WITH_CAVEATS nodes, so re-submitting one for review was
+            # both illegal (neither status can move to UNDER_REVIEW) and wrong
+            # -- it would have pulled senior-approved knowledge out of every
+            # other stakeholder's reach because one question said "revenue".
             source_ids = [n.id for n in (query_nodes + defn_nodes)]
-            if source_ids:
-                self.brain(tenant_id).submit(source_ids[0], by="stakeholder")
             out = self._record(tenant_id, question, user_id, category, trace, "",
                                AnswerMode.REQUIRES_SENIOR_REVIEW, "ESCALATED", True,
                                source_ids, caveats=["high-risk question matched escalation rules"],
