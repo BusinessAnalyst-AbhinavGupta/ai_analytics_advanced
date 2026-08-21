@@ -6,7 +6,10 @@ resolves the Code Appendix's cross-turn dependencies.
 import io
 from bisect import bisect_left
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+if TYPE_CHECKING:            # narrative imports this module, so keep it one-way
+    from .narrative import NarratedStoryline
 
 CHARS_PER_TOKEN_ESTIMATE = 4
 WARN_TOKEN_THRESHOLD = 50_000
@@ -58,6 +61,10 @@ class StorylineContent:
     # traced back to a producing turn. Each one also gets a visible kind="note"
     # appendix entry; this count lets callers warn without re-scanning the appendix.
     unresolved_dependency_count: int = 0
+    # Set only when an export asked to be narrated (Plan B Task 3). Renderers use
+    # it when it is present and usable, and fall back to the turn-by-turn layout
+    # otherwise -- narration is an enhancement, never a dependency.
+    narrative: Optional["NarratedStoryline"] = None
 
 
 def assemble_storyline(conversation: Dict[str, Any], answer_ids: List[str]) -> StorylineContent:
@@ -167,7 +174,28 @@ def _fence_for(code: str) -> str:
     return "`" * max(3, longest + 1)
 
 
-def render_markdown(content: StorylineContent) -> str:
+def _narrated_markdown_head(content: StorylineContent) -> List[str]:
+    """The narrated document's prose. Provenance is printed per section so a
+    reader can jump from a claim to the turn that produced it."""
+    n = content.narrative
+    lines = [f"# {_one_line(n.title) or 'Storyline Export'}", ""]
+    if n.executive_summary:
+        lines += ["## Executive summary", "", n.executive_summary, ""]
+    for section in n.sections:
+        lines.append(f"## {_one_line(section.heading)}")
+        lines.append("")
+        lines.append(section.body)
+        if section.answer_ids:
+            lines += ["", f"*Based on: {', '.join(section.answer_ids)}*"]
+        lines.append("")
+    if n.caveats:
+        lines += ["## Caveats", ""]
+        lines += [f"- {c}" for c in n.caveats]
+        lines.append("")
+    return lines
+
+
+def _turn_by_turn_markdown_head(content: StorylineContent) -> List[str]:
     lines = [f"# {_one_line(content.conversation_title) or 'Storyline Export'}", ""]
     for t in content.turns:
         lines.append(f"## {_one_line(t.question)}")
@@ -183,6 +211,13 @@ def render_markdown(content: StorylineContent) -> str:
             lines.append("")
             lines.append("**Caveats:** " + "; ".join(t.caveats))
         lines.append("")
+    return lines
+
+
+def render_markdown(content: StorylineContent) -> str:
+    narrative = content.narrative
+    lines = (_narrated_markdown_head(content) if narrative is not None and narrative.ok
+             else _turn_by_turn_markdown_head(content))
     if content.code_appendix:
         lines.append("## Code Appendix")
         lines.append("")
@@ -230,18 +265,37 @@ def render_docx(content: StorylineContent) -> bytes:
 
     doc = docx.Document()
     code_style = _code_style(doc)
-    doc.add_heading(_xml_safe(_one_line(content.conversation_title)) or "Storyline Export", level=1)
-    for t in content.turns:
-        doc.add_heading(_xml_safe(_one_line(t.question)), level=2)
-        if t.created_at:
-            stamp = doc.add_paragraph(_xml_safe(t.created_at))
-            for run in stamp.runs:
-                run.italic = True
-        doc.add_paragraph(_xml_safe(t.answer))
-        if t.facts:
-            doc.add_paragraph(_xml_safe("Facts: " + "; ".join(t.facts)))
-        if t.caveats:
-            doc.add_paragraph(_xml_safe("Caveats: " + "; ".join(t.caveats)))
+    narrative = content.narrative
+    if narrative is not None and narrative.ok:
+        doc.add_heading(_xml_safe(_one_line(narrative.title)) or "Storyline Export", level=1)
+        if narrative.executive_summary:
+            doc.add_heading("Executive summary", level=2)
+            doc.add_paragraph(_xml_safe(narrative.executive_summary))
+        for section in narrative.sections:
+            doc.add_heading(_xml_safe(_one_line(section.heading)), level=2)
+            doc.add_paragraph(_xml_safe(section.body))
+            if section.answer_ids:
+                cite = doc.add_paragraph(
+                    _xml_safe("Based on: " + ", ".join(section.answer_ids)))
+                for run in cite.runs:
+                    run.italic = True
+        if narrative.caveats:
+            doc.add_heading("Caveats", level=2)
+            for caveat in narrative.caveats:
+                doc.add_paragraph(_xml_safe(caveat), style="List Bullet")
+    else:
+        doc.add_heading(_xml_safe(_one_line(content.conversation_title)) or "Storyline Export", level=1)
+        for t in content.turns:
+            doc.add_heading(_xml_safe(_one_line(t.question)), level=2)
+            if t.created_at:
+                stamp = doc.add_paragraph(_xml_safe(t.created_at))
+                for run in stamp.runs:
+                    run.italic = True
+            doc.add_paragraph(_xml_safe(t.answer))
+            if t.facts:
+                doc.add_paragraph(_xml_safe("Facts: " + "; ".join(t.facts)))
+            if t.caveats:
+                doc.add_paragraph(_xml_safe("Caveats: " + "; ".join(t.caveats)))
     if content.code_appendix:
         doc.add_heading("Code Appendix", level=1)
         for e in content.code_appendix:

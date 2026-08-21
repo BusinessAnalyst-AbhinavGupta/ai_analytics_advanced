@@ -58,7 +58,8 @@ from .domain import (AnswerMode, AttributionRule, BaseView, DataSourceKind, Know
 from .execution.base import QueryExecutor
 from .execution.sampler import SamplerExecutor
 from .junior import JuniorEngine
-from .llm.client import list_provider_models
+from .llm.client import list_provider_models, make_role_client
+from .narrative import narrate
 from .observability import Observability
 from .onboarding import OnboardingService
 from .pipeline import Pipeline
@@ -305,6 +306,10 @@ class ConversationPatchIn(BaseModel):
 class StorylineExportIn(BaseModel):
     answer_ids: List[str]
     format: str = "markdown"   # "markdown" | "docx"
+    # Off by default: narrating costs one extra LLM call over a prompt holding
+    # every selected turn, so a ten-turn selection is a large prompt. An export
+    # must never become slower and more expensive than the user asked for.
+    narrate: bool = False
 
 
 class ResearchBatchIn(BaseModel):
@@ -1358,6 +1363,13 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
             raise HTTPException(status_code=400,
                                 detail=f"unknown answer_id(s): {unknown}")
         content = assemble_storyline(conv, body.answer_ids)
+        if body.narrate:
+            # narrate() never raises and reports ok=False on any failure, so a
+            # dead model degrades to the turn-by-turn document rather than
+            # failing the export.
+            cfg = C.tenants.get_analyst_config(tenant_id)
+            content.narrative = narrate(content, make_role_client(C.settings,
+                                                                  cfg.stakeholder))
         if body.format == "docx":
             try:
                 data = render_docx(content)
