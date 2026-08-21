@@ -1,17 +1,16 @@
 import { create } from 'zustand';
 
+import { apiUrl } from '@/lib/api';
+import { streamAnswer } from '@/lib/streamAnswer';
+import type { StakeholderMessage, StepEvent } from '@/types/analysis';
+
+// Re-exported so existing importers keep working; the definition now lives in
+// types/analysis.ts, which is also what streamAnswer produces.
+export type { StakeholderMessage } from '@/types/analysis';
+
 export type ConversationSummary = {
   id: string; title: string; starred: boolean;
   created_at: string; updated_at: string; message_count: number;
-};
-
-export type StakeholderMessage = {
-  answer_id: string; question: string; answer: string; answer_mode: string;
-  status: string; citations: any[]; caveats: string[]; facts: string[];
-  queries_run: string[]; escalated: boolean; cost: number; created_at: string;
-  chart_config?: any; chart_data?: any[]; feedback?: 'up' | 'down';
-  python_cells?: Array<{ code: string; df_label: string; result_summary: unknown }>;
-  produced_df_label?: string;
 };
 
 interface AppState {
@@ -27,6 +26,14 @@ interface AppState {
     conversationsLoading: boolean;
     activeConversationId: string;
     messages: StakeholderMessage[];
+    // The live pipeline trail for the turn in flight, cleared at the start of
+    // every ask. See StepTrail.
+    steps: StepEvent[];
+    // The question currently in flight, so the thread can show it before an
+    // answer_id exists.
+    pendingQuestion: string;
+    // A turn that failed. Without this the UI spins forever on a dead backend.
+    streamError: string;
     reportBuilderOpen: boolean;
     selectedAnswerIds: string[];
     exportError: string;
@@ -145,6 +152,7 @@ export const useStore = create<AppState>((set) => ({
   stakeholder: {
     question: '', loading: false, conversations: [], conversationsLoading: false,
     activeConversationId: '', messages: [],
+    steps: [], pendingQuestion: '', streamError: '',
     reportBuilderOpen: false, selectedAnswerIds: [], exportError: '',
   },
   setStakeholder: (data) => set((state) => ({ stakeholder: { ...state.stakeholder, ...data } })),
@@ -154,7 +162,7 @@ export const useStore = create<AppState>((set) => ({
     if (!tenantId) return;
     set((state) => ({ stakeholder: { ...state.stakeholder, conversationsLoading: true } }));
     try {
-      const res = await fetch(`http://localhost:8000/stakeholder/${tenantId}/conversations`);
+      const res = await fetch(apiUrl(`/stakeholder/${tenantId}/conversations`));
       const data = await res.json();
       set((state) => ({ stakeholder: { ...state.stakeholder, conversations: Array.isArray(data) ? data : [] } }));
     } catch (e) {
@@ -167,12 +175,13 @@ export const useStore = create<AppState>((set) => ({
     const { tenantId } = useStore.getState();
     if (!tenantId || !id) return;
     try {
-      const res = await fetch(`http://localhost:8000/stakeholder/${tenantId}/conversations/${id}`);
+      const res = await fetch(apiUrl(`/stakeholder/${tenantId}/conversations/${id}`));
       if (!res.ok) return;
       const data = await res.json();
       set((state) => ({
         stakeholder: {
-          ...state.stakeholder, activeConversationId: id, messages: data.messages || [], selectedAnswerIds: [],
+          ...state.stakeholder, activeConversationId: id, messages: data.messages || [],
+          selectedAnswerIds: [], steps: [], pendingQuestion: '', streamError: '',
         },
       }));
     } catch (e) {
@@ -182,7 +191,10 @@ export const useStore = create<AppState>((set) => ({
 
   startNewConversation: () => {
     set((state) => ({
-      stakeholder: { ...state.stakeholder, activeConversationId: '', messages: [], question: '', selectedAnswerIds: [] },
+      stakeholder: {
+        ...state.stakeholder, activeConversationId: '', messages: [], question: '',
+        selectedAnswerIds: [], steps: [], pendingQuestion: '', streamError: '',
+      },
     }));
   },
 
@@ -190,22 +202,33 @@ export const useStore = create<AppState>((set) => ({
     const { tenantId, stakeholder } = useStore.getState();
     const queryText = text || stakeholder.question;
     if (!queryText || !tenantId) return;
-    set((state) => ({ stakeholder: { ...state.stakeholder, loading: true } }));
+    // Clear the trail at the start of every ask. A stale trail from the previous
+    // question sitting beside a new answer is worse than showing no trail at all.
+    set((state) => ({
+      stakeholder: {
+        ...state.stakeholder, loading: true, steps: [], streamError: '',
+        pendingQuestion: queryText,
+      },
+    }));
     try {
-      const res = await fetch(`http://localhost:8000/stakeholder/${tenantId}/answer`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: queryText, conversation_id: stakeholder.activeConversationId }),
+      await streamAnswer(tenantId, queryText, stakeholder.activeConversationId, {
+        onStep: (e) => set((state) => ({
+          stakeholder: { ...state.stakeholder, steps: [...state.stakeholder.steps, e] },
+        })),
+        onAnswer: (data) => set((state) => ({
+          stakeholder: {
+            ...state.stakeholder,
+            question: '',
+            pendingQuestion: '',
+            activeConversationId:
+              data.conversation_id || state.stakeholder.activeConversationId,
+            messages: [...state.stakeholder.messages, data],
+          },
+        })),
+        onError: (detail) => set((state) => ({
+          stakeholder: { ...state.stakeholder, pendingQuestion: '', streamError: detail },
+        })),
       });
-      const data = await res.json();
-      set((state) => ({
-        stakeholder: {
-          ...state.stakeholder,
-          question: '',
-          activeConversationId: data.conversation_id || state.stakeholder.activeConversationId,
-          messages: [...state.stakeholder.messages, data],
-        },
-      }));
       await useStore.getState().fetchConversations();
     } catch (e) {
       console.error(e);
@@ -216,7 +239,7 @@ export const useStore = create<AppState>((set) => ({
   renameConversation: async (id, title) => {
     const { tenantId } = useStore.getState();
     try {
-      await fetch(`http://localhost:8000/stakeholder/${tenantId}/conversations/${id}`, {
+      await fetch(apiUrl(`/stakeholder/${tenantId}/conversations/${id}`), {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title }),
       });
@@ -229,7 +252,7 @@ export const useStore = create<AppState>((set) => ({
   starConversation: async (id, starred) => {
     const { tenantId } = useStore.getState();
     try {
-      await fetch(`http://localhost:8000/stakeholder/${tenantId}/conversations/${id}`, {
+      await fetch(apiUrl(`/stakeholder/${tenantId}/conversations/${id}`), {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ starred }),
       });
@@ -242,7 +265,7 @@ export const useStore = create<AppState>((set) => ({
   deleteConversation: async (id) => {
     const { tenantId, stakeholder } = useStore.getState();
     try {
-      await fetch(`http://localhost:8000/stakeholder/${tenantId}/conversations/${id}`, { method: 'DELETE' });
+      await fetch(apiUrl(`/stakeholder/${tenantId}/conversations/${id}`), { method: 'DELETE' });
       if (stakeholder.activeConversationId === id) {
         useStore.getState().startNewConversation();
       }
@@ -255,7 +278,7 @@ export const useStore = create<AppState>((set) => ({
   submitFeedback: async (answerId, rating) => {
     const { tenantId } = useStore.getState();
     try {
-      await fetch(`http://localhost:8000/stakeholder/${tenantId}/feedback`, {
+      await fetch(apiUrl(`/stakeholder/${tenantId}/feedback`), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ answer_id: answerId, rating }),
       });
@@ -297,7 +320,7 @@ export const useStore = create<AppState>((set) => ({
     if (!activeConversationId || selectedAnswerIds.length === 0) return;
     try {
       const res = await fetch(
-        `http://localhost:8000/stakeholder/${tenantId}/conversations/${activeConversationId}/export`,
+        apiUrl(`/stakeholder/${tenantId}/conversations/${activeConversationId}/export`),
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -356,12 +379,12 @@ export const useStore = create<AppState>((set) => ({
   approveKnowledgeNodes: async (ids) => {
     const { tenantId, triage } = useStore.getState();
     try {
-      await fetch(`http://localhost:8000/triage/${tenantId}/approve`, {
+      await fetch(apiUrl(`/triage/${tenantId}/approve`), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ids, by: 'admin' })
       });
       const statusParam = triage.knowledgeFilterStatus === 'ALL' ? '' : `?status=${triage.knowledgeFilterStatus}`;
-      const res = await fetch(`http://localhost:8000/triage/${tenantId}/queue${statusParam}`);
+      const res = await fetch(apiUrl(`/triage/${tenantId}/queue${statusParam}`));
       const data = await res.json();
       set((state) => ({ triage: { ...state.triage, triageQueue: Array.isArray(data) ? data : [] } }));
     } catch (e) {
@@ -371,12 +394,12 @@ export const useStore = create<AppState>((set) => ({
   rejectKnowledgeNodes: async (ids) => {
     const { tenantId, triage } = useStore.getState();
     try {
-      await fetch(`http://localhost:8000/triage/${tenantId}/reject`, {
+      await fetch(apiUrl(`/triage/${tenantId}/reject`), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ids, by: 'admin' })
       });
       const statusParam = triage.knowledgeFilterStatus === 'ALL' ? '' : `?status=${triage.knowledgeFilterStatus}`;
-      const res = await fetch(`http://localhost:8000/triage/${tenantId}/queue${statusParam}`);
+      const res = await fetch(apiUrl(`/triage/${tenantId}/queue${statusParam}`));
       const data = await res.json();
       set((state) => ({ triage: { ...state.triage, triageQueue: Array.isArray(data) ? data : [] } }));
     } catch (e) {
@@ -386,11 +409,11 @@ export const useStore = create<AppState>((set) => ({
   reviewSeniorRun: async (runId, action) => {
     const { tenantId } = useStore.getState();
     try {
-      await fetch(`http://localhost:8000/senior/${tenantId}/review`, {
+      await fetch(apiUrl(`/senior/${tenantId}/review`), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ run_id: runId, action, by: 'admin' })
       });
-      const res = await fetch(`http://localhost:8000/senior/${tenantId}/queue`);
+      const res = await fetch(apiUrl(`/senior/${tenantId}/queue`));
       const data = await res.json();
       set((state) => ({ triage: { ...state.triage, seniorQueue: Array.isArray(data) ? data : [] } }));
     } catch (e) {
