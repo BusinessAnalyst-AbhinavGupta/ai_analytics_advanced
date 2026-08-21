@@ -3,6 +3,7 @@
 import { ThumbsDown, ThumbsUp } from 'lucide-react';
 import Markdown from 'react-markdown';
 
+import { AnalysisDisclosures } from '@/components/analyst/AnalysisDisclosures';
 import { useStore } from '@/store/useStore';
 import type { StakeholderMessage } from '@/types/analysis';
 
@@ -118,7 +119,16 @@ export function AnalystMessageBody({ message }: { message: StakeholderMessage })
       )}
 
       <AnswerProse text={message.answer ?? ''} />
+
+      {/* Above the fold, deliberately: the caveats are what stop a reader
+          treating an undefined metric as a defined one. */}
       <Caveats caveats={message.caveats ?? []} />
+
+      <AnalysisDisclosures
+        analysis={message.analysis}
+        extractMeta={message.extract_meta}
+      />
+
       <FeedbackButtons message={message} />
     </div>
   );
