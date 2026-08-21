@@ -15,7 +15,9 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import asdict
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from time import perf_counter
+from typing import (Any, Dict, Iterator, List, Optional, Sequence,
+                    Tuple)
 
 from .base_view import BaseViewRegistry, reconcile
 from .brain.embedding import Embedder
@@ -24,8 +26,9 @@ from .brain.store import CompanyBrain
 from .config import Settings
 from .database import Store, dump_json, load_json
 from .data_manager import CoverageVerdict, DataManager, DataRequirement
-from .domain import (AnalysisArtifact, AnswerMode, AttributionRule, BaseView, CubeMeasure,
-                     CubeSpec, NodeKind, ReconcileResult, TurnPlan, new_id, now_iso)
+from .domain import (PIPELINE_STEPS, AnalysisArtifact, AnswerMode, AttributionRule,
+                     BaseView, CubeMeasure, CubeSpec, NodeKind, ReconcileResult,
+                     StepEvent, TurnPlan, new_id, now_iso)
 from .execution.base import ExecutionContext
 from .execution.dataframe_cache import ConversationDataCache
 from .execution.extract_store import SAFE_ID, ExtractMeta, ExtractStore
@@ -354,6 +357,51 @@ class StakeholderService:
     # -- answer ------------------------------------------------------------
     def answer(self, tenant_id: str, question: str, user_id: str = "",
                conversation_id: str = "") -> Dict[str, Any]:
+        """Unchanged in signature and in return value -- now a thin drain of
+        `answer_stream`. There is deliberately no second implementation: two
+        code paths for one pipeline is how a streamed answer and a blocking one
+        start quietly disagreeing about what the analyst actually did."""
+        out: Optional[Dict[str, Any]] = None
+        for ev in self.answer_stream(tenant_id, question, user_id=user_id,
+                                     conversation_id=conversation_id):
+            if ev["type"] == "answer":
+                out = ev["payload"]
+        return out
+
+    def answer_stream(self, tenant_id: str, question: str, user_id: str = "",
+                      conversation_id: str = "") -> Iterator[Dict[str, Any]]:
+        """The turn, observable while it happens.
+
+        Yields zero or more {"type": "step"} events, then exactly one
+        {"type": "answer"} event carrying the payload `answer()` returns.
+
+        Exceptions propagate. That is deliberate: `answer()` raised before Plan B
+        and has to still raise, and a pipeline crash dressed up as a cheerful
+        terminal answer hides the bug instead of reporting it. Turning a
+        mid-stream failure into a transport-level `event: error` is the streaming
+        route\'s job -- see the stream endpoint in api.py.
+        """
+        out = yield from self._answer_steps(tenant_id, question, user_id,
+                                            conversation_id)
+        yield {"type": "answer", "payload": out}
+
+    @staticmethod
+    def _step(step: str, state: str = "done", detail: str = "",
+              t0: Optional[float] = None) -> Dict[str, Any]:
+        assert step in PIPELINE_STEPS, step
+        return {"type": "step", "payload": asdict(StepEvent(
+            step=step, state=state, detail=detail,
+            elapsed_ms=((perf_counter() - t0) * 1000.0) if t0 is not None else 0.0))}
+
+    def _answer_steps(self, tenant_id: str, question: str, user_id: str = "",
+                      conversation_id: str = "") -> Iterator[Dict[str, Any]]:
+        """What used to be the body of `answer()`, verbatim apart from the yields.
+
+        Every `return out` below is the same `return out` it has always been: a
+        generator\'s return value is picked up by the `yield from` in
+        `answer_stream`, which is what keeps this a control-flow change and
+        nothing else.
+        """
         self.tenants.require_tenant(tenant_id)
         conversation_id = self._ensure_conversation(tenant_id, conversation_id, question)
         trace = new_trace()
@@ -390,7 +438,7 @@ class StakeholderService:
             return out
 
         if self._llm_live(llm):
-            out = self._run_analyst_pipeline(
+            out = yield from self._run_analyst_pipeline_stream(
                 llm, tenant_id, conversation_id, question, user_id, category, trace,
                 query_nodes, defn_nodes)
             if out is not None:
@@ -591,11 +639,39 @@ class StakeholderService:
                               question: str, user_id: str, category: str, trace: str,
                               query_nodes: List[Any], defn_nodes: List[Any]
                               ) -> Optional[Dict[str, Any]]:
-        """The whole turn. Returns None when nothing could be produced, which
-        leaves answer() free to fall through to the older paths."""
+        """The whole turn, blocking. Returns None when nothing could be produced,
+        which leaves answer() free to fall through to the older paths.
+
+        Drains the streaming form exactly as `answer()` drains `answer_stream()`:
+        one implementation, two ways of consuming it. Callers that want the step
+        events use `_run_analyst_pipeline_stream` directly.
+        """
+        gen = self._run_analyst_pipeline_stream(
+            llm, tenant_id, conversation_id, question, user_id, category, trace,
+            query_nodes, defn_nodes)
+        while True:
+            try:
+                next(gen)
+            except StopIteration as stop:
+                return stop.value
+
+    def _run_analyst_pipeline_stream(self, llm: Any, tenant_id: str, conversation_id: str,
+                                     question: str, user_id: str, category: str, trace: str,
+                                     query_nodes: List[Any], defn_nodes: List[Any]
+                                     ) -> Iterator[Dict[str, Any]]:
+        """The whole turn, yielding a step event at each named boundary and
+        returning the answer payload (or None) as the generator's value."""
+        t0 = perf_counter()
+        yield self._step("understanding", "start")
         schema_ctx = self.schema_context.build(tenant_id, question, query_nodes, defn_nodes)
+        yield self._step("understanding", "done",
+                         self._understanding_detail(schema_ctx), t0)
+
+        t0 = perf_counter()
+        yield self._step("planning", "start")
         plan = self._plan_turn(llm, tenant_id, conversation_id, question,
                                query_nodes, defn_nodes, schema_ctx=schema_ctx)
+        yield self._step("planning", "done", self._planning_detail(plan), t0)
 
         clarification = (self._planner_failure_refusal(tenant_id, conversation_id, plan)
                          or self._timeframe_clarification(tenant_id, conversation_id,
@@ -623,29 +699,45 @@ class StakeholderService:
         label, meta = "", None
         t_in_total, t_out_total = 0, 0
 
+        t0 = perf_counter()
+        yield self._step("checking_workspace", "start")
         if plan.path in ("reuse", "widen"):
             for existing in self._verdict_labels(plan):
                 self.workspace.register(tenant_id, conversation_id, existing)
+        yield self._step("checking_workspace", "done", self._workspace_detail(plan), t0)
 
         # "aggregate" retrieves too -- it just retrieves an ungoverned one-off,
         # which is exactly why it is marked unreconcilable below.
         label = ""
         if plan.path in ("retrieve", "widen", "aggregate"):
+            t0 = perf_counter()
+            yield self._step("retrieving", "start")
             label, meta, toks = self._retrieve_cube(
                 llm, tenant_id, conversation_id, question, plan, artifact, caveats,
                 schema_ctx)
             t_in_total += toks[0]
             t_out_total += toks[1]
+            yield self._step("retrieving", "done",
+                             self._retrieving_detail(label, meta), t0)
+        else:
+            # Not a hole in the trail -- the reason this turn is cheap. Rendered
+            # as deliberately-not-run, never as failed.
+            yield self._step("retrieving", "skipped",
+                             self._retrieve_skipped_detail(plan))
 
         self._record_population(artifact, plan, meta)
         caveats.extend(self._population_caveats(plan, meta))
 
+        t0 = perf_counter()
+        yield self._step("analysing", "start")
         result, code, workspace_sql, toks = self._analyse(
             llm, tenant_id, conversation_id, question, plan, artifact)
         t_in_total += toks[0]
         t_out_total += toks[1]
         if result is None:
             return None
+        yield self._step("analysing", "done",
+                         self._analysing_detail(plan, code, workspace_sql), t0)
 
         rows = (result.result_summary if isinstance(result.result_summary, list)
                 else [result.result_summary])
@@ -655,6 +747,8 @@ class StakeholderService:
         # hypothesis -- same rows, same filters, same window. Failure here is
         # never fatal: a diagnosis improves an answer, it is not a precondition
         # for one.
+        t0 = perf_counter()
+        yield self._step("interpreting", "start")
         diagnostic, probe_toks = self._diagnostic_probe(
             llm, tenant_id, conversation_id, question, plan, artifact, caveats,
             schema_ctx, rows)
@@ -675,6 +769,7 @@ class StakeholderService:
              "diagnostic": diagnostic})
         t_in_total += syn_toks[0]
         t_out_total += syn_toks[1]
+        yield self._step("interpreting", "done", "", t0)
 
         artifact.result_summary = result.result_summary
         artifact.chart_spec = getattr(result, "chart_spec", None) or chart_config
@@ -922,6 +1017,71 @@ Respond with STRICT JSON and nothing else:
         for collision in schema_ctx.collisions:
             out.append(collision)
         return out
+
+    # -- step detail: what the trail actually says -----------------------------
+    # A step that says only "Analysing" is a spinner with extra steps. These
+    # build the one sentence per step that tells a user what the system is
+    # spending their time and money on, out of what the pipeline already knows.
+
+    @staticmethod
+    def _understanding_detail(schema_ctx: Any) -> str:
+        resolution = getattr(schema_ctx, "semantics", None)
+        if resolution is None:
+            return ""
+        matched = [getattr(m, "name", "") for m in getattr(resolution, "metrics", ()) or ()]
+        matched += [getattr(d, "name", "") for d in getattr(resolution, "dimensions", ()) or ()]
+        matched = [m for m in matched if m]
+        parts = []
+        if matched:
+            parts.append("matched " + ", ".join(matched))
+        # An undefined measure is the single most important thing the trail can
+        # say, so it is stated here and not left to the caveats alone.
+        parts += [f"no defined metric matched \'{t}\'"
+                  for t in (getattr(resolution, "unresolved_terms", ()) or []) if t]
+        return "; ".join(parts)
+
+    @staticmethod
+    def _planning_detail(plan: TurnPlan) -> str:
+        parts = []
+        if plan.grain:
+            parts.append("one row per " + ", ".join(plan.grain))
+        parts.append("analysing in DuckDB" if plan.analysis == "workspace_sql"
+                     else "analysing in Python")
+        return "; ".join(parts)
+
+    @staticmethod
+    def _workspace_detail(plan: TurnPlan) -> str:
+        """Plan A wrote `verdict.reason` for a human. Show it to one, verbatim."""
+        verdict = plan.verdict
+        if verdict is None:
+            return "nothing in the workspace to reuse yet"
+        reason = (getattr(verdict, "reason", "") or "").strip()
+        return reason or f"decision: {getattr(verdict, 'decision', '')}"
+
+    @staticmethod
+    def _retrieving_detail(label: str, meta: Optional[ExtractMeta]) -> str:
+        if meta is None:
+            return f"retrieved {label}" if label else "queried the warehouse"
+        head = f"{label} ({meta.row_count:,} rows)" if label else f"{meta.row_count:,} rows"
+        if meta.truncated:
+            head += " -- truncated, totals and rates may be understated"
+        return head
+
+    @staticmethod
+    def _retrieve_skipped_detail(plan: TurnPlan) -> str:
+        label = plan.df_label or ""
+        reused = f"reusing {label}" if label else "the workspace already covers this"
+        return f"{reused} -- no warehouse query needed"
+
+    @staticmethod
+    def _analysing_detail(plan: TurnPlan, code: str, workspace_sql: List[str]) -> str:
+        """Athena and DuckDB are different claims about where a number came
+        from, so the trail names which one ran rather than blurring them."""
+        if workspace_sql:
+            return f"DuckDB re-cut over {plan.df_label or 'the workspace'}"
+        if code:
+            return "Python: 1 cell"
+        return "read the extract directly"
 
     # -- stage: checking the workspace ----------------------------------------
     @staticmethod
