@@ -10,6 +10,7 @@ import {
 import { AnalystMessageBody } from '@/components/analyst/AnalystMessage';
 import { ConversationSidebar } from '@/components/analyst/ConversationSidebar';
 import { StepTrail } from '@/components/analyst/StepTrail';
+import { StorylinePanel } from '@/components/analyst/StorylinePanel';
 import { useStakeholderRuntime } from '@/runtime/useStakeholderRuntime';
 import { useStore } from '@/store/useStore';
 import type { StakeholderMessage } from '@/types/analysis';
@@ -142,6 +143,7 @@ export function AnalystThread() {
 
           <Composer />
         </ThreadPrimitive.Root>
+        {reportBuilderOpen && <StorylinePanel />}
       </div>
     </AssistantRuntimeProvider>
   );

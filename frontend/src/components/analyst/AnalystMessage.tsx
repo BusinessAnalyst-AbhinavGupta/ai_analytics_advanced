@@ -6,6 +6,7 @@ import Markdown from 'react-markdown';
 import { AnalysisDisclosures } from '@/components/analyst/AnalysisDisclosures';
 import { MessageChart } from '@/components/analyst/AnalysisChart';
 import { ExtractDownload } from '@/components/analyst/ExtractDownload';
+import { StorylineCheckbox } from '@/components/analyst/StorylinePanel';
 import { useStore } from '@/store/useStore';
 import type { StakeholderMessage } from '@/types/analysis';
 
@@ -148,6 +149,7 @@ export function AnalystMessageBody({ message }: { message: StakeholderMessage })
       />
 
       <FeedbackButtons message={message} />
+      <StorylineCheckbox answerId={message.answer_id} />
     </div>
   );
 }
