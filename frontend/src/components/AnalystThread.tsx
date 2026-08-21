@@ -13,7 +13,6 @@ import { StepTrail } from '@/components/analyst/StepTrail';
 import { StorylinePanel } from '@/components/analyst/StorylinePanel';
 import { useStakeholderRuntime } from '@/runtime/useStakeholderRuntime';
 import { useStore } from '@/store/useStore';
-import type { StakeholderMessage } from '@/types/analysis';
 
 /**
  * The chat frame is bought; the analytical layer is built.
@@ -51,12 +50,15 @@ function AssistantMessage() {
   const id = useAuiState((s) => s.message.id);
   const source = useStore(
     (s) => s.stakeholder.messages.find((m) => m.answer_id === id));
-  const fallback: StakeholderMessage = {
-    answer_id: id ?? '', question: '', answer: '', answer_mode: '',
-    status: '', citations: [], caveats: [], facts: [], queries_run: [],
-    escalated: false, cost: 0, created_at: '',
-  };
-  return <AnalystMessageBody message={source ?? fallback} />;
+
+  // While a turn is in flight assistant-ui renders a placeholder assistant
+  // message that has no turn behind it yet. Rendering the body for it produced
+  // an empty answer bubble carrying thumbs up/down -- feedback controls for an
+  // answer that does not exist. The StepTrail is what reports progress, so this
+  // renders nothing until there is a real turn to show.
+  if (!source) return null;
+
+  return <AnalystMessageBody message={source} />;
 }
 
 function Composer() {
@@ -64,23 +66,42 @@ function Composer() {
   return (
     <ComposerPrimitive.Root
       style={{
-        display: 'flex', gap: '1rem', padding: '1.5rem',
+        display: 'flex', gap: '1rem', padding: '1.5rem', alignItems: 'flex-end',
         borderTop: '1px solid rgba(255,255,255,0.08)',
+        // Without flexShrink the composer is a flex child with no height of its
+        // own, so the textarea and the send button stretch down the whole
+        // column. The old chat used an <input>, which has an intrinsic height;
+        // assistant-ui's Input is a textarea, which does not.
+        flexShrink: 0,
       }}
     >
-      <ComposerPrimitive.Input
-        placeholder="E.g. What is our revenue over time?"
-        style={{
-          flex: 1, padding: '0.75rem 1rem', background: 'rgba(0,0,0,0.2)',
-          border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px',
-          color: '#fff', resize: 'none',
-        }}
-      />
+      {/* A react-textarea-autosize under the hood, so height comes from
+          minRows/maxRows rather than CSS -- min/maxHeight are not even in its
+          style type.
+
+          The wrapper is load-bearing. autosize measures a hidden clone, and if
+          the textarea itself carries `flex: 1` with no resolvable width the
+          clone measures at zero width, scrollHeight explodes, and every empty
+          composer renders clamped at maxRows. Putting flex on the wrapper and
+          width:100% on the textarea gives the clone a width to measure against. */}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <ComposerPrimitive.Input
+          minRows={1}
+          maxRows={6}
+          placeholder="E.g. What is our revenue over time?"
+          style={{
+            width: '100%', padding: '0.75rem 1rem', background: 'rgba(0,0,0,0.2)',
+            border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px',
+            color: '#fff', resize: 'none', display: 'block',
+            fontFamily: 'inherit', fontSize: '1rem', lineHeight: 1.4,
+          }}
+        />
+      </div>
       <ComposerPrimitive.Send
         style={{
           background: 'var(--accent-primary)', padding: '0.75rem 1.5rem',
           borderRadius: '8px', border: 'none', color: '#fff', cursor: 'pointer',
-          fontWeight: 600,
+          fontWeight: 600, flexShrink: 0, height: '3rem',
         }}
       >
         {loading ? 'Asking...' : 'Ask'}
@@ -115,7 +136,12 @@ export function AnalystThread() {
             </button>
           </div>
 
-          <ThreadPrimitive.Viewport style={{ flex: 1, overflowY: 'auto', padding: '1.5rem' }}>
+          {/* minHeight: 0 is required: a flex child defaults to min-content
+              height, which stops it shrinking and makes the scroll container
+              overflow its parent instead of scrolling inside it. */}
+          <ThreadPrimitive.Viewport
+            style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '1.5rem' }}
+          >
             <ThreadPrimitive.Empty>
               <p style={{ color: 'var(--text-secondary)' }}>
                 Ask a question in plain English. The AI will query the company brain,
