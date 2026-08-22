@@ -89,6 +89,19 @@ export const PIPELINE_STEPS = [
 
 export type PipelineStep = (typeof PIPELINE_STEPS)[number];
 
+// One copy, consumed by both the live trail and the behind-the-scenes panel.
+// Two copies is how `recalling` came to be emitted by the backend and rendered
+// nowhere.
+export const STEP_LABELS: Record<string, string> = {
+  recalling: 'Recalling what we know',
+  understanding: 'Understanding the question',
+  planning: 'Planning the turn',
+  checking_workspace: 'Checking the workspace',
+  retrieving: 'Retrieving',
+  analysing: 'Analysing',
+  interpreting: 'Interpreting',
+};
+
 export type StepEvent = {
   step: PipelineStep;
   state: 'start' | 'done' | 'skipped' | 'abandoned';
@@ -118,4 +131,25 @@ export type StakeholderMessage = {
   produced_df_label?: string;
   analysis?: AnalysisArtifact;
   extract_meta?: ExtractMeta;
+};
+
+// One recorded moment inside a turn: an LLM call or a brain search. `payload`
+// is deliberately loose -- the two kinds carry different keys, and the panel
+// reads them defensively rather than the type pretending otherwise.
+export type TraceRecord = {
+  seq: number;
+  ts: string;
+  stage: string;
+  kind: 'llm' | 'retrieval' | string;
+  payload: Record<string, unknown>;
+  duration_ms: number;
+  tokens_in: number;
+  tokens_out: number;
+  ok: boolean;
+};
+
+export type AnswerTrace = {
+  answer_id: string;
+  trace_id: string;
+  records: TraceRecord[];
 };

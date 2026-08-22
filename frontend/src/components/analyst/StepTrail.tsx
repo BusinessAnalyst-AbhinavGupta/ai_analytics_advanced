@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 
 import { Disclosure } from '@/components/analyst/Disclosure';
-import { PIPELINE_STEPS, type PipelineStep, type StepEvent } from '@/types/analysis';
+import { PIPELINE_STEPS, STEP_LABELS, type PipelineStep, type StepEvent } from '@/types/analysis';
 
 /**
  * The pipeline, while it runs.
@@ -15,15 +15,7 @@ import { PIPELINE_STEPS, type PipelineStep, type StepEvent } from '@/types/analy
  * time and money on, and makes a stall diagnosable instead of mysterious.
  */
 
-const LABELS: Record<PipelineStep, string> = {
-  recalling: 'Recalling what we know',
-  understanding: 'Understanding the question',
-  planning: 'Planning the turn',
-  checking_workspace: 'Checking the workspace',
-  retrieving: 'Retrieving',
-  analysing: 'Analysing',
-  interpreting: 'Interpreting',
-};
+const LABELS = STEP_LABELS;
 
 // `skipped` and `abandoned` are deliberately distinct. A skipped step was never
 // run and that is the good news -- it is why the turn was cheap. An abandoned

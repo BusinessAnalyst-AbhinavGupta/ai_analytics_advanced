@@ -1,5 +1,6 @@
 'use client';
 
+import { BehindTheScenes } from '@/components/analyst/BehindTheScenes';
 import { CodeBlock, Disclosure } from '@/components/analyst/Disclosure';
 import type { AnalysisArtifact, ExtractMeta } from '@/types/analysis';
 
@@ -171,11 +172,13 @@ function Methodology({ analysis }: { analysis: AnalysisArtifact }) {
 }
 
 export function AnalysisDisclosures({
-  analysis, extractMeta, download,
+  analysis, extractMeta, download, tenantId, answerId,
 }: {
   analysis?: AnalysisArtifact;
   extractMeta?: ExtractMeta;
   download?: React.ReactNode;
+  tenantId?: string;
+  answerId?: string;
 }) {
   // A pre-Plan-A row replayed from the database has no artifact at all, and the
   // message still has to work.
@@ -187,6 +190,9 @@ export function AnalysisDisclosures({
       <Sql analysis={analysis} />
       <AnalysisCode analysis={analysis} />
       <Methodology analysis={analysis} />
+      {tenantId && answerId
+        ? <BehindTheScenes tenantId={tenantId} answerId={answerId} />
+        : null}
     </div>
   );
 }
