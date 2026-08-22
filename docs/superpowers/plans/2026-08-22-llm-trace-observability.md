@@ -27,10 +27,19 @@ The spec says the junior and senior analysts get capture "for free" from wrappin
 `make_role_client(settings, role_ai)` (`llm/client.py:94`) receives **no tenant_id
 and no Store**, so the wrapper has nowhere to write on its own.
 
-Resolution: the wrapper reads an ambient `_sink` contextvar. Junior and senior are
-therefore *wrapped* for free but record nothing until they set a sink — a two-line
-change each, deliberately out of scope here. Task 2 asserts this explicitly so the
-behaviour is pinned rather than assumed.
+Resolution (amended before execution): the wrapper is applied **at the point of
+use** in `stakeholder.py`, not inside `make_role_client`.
+
+`tests/test_extract_flow.py:157` (`_llm_patched`) monkeypatches
+`analytics_platform.stakeholder.make_role_client` to return a canned client. A
+wrapper living inside `make_role_client` is replaced along with it, so no flow
+test would ever exercise tracing — the feature would ship untested. Wrapping
+where the pipeline picks the client up covers whatever it is handed, real or
+canned.
+
+Junior and senior therefore get nothing automatically. That costs almost nothing:
+they record only with a sink, and setting one is theirs to do. They would wrap at
+their own point of use, symmetrically.
 
 ---
 
@@ -303,7 +312,6 @@ EOF
 
 **Files:**
 - Create: `analytics_platform/llm/tracing.py`
-- Modify: `analytics_platform/llm/client.py:94-107` (`make_role_client`)
 - Test: `tests/test_llm_tracing.py`
 
 **Interfaces:**
@@ -403,12 +411,15 @@ class TracingClientTest(unittest.TestCase):
         self.assertEqual(self.payloads(), [])
 
 
-class MakeRoleClientTest(unittest.TestCase):
-    def test_make_role_client_returns_a_tracing_client(self):
-        from analytics_platform.config import Settings
-        from analytics_platform.llm.client import make_role_client
-        client = make_role_client(Settings(), None)
-        self.assertIsInstance(client, TracingLLMClient)
+class PassthroughTest(unittest.TestCase):
+    def test_unknown_attributes_reach_the_inner_client(self):
+        """`_llm_live` sniffs `client.name`; if the wrapper hid it, every turn
+        would think the LLM was offline and take the non-LLM path."""
+        class _Named:
+            name = "gateway"
+            def generate(self, *a, **kw):
+                return LLMResponse(text="")
+        self.assertEqual(TracingLLMClient(_Named()).name, "gateway")
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
@@ -485,45 +496,22 @@ class TracingLLMClient:
                        tokens_out=getattr(response, "tokens_out", 0) or 0, ok=ok)
 ```
 
-- [ ] **Step 4: Wire it into `make_role_client`**
-
-In `analytics_platform/llm/client.py`, change the final return of
-`make_role_client` (line 106-107) from:
-
-```python
-    return make_client(provider=provider, model=model, api_key=api_key,
-                       ollama_base_url=ollama_base_url)
-```
-
-to:
-
-```python
-    from .tracing import TracingLLMClient
-    return TracingLLMClient(make_client(provider=provider, model=model,
-                                        api_key=api_key,
-                                        ollama_base_url=ollama_base_url))
-```
-
-The import is function-local to avoid a circular import: `llm/tracing.py` imports
-`analytics_platform.tracing`, which imports `database`, which must not depend on
-`llm` at module load.
-
-- [ ] **Step 5: Run the tests to verify they pass**
+- [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `.venv/bin/python -m pytest tests/test_llm_tracing.py -v`
 Expected: PASS, 7 tests
 
-- [ ] **Step 6: Run the full suite — nothing else may change**
+- [ ] **Step 5: Run the full suite — nothing else may change**
 
 Run: `.venv/bin/python -m pytest tests/ -q`
 Expected: PASS, same count as before this task (1038 passed, 1 skipped).
 If `_llm_live` or any offline check regressed, the `__getattr__` passthrough is
 why it must be there — do not remove it.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add analytics_platform/llm/tracing.py analytics_platform/llm/client.py tests/test_llm_tracing.py
+git add analytics_platform/llm/tracing.py tests/test_llm_tracing.py
 git commit -m "$(cat <<'EOF'
 feat(tracing): observe the LLM boundary, not the seven call sites
 
@@ -532,9 +520,9 @@ eighth call -- discovered exactly when the trace is needed. The wrapper has
 one code path and no opt-out, returns the inner response object untouched,
 and records a raising call before re-raising it.
 
-make_role_client is the single construction point, so the junior and senior
-are wrapped too. They record nothing until they set a sink, which is theirs
-to do and out of scope here.
+Applied at the point of use rather than inside make_role_client: the flow
+tests swap that factory out wholesale, so a wrapper living inside it would
+never be exercised by a single test.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 EOF
@@ -722,10 +710,11 @@ event and is replaced by the next stage's start. The token is intentionally
 discarded: the sink is reset per turn, so a stage that outlives its turn is not
 reachable.
 
-Add the import at the top of `stakeholder.py`:
+Add the imports at the top of `stakeholder.py`:
 
 ```python
 from . import tracing
+from .llm.tracing import TracingLLMClient
 ```
 
 - [ ] **Step 5: Open a sink and emit `recalling` in `_answer_steps`**
@@ -741,7 +730,7 @@ In `_answer_steps`, replace lines 422-424:
 with:
 
 ```python
-        llm = make_role_client(self.settings, cfg.stakeholder)
+        llm = TracingLLMClient(make_role_client(self.settings, cfg.stakeholder))
         sink_token = tracing.use_sink(tracing.TraceSink(
             self.stores.for_tenant(tenant_id), tenant_id, trace))
         try:
