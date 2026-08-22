@@ -21,7 +21,15 @@ export function ConversationSidebar() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
 
-  useEffect(() => { fetchConversations(); startNewConversation(); }, [tenantId, fetchConversations, startNewConversation]);
+  // Resetting to a blank conversation belongs to mount and tenant-change. A
+  // remount (Fast Refresh, a layout swap) must not clear a turn that is still
+  // streaming -- doing so erases the trail and the question bubble of a turn the
+  // user is actively waiting on, while the stream keeps running underneath.
+  // Read through getState() so `loading` does not become an effect dependency.
+  useEffect(() => {
+    fetchConversations();
+    if (!useStore.getState().stakeholder.loading) startNewConversation();
+  }, [tenantId, fetchConversations, startNewConversation]);
 
   const commitRename = (id: string) => {
     const title = editingTitle.trim();

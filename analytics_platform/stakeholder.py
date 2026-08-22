@@ -740,6 +740,14 @@ class StakeholderService:
         t_in_total += toks[0]
         t_out_total += toks[1]
         if result is None:
+            # The analyst produced nothing usable and the turn falls back to the
+            # legacy approved-knowledge path. Returning here without closing the
+            # step would leave the trail pinned at "Analysing" forever, which is
+            # the exact mystery the trail exists to remove -- the turn did not
+            # stall, it went somewhere else.
+            yield self._step("analysing", "abandoned",
+                             "no analysis was produced -- answering from "
+                             "approved knowledge instead", t0)
             return None
         yield self._step("analysing", "done",
                          self._analysing_detail(plan, code, workspace_sql), t0)
