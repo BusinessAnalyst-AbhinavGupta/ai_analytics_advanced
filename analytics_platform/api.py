@@ -850,6 +850,16 @@ def create_app(ctx: Optional[AppContext] = None) -> FastAPI:
         tenant_or_404(tenant_id)
         return [r.to_dict() for r in C.pipeline.list_runs(tenant_id, limit)]
 
+    @app.get("/tenants/{tenant_id}/answers/{answer_id}/trace")
+    def answer_trace(tenant_id: str, answer_id: str,
+                     stage: str = "") -> Dict[str, Any]:
+        """Every LLM call and retrieval behind one answer, verbatim."""
+        tenant_or_404(tenant_id)
+        out = C.stakeholder.trace_for_answer(tenant_id, answer_id, stage=stage)
+        if out is None:
+            raise HTTPException(404, "Unknown answer")
+        return out
+
     # -- review / promotion / ingest ---------------------------------------
     @app.post("/tenants/{tenant_id}/knowledge/ingest")
     def ingest_sql(tenant_id: str, body: IngestSQL) -> Dict[str, Any]:

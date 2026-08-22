@@ -2924,6 +2924,35 @@ what was asked."""
     # Everything upstream exists so that two answers CAN be compared; nothing
     # until now actually compares them.
 
+    def trace_for_answer(self, tenant_id: str, answer_id: str,
+                         stage: str = "") -> Optional[Dict[str, Any]]:
+        """Every LLM call and every retrieval behind one answer, in order.
+
+        Returns None when the answer does not exist, so the route can 404 rather
+        than hand back an empty trace that reads like "this answer thought
+        nothing".
+        """
+        store = self.stores.for_tenant(tenant_id)
+        row = store.query_one(
+            "SELECT trace_id FROM stakeholder_answers WHERE id=? AND tenant_id=?",
+            (answer_id, tenant_id))
+        if row is None:
+            return None
+        trace_id = row["trace_id"] or ""
+        sql = ("SELECT seq, ts, stage, kind, payload, duration_ms, tokens_in, "
+               "tokens_out, ok FROM llm_traces WHERE tenant_id=? AND trace_id=?")
+        params: List[Any] = [tenant_id, trace_id]
+        if stage:
+            sql += " AND stage=?"
+            params.append(stage)
+        sql += " ORDER BY seq"
+        records = [{"seq": r["seq"], "ts": r["ts"], "stage": r["stage"],
+                    "kind": r["kind"], "payload": load_json(r["payload"]) or {},
+                    "duration_ms": r["duration_ms"], "tokens_in": r["tokens_in"],
+                    "tokens_out": r["tokens_out"], "ok": bool(r["ok"])}
+                   for r in store.query_all(sql, tuple(params))]
+        return {"answer_id": answer_id, "trace_id": trace_id, "records": records}
+
     def extract_frame(self, tenant_id: str, conversation_id: str,
                       label: str) -> Optional[Any]:
         """The materialised extract behind one answer, memory or disk.
