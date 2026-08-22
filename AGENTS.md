@@ -24,6 +24,16 @@
 - **Read-Only Database Access:** Agents are strictly limited to `SELECT`, metadata inspection, and `EXPLAIN` queries when interacting with customer data.
 - **Dimensional Confidence:** Confidence in a finding is not a single weight. Agents must evaluate findings across multiple dimensions: Evidence, Review status, Freshness, and Data Quality.
 
+### 4. Communicating with the Repository Owner
+- **Plain English, Always:** Every message written for the owner to read — progress updates, findings, anything requiring approval or a decision — must be in simple, non-technical English. The owner does not read the code and must never be required to in order to understand an update or answer a question.
+- **No Code in Explanations:** Do not put file paths, line numbers, function or variable names, code snippets, or library names in anything written for the owner. Describe what a thing *does* in everyday words instead.
+- **No Jargon:** Terms like "wrapper", "endpoint", "schema", "context variable", or "generator" are not explanations. Replace them with what the reader would actually observe.
+- **Say the Three Things:** What changed, whether it works, and what decision is needed. Outcomes such as "all checks pass" or "36 new checks added" are fine — those are results, not code.
+- **Be Short:** A few plain sentences beat a formatted table of technical terms.
+- **Scope:** This governs conversation and anything asking for a decision. Commit messages, code comments, specs, and plans remain fully technical — they are written for engineers, not for the owner.
+
+Technical precision still governs the work itself. It simply does not belong in what the owner reads.
+
 ---
 
 ## PART 2: Rules for the Stakeholder Analyst (Application AI)
