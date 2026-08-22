@@ -10,6 +10,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from ..database import Store, dump_json, load_json
+from .. import tracing
 from ..domain import (KnowledgeNode, NodeKind, ReviewStatus, new_id, now_iso)
 from .fusion import rank_nodes, rrf_fuse
 from .index import BrainIndex
@@ -202,10 +203,26 @@ class CompanyBrain:
         by_id = {n.id: n for n in nodes}
         candidate_ids = list(by_id)
 
+        def _trace(lexical, dense, fused_order, returned) -> None:
+            tracing.record("retrieval", {
+                "query": query,
+                "node_kind": kind.value if kind is not None else "",
+                "limit": limit,
+                "candidate_count": len(nodes),
+                "candidate_cap_hit": len(rows) == max(limit * 25, 500),
+                "lexical_ids": list(lexical),
+                "dense_ids": list(dense),
+                "fused_order": list(fused_order),
+                "returned_ids": [n.id for n in returned],
+                "embedding_available": bool(
+                    self.index is not None and self.index.embedding_available),
+            })
+
         if self.index is None:
             logger.warning("search(%r) on tenant %s has no BrainIndex — returning no "
                            "results rather than unrelated recent nodes; this tenant's "
                            "brain needs an index (see Task 8)", query, self.tenant_id)
+            _trace([], [], [], [])
             return []
 
         recall = max(limit * 4, 40)
@@ -216,12 +233,15 @@ class CompanyBrain:
             if not self.index.embedding_available:
                 logger.info("no lexical hits for %r on tenant %s and embeddings are "
                             "unavailable", query, self.tenant_id)
+            _trace(lexical, dense, [], [])
             return []
 
         fused = rrf_fuse([lexical, dense])
         confidence_by_id = {n.id: n.confidence for n in nodes}
         ordered = rank_nodes(fused, confidence_by_id)
-        return [by_id[i] for i in ordered if i in by_id][:limit]
+        out = [by_id[i] for i in ordered if i in by_id][:limit]
+        _trace(lexical, dense, ordered, out)
+        return out
 
     def usable_queries(self, limit: int = 200) -> List[KnowledgeNode]:
         """All QUERY nodes whose status is usable (approved), newest first.
