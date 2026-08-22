@@ -109,6 +109,13 @@ CREATE TABLE IF NOT EXISTS telemetry (
     resource TEXT, status TEXT, duration_ms REAL, bytes_in INTEGER,
     tokens_in INTEGER, tokens_out INTEGER, meta TEXT
 );
+CREATE TABLE IF NOT EXISTS llm_traces (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT, tenant_id TEXT, trace_id TEXT, seq INTEGER,
+    stage TEXT, kind TEXT, payload TEXT,
+    duration_ms REAL, tokens_in INTEGER, tokens_out INTEGER, ok INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_llm_traces_trace ON llm_traces(tenant_id, trace_id, seq);
 CREATE TABLE IF NOT EXISTS stakeholder_answers (
     id TEXT PRIMARY KEY, tenant_id TEXT, question TEXT, user_id TEXT,
     category TEXT, answer TEXT, answer_mode TEXT, status TEXT,
