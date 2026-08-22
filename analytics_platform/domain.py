@@ -383,7 +383,7 @@ class StepEvent:
     """
 
     step: str                     # one of PIPELINE_STEPS
-    state: str = "done"           # "start" | "done" | "skipped"
+    state: str = "done"           # "start" | "done" | "skipped" | "abandoned"
     label: str = ""               # human-facing; defaults from STEP_LABELS
     detail: str = ""
     elapsed_ms: float = 0.0

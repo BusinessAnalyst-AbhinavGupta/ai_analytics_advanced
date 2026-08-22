@@ -85,6 +85,44 @@ describe('StepTrail', () => {
   });
 });
 
+describe('an abandoned step', () => {
+  // The pipeline can decline a turn half-way and hand it to the legacy
+  // approved-knowledge path. The trail has to show that the step closed and
+  // where the turn went, or a finished turn reads as a stuck one.
+  const abandoned = ev({
+    step: 'analysing', state: 'abandoned',
+    detail: 'no analysis was produced -- answering from approved knowledge instead',
+  });
+
+  test('is not left rendering as still running', () => {
+    render(<StepTrail steps={[abandoned]} running />);
+    const row = screen.getByText(/Analysing/).closest('li')!;
+    expect(row.textContent).not.toContain('◌');
+  });
+
+  test('says where the turn went instead', () => {
+    render(<StepTrail steps={[abandoned]} running />);
+    expect(screen.getByText(/approved knowledge instead/)).toBeInTheDocument();
+  });
+
+  test('is distinct from a skipped step', () => {
+    // `skipped` is good news -- it is why a turn was cheap. A fallback must not
+    // be able to borrow that mark and read as an optimisation.
+    render(<StepTrail steps={[abandoned]} running />);
+    const mark = screen.getByText(/Analysing/).closest('li')!.firstChild!.textContent;
+    expect(mark).not.toBe('–');
+    expect(mark).toBe('↳');
+  });
+
+  test('is not counted as a completed step in the summary', () => {
+    expect(summarise([abandoned])).toContain('0 steps');
+  });
+
+  test('does not claim the warehouse was spared', () => {
+    expect(summarise([abandoned])).not.toContain('no warehouse query');
+  });
+});
+
 describe('summarise', () => {
   test('counts steps and totals their time', () => {
     const steps = [

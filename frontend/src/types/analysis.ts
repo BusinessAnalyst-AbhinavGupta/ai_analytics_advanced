@@ -91,7 +91,7 @@ export type PipelineStep = (typeof PIPELINE_STEPS)[number];
 
 export type StepEvent = {
   step: PipelineStep;
-  state: 'start' | 'done' | 'skipped';
+  state: 'start' | 'done' | 'skipped' | 'abandoned';
   label: string;
   detail?: string;
   elapsed_ms?: number;

@@ -163,6 +163,59 @@ class TestStepDetail(_StreamCase):
         self.assertIn("DuckDB", done[-1]["detail"])
 
 
+class TestTheFallThroughClosesItsStep(_StreamCase):
+    """The pipeline can decline a turn half-way and hand it to the legacy
+    approved-knowledge path. That is a normal outcome, not a stall -- but the
+    trail is a promise that every step it opens, it closes. A turn that returns
+    while `analysing` is still marked "start" leaves the UI showing a spinner on
+    a turn that finished, which is precisely the mystery the trail exists to
+    remove.
+    """
+
+    def _abandoning_turn(self):
+        """Force `_analyse` to produce nothing, which is the real trigger."""
+        self.approve_base()
+        original = self.svc._analyse
+        self.svc._analyse = lambda *a, **k: (None, "", "", (0, 0))
+        try:
+            return self.first_turn_stream()
+        finally:
+            self.svc._analyse = original
+
+    def test_the_analysing_step_is_closed_not_left_running(self):
+        evs = self._abandoning_turn()
+        analysing = self.steps(evs, "analysing")
+        self.assertTrue(analysing, "no analysing step was emitted")
+        self.assertNotEqual(analysing[-1]["state"], "start",
+                            "the trail was left pinned mid-step")
+
+    def test_it_is_marked_abandoned_rather_than_skipped(self):
+        """`skipped` means deliberately-not-run and is good news -- it is why a
+        turn was cheap. Reusing it for a fallback would let a failure read as an
+        optimisation."""
+        evs = self._abandoning_turn()
+        self.assertEqual(self.steps(evs, "analysing")[-1]["state"], "abandoned")
+
+    def test_the_abandoned_step_says_where_the_turn_went(self):
+        detail = self.steps(evs := self._abandoning_turn(), "analysing")[-1]["detail"]
+        self.assertTrue(detail, "an abandoned step with no reason is a dead end")
+        self.assertIn("approved knowledge", detail)
+        self.assertTrue(evs)
+
+    def test_the_turn_still_produces_exactly_one_answer(self):
+        """The fall-through must still terminate the stream normally."""
+        evs = self._abandoning_turn()
+        self.assertEqual([e["type"] for e in evs].count("answer"), 1)
+        self.assertEqual(evs[-1]["type"], "answer")
+
+    def test_no_step_is_left_in_the_start_state(self):
+        """The general form of the rule, so a future early return is caught."""
+        latest = {}
+        for s in self.steps(self._abandoning_turn()):
+            latest[s["step"]] = s["state"]
+        self.assertEqual([k for k, v in latest.items() if v == "start"], [])
+
+
 class TestDetailHelpers(_StreamCase):
     """The detail strings are pure functions of what the pipeline computed, so
     they are tested directly -- driving a real turn into an unresolved metric

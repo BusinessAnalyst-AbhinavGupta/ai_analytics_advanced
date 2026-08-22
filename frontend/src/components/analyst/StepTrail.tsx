@@ -22,10 +22,14 @@ const LABELS: Record<PipelineStep, string> = {
   interpreting: 'Interpreting',
 };
 
-type State = 'pending' | 'start' | 'done' | 'skipped';
+// `skipped` and `abandoned` are deliberately distinct. A skipped step was never
+// run and that is the good news -- it is why the turn was cheap. An abandoned
+// step ran, produced nothing usable, and the turn continued down another path.
+// Collapsing the two would let a fallback masquerade as an optimisation.
+type State = 'pending' | 'start' | 'done' | 'skipped' | 'abandoned';
 
 const MARK: Record<State, string> = {
-  pending: '·', start: '◌', done: '✓', skipped: '–',
+  pending: '·', start: '◌', done: '✓', skipped: '–', abandoned: '↳',
 };
 
 export function formatElapsed(ms?: number): string {
@@ -55,7 +59,7 @@ export function summarise(steps: StepEvent[]): string {
 
 function Row({ step, event }: { step: PipelineStep; event?: StepEvent }) {
   const state: State = (event?.state as State) ?? 'pending';
-  const skipped = state === 'skipped';
+  const skipped = state === 'skipped' || state === 'abandoned';
   const color = state === 'pending' ? 'var(--text-muted)'
     : skipped ? 'var(--text-muted)'
     : 'var(--text-secondary)';
