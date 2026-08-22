@@ -16,6 +16,7 @@ import { PIPELINE_STEPS, type PipelineStep, type StepEvent } from '@/types/analy
  */
 
 const LABELS: Record<PipelineStep, string> = {
+  recalling: 'Recalling what we know',
   understanding: 'Understanding the question',
   planning: 'Planning the turn',
   checking_workspace: 'Checking the workspace',

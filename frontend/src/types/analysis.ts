@@ -83,7 +83,7 @@ export type AnalysisArtifact = {
 // Mirrors analytics_platform.domain.PIPELINE_STEPS. The UI renders them in this
 // order and greys out the ones a turn skipped.
 export const PIPELINE_STEPS = [
-  'understanding', 'planning', 'checking_workspace',
+  'recalling', 'understanding', 'planning', 'checking_workspace',
   'retrieving', 'analysing', 'interpreting',
 ] as const;
 
