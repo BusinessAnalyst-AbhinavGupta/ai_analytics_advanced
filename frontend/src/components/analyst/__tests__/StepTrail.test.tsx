@@ -27,14 +27,17 @@ describe('StepTrail', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  test('renders all six steps in pipeline order before any event arrives', () => {
+  test('renders every step in pipeline order before any event arrives', () => {
     render(<StepTrail steps={[]} running />);
     const items = screen.getByRole('list', { name: 'Analysis steps' })
       .querySelectorAll('li');
     expect(items).toHaveLength(PIPELINE_STEPS.length);
-    expect(items[0]).toHaveTextContent(/Understanding/i);
-    expect(items[3]).toHaveTextContent(/Retrieving/i);
-    expect(items[5]).toHaveTextContent(/Interpreting/i);
+    // `recalling` leads: the question rewrite and the knowledge search run
+    // before anything else, and used to happen with nothing on screen at all.
+    expect(items[0]).toHaveTextContent(/Recalling/i);
+    expect(items[1]).toHaveTextContent(/Understanding/i);
+    expect(items[4]).toHaveTextContent(/Retrieving/i);
+    expect(items[6]).toHaveTextContent(/Interpreting/i);
   });
 
   test('a skipped step shows its reason and is not styled as an error', () => {
