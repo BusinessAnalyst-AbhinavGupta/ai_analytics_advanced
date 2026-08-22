@@ -417,18 +417,30 @@ class StakeholderService:
         # path -- the early returns, the escalation, an exception mid-turn --
         # leaves it closed. A sink that outlives its turn would attribute the
         # next turn's calls to this trace id.
-        tracing.use_sink(tracing.TraceSink(
-            self.stores.for_tenant(tenant_id), tenant_id, trace))
+        sink = tracing.TraceSink(self.stores.for_tenant(tenant_id), tenant_id, trace)
+        inner = self._answer_steps_traced(tenant_id, question, user_id,
+                                          conversation_id, trace)
+        # Driven by hand rather than with `yield from`, because the sink has to
+        # be put back before *every* resumption. Starlette drains this stream
+        # through a threadpool that copies the context per item, so a contextvar
+        # set in one segment is gone by the next -- which silently switched
+        # tracing off after the first yield and left live turns with no records
+        # at all, while single-context tests saw nothing wrong.
         try:
-            out = yield from self._answer_steps_traced(
-                tenant_id, question, user_id, conversation_id, trace)
-            return out
+            while True:
+                tracing.use_sink(sink)
+                tracing.set_stage(sink.stage)
+                try:
+                    event = next(inner)
+                except StopIteration as stop:
+                    return stop.value
+                yield event
         finally:
-            # Cleared by value rather than by token: this generator is resumed
-            # across contexts by the SSE route, and a Token cannot be reset in a
-            # context other than the one that minted it. Clearing the stage here
-            # too bounds it to the turn -- otherwise the last stage of one turn
-            # labels the first calls of the next.
+            # Cleared by value rather than by token: a Token cannot be reset in
+            # a context other than the one that minted it. Clearing the stage
+            # here too bounds it to the turn -- otherwise the last stage of one
+            # turn labels the first calls of the next.
+            inner.close()
             tracing.clear_turn()
 
     def _answer_steps_traced(self, tenant_id: str, question: str, user_id: str,

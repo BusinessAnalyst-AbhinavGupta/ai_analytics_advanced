@@ -29,7 +29,19 @@ _sink: ContextVar[Optional["TraceSink"]] = ContextVar("trace_sink", default=None
 
 
 def set_stage(stage: str) -> Token:
-    return _stage.set(stage or UNATTRIBUTED)
+    """Set the ambient stage, and mirror it onto the active sink.
+
+    The mirror is what lets a stage survive a streamed turn. Starlette drains a
+    sync stream through a threadpool that copies the context per item, so a
+    stage set in one segment of the generator is gone by the next one. The sink
+    is a real object held by the turn's driver, so a stage parked on it can be
+    put back before the generator is resumed.
+    """
+    stage = stage or UNATTRIBUTED
+    sink = _sink.get()
+    if sink is not None:
+        sink.stage = stage
+    return _stage.set(stage)
 
 
 def reset_stage(token: Token) -> None:
@@ -86,6 +98,9 @@ class TraceSink:
         self.tenant_id = tenant_id
         self.trace_id = trace_id
         self.max_field = max_field
+        # The last stage `set_stage` saw while this sink was active. Read back
+        # by the turn's driver to restore the stage after a context switch.
+        self.stage = UNATTRIBUTED
         self._seq = 0
 
     def _clip_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
