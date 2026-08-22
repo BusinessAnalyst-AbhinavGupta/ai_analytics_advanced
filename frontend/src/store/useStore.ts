@@ -43,6 +43,9 @@ interface AppState {
   loadConversation: (id: string) => Promise<void>;
   startNewConversation: () => void;
   askStakeholder: (text: string) => Promise<void>;
+  // The user hanging up on a turn they no longer want. Never called by the
+  // system -- see the note above `inFlight`.
+  stopStreaming: () => void;
   renameConversation: (id: string, title: string) => Promise<void>;
   starConversation: (id: string, starred: boolean) => Promise<void>;
   deleteConversation: (id: string) => Promise<void>;
@@ -141,6 +144,14 @@ interface AppState {
   setConfig: (data: Partial<AppState['config']>) => void;
 }
 
+// The turn currently streaming, so the user can hang up on it.
+//
+// Deliberately module-level rather than store state: an AbortController is not
+// serialisable, nothing renders from it, and putting it in the store would make
+// every subscriber re-render when a turn starts. Nothing in the system aborts
+// on its own -- only `stopStreaming`, and only from a click.
+let inFlight: AbortController | null = null;
+
 export const useStore = create<AppState>((set) => ({
   // No tenant is assumed real -- the Sidebar fetches /tenants on load and
   // sets this to an actual tenant id. A stale hardcoded value here 404s
@@ -198,6 +209,17 @@ export const useStore = create<AppState>((set) => ({
     }));
   },
 
+  stopStreaming: () => {
+    // Abort only. The backend is deliberately left alone: it may be seconds
+    // from an answer, and a half-finished turn is not worth protecting the
+    // user from. This closes the client's ear, not the analyst's mouth.
+    inFlight?.abort();
+    inFlight = null;
+    set((state) => ({
+      stakeholder: { ...state.stakeholder, loading: false, pendingQuestion: '' },
+    }));
+  },
+
   askStakeholder: async (text) => {
     const { tenantId, stakeholder } = useStore.getState();
     const queryText = text || stakeholder.question;
@@ -210,7 +232,11 @@ export const useStore = create<AppState>((set) => ({
         pendingQuestion: queryText,
       },
     }));
+    let controller = new AbortController();
     try {
+      inFlight?.abort();          // one turn at a time
+      controller = new AbortController();
+      inFlight = controller;
       await streamAnswer(tenantId, queryText, stakeholder.activeConversationId, {
         onStep: (e) => set((state) => ({
           stakeholder: { ...state.stakeholder, steps: [...state.stakeholder.steps, e] },
@@ -228,12 +254,19 @@ export const useStore = create<AppState>((set) => ({
         onError: (detail) => set((state) => ({
           stakeholder: { ...state.stakeholder, pendingQuestion: '', streamError: detail },
         })),
-      });
+      }, controller.signal);
       await useStore.getState().fetchConversations();
     } catch (e) {
       console.error(e);
     }
-    set((state) => ({ stakeholder: { ...state.stakeholder, loading: false } }));
+    // A stopped turn has already settled `loading`, and a *newer* turn may
+    // already be running. Only the turn that still owns `inFlight` is allowed
+    // to clear the spinner, or an abandoned request switches off the one after
+    // it on its way out.
+    if (!controller.signal.aborted && inFlight === controller) {
+      inFlight = null;
+      set((state) => ({ stakeholder: { ...state.stakeholder, loading: false } }));
+    }
   },
 
   renameConversation: async (id, title) => {

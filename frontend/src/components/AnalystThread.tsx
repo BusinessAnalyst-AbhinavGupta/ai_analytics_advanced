@@ -63,6 +63,7 @@ function AssistantMessage() {
 
 function Composer() {
   const loading = useStore((s) => s.stakeholder.loading);
+  const stopStreaming = useStore((s) => s.stopStreaming);
   return (
     <ComposerPrimitive.Root
       style={{
@@ -105,15 +106,36 @@ function Composer() {
           }}
         />
       </div>
-      <ComposerPrimitive.Send
-        style={{
-          background: 'var(--accent-primary)', padding: '0.75rem 1.5rem',
-          borderRadius: '8px', border: 'none', color: '#fff', cursor: 'pointer',
-          fontWeight: 600, flexShrink: 0, height: '3rem',
-        }}
-      >
-        {loading ? 'Asking...' : 'Ask'}
-      </ComposerPrimitive.Send>
+      {/* Stopping is the user's call and only the user's. The analyst is never
+          cut off by a timer -- a long turn is usually a model thinking, not a
+          failure, and killing it throws away work that was about to land. What
+          the user gets is the clock (in the trail) and this button, which is
+          enough to decide for themselves. It hangs up this end of the
+          connection; the backend is left to finish or not on its own. */}
+      {loading ? (
+        <button
+          type="button"
+          onClick={stopStreaming}
+          style={{
+            background: 'transparent', padding: '0.75rem 1.5rem',
+            borderRadius: '8px', border: '1px solid rgba(255,255,255,0.25)',
+            color: 'var(--text-secondary)', cursor: 'pointer',
+            fontWeight: 600, flexShrink: 0, height: '3rem',
+          }}
+        >
+          Stop
+        </button>
+      ) : (
+        <ComposerPrimitive.Send
+          style={{
+            background: 'var(--accent-primary)', padding: '0.75rem 1.5rem',
+            borderRadius: '8px', border: 'none', color: '#fff', cursor: 'pointer',
+            fontWeight: 600, flexShrink: 0, height: '3rem',
+          }}
+        >
+          Ask
+        </ComposerPrimitive.Send>
+      )}
     </ComposerPrimitive.Root>
   );
 }
