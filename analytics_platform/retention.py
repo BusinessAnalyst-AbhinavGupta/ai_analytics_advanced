@@ -29,6 +29,7 @@ from .tenancy import TenantService
 # mutable activity tables with an ISO-8601 UTC timestamp column to age out
 RETENTION_TABLES = [
     ("telemetry", "ts"),
+    ("llm_traces", "ts"),
     ("analysis_runs", "generated_at"),
     ("questions", "created_at"),
     ("stakeholder_answers", "created_at"),

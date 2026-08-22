@@ -120,3 +120,31 @@ class TestExtractRetention(unittest.TestCase):
         self.ctx.settings.policy.extract_retention_days = 0
         self.ctx.retention.purge_expired(dry_run=False)
         self.assertEqual(self._conversations(), {"old", "fresh"})
+
+
+class LlmTraceRetentionTest(unittest.TestCase):
+    """Traces are the largest rows the platform writes -- a 64KB prompt ceiling
+    times seven calls times every turn. They have to age out with everything
+    else."""
+
+    def test_llm_traces_is_in_the_retention_table_list(self):
+        from analytics_platform.retention import RETENTION_TABLES
+        self.assertIn(("llm_traces", "ts"), RETENTION_TABLES)
+
+    def test_a_purge_actually_deletes_aged_trace_rows(self):
+        """List membership is not the behaviour -- deletion is."""
+        import tempfile
+        from analytics_platform.database import TENANT_SCHEMA, Store
+        from analytics_platform.retention import _cutoff_iso
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Store(f"{tmp}/t.db", schema=TENANT_SCHEMA)
+            for ts in ("2020-01-01T00:00:00Z", "2999-01-01T00:00:00Z"):
+                store.execute(
+                    "INSERT INTO llm_traces (ts,tenant_id,trace_id,seq,stage,kind,"
+                    "payload,duration_ms,tokens_in,tokens_out,ok) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    (ts, "tnt_x", "tr", 1, "planning", "llm", "{}", 0.0, 0, 0, 1))
+            store.execute("DELETE FROM llm_traces WHERE ts < ?", (_cutoff_iso(30),))
+            left = store.query_all("SELECT ts FROM llm_traces")
+            self.assertEqual([r["ts"] for r in left], ["2999-01-01T00:00:00Z"])
