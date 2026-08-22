@@ -357,12 +357,13 @@ class BaseView:
 # The six steps of the analyst pipeline, in the order they run. The UI renders
 # them in this order and greys out the ones a given turn skipped -- a reuse turn
 # never retrieves, and saying so is the whole point rather than an omission.
-PIPELINE_STEPS = ("understanding", "planning", "checking_workspace",
+PIPELINE_STEPS = ("recalling", "understanding", "planning", "checking_workspace",
                   "retrieving", "analysing", "interpreting")
 
 # Kept beside the tuple so a step can never be emitted with a label invented at
 # the call site, which is how two spellings of the same step reach the UI.
 STEP_LABELS = {
+    "recalling": "Recalling what we know",
     "understanding": "Understanding the question",
     "planning": "Planning the turn",
     "checking_workspace": "Checking the workspace",

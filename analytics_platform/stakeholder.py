@@ -37,7 +37,9 @@ from .execution.python_policy import PythonCodePolicy
 from .execution.python_sandbox import (EXTRACT_MEMORY_MB, EXTRACT_TIMEOUT_S,
                                        run_python_sandboxed)
 from .execution.workspace import AnalyticalWorkspace
+from . import tracing
 from .llm.client import make_role_client
+from .llm.tracing import TracingLLMClient
 from .junior import JuniorEngine
 from .observability import Observability, new_trace
 from .schema_context import SchemaContext, SchemaContextBuilder
@@ -389,6 +391,12 @@ class StakeholderService:
     def _step(step: str, state: str = "done", detail: str = "",
               t0: Optional[float] = None) -> Dict[str, Any]:
         assert step in PIPELINE_STEPS, step
+        if state == "start":
+            # Only "start" moves it, so the stage stays put through the work that
+            # follows the event and is replaced by the next stage's start. The
+            # token is discarded deliberately: the sink is reset per turn, so a
+            # stage that outlives its turn is not reachable.
+            tracing.set_stage(step)
         return {"type": "step", "payload": asdict(StepEvent(
             step=step, state=state, detail=detail,
             elapsed_ms=((perf_counter() - t0) * 1000.0) if t0 is not None else 0.0))}
@@ -405,6 +413,28 @@ class StakeholderService:
         self.tenants.require_tenant(tenant_id)
         conversation_id = self._ensure_conversation(tenant_id, conversation_id, question)
         trace = new_trace()
+        # The sink is opened here and closed in the `finally` so that every exit
+        # path -- the early returns, the escalation, an exception mid-turn --
+        # leaves it closed. A sink that outlives its turn would attribute the
+        # next turn's calls to this trace id.
+        tracing.use_sink(tracing.TraceSink(
+            self.stores.for_tenant(tenant_id), tenant_id, trace))
+        try:
+            out = yield from self._answer_steps_traced(
+                tenant_id, question, user_id, conversation_id, trace)
+            return out
+        finally:
+            # Cleared by value rather than by token: this generator is resumed
+            # across contexts by the SSE route, and a Token cannot be reset in a
+            # context other than the one that minted it. Clearing the stage here
+            # too bounds it to the turn -- otherwise the last stage of one turn
+            # labels the first calls of the next.
+            tracing.clear_turn()
+
+    def _answer_steps_traced(self, tenant_id: str, question: str, user_id: str,
+                             conversation_id: str, trace: str
+                             ) -> Iterator[Dict[str, Any]]:
+        """The turn itself, with a trace sink already open around it."""
         category = self.classify(question)
 
         cfg = self.tenants.get_analyst_config(tenant_id)
@@ -419,9 +449,14 @@ class StakeholderService:
                            meta={"category": category, "mode": AnswerMode.CANNOT_ANSWER.value})
             return out
 
-        llm = make_role_client(self.settings, cfg.stakeholder)
+        llm = TracingLLMClient(make_role_client(self.settings, cfg.stakeholder))
+        t0 = perf_counter()
+        yield self._step("recalling", "start")
         search_intent = self._extract_search_intent(llm, question)
         query_nodes, defn_nodes = self._retrieve(tenant_id, search_intent)
+        yield self._step("recalling", "done",
+                         self._recalling_detail(search_intent, query_nodes,
+                                                defn_nodes), t0)
 
         if self.is_high_risk(question, category):
             # What escalates is the ANSWER, not the knowledge behind it. The
@@ -1035,6 +1070,16 @@ Respond with STRICT JSON and nothing else:
     # A step that says only "Analysing" is a spinner with extra steps. These
     # build the one sentence per step that tells a user what the system is
     # spending their time and money on, out of what the pipeline already knows.
+
+    @staticmethod
+    def _recalling_detail(intent: str, query_nodes: List[Any],
+                          defn_nodes: List[Any]) -> str:
+        """The rewritten search string is the retrieval key. Show it: when the
+        wrong knowledge comes back, this string is usually the reason."""
+        return (f"searched for '{intent}' -- {len(query_nodes)} approved "
+                f"quer{'y' if len(query_nodes) == 1 else 'ies'}, "
+                f"{len(defn_nodes)} definition"
+                f"{'' if len(defn_nodes) == 1 else 's'}")
 
     @staticmethod
     def _understanding_detail(schema_ctx: Any) -> str:

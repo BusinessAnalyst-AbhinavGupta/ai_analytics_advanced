@@ -38,7 +38,11 @@ class TracingLLMClient:
         response: Optional[LLMResponse] = None
         error = ""
         try:
-            response = self.inner.generate(prompt, system_prompt,
+            # Forwarded by keyword because that is how every call site invokes
+            # it, and test doubles inspect kwargs. Passing positionally here
+            # silently changed the shape of every recorded call.
+            response = self.inner.generate(prompt=prompt,
+                                           system_prompt=system_prompt,
                                            temperature=temperature, **kwargs)
             return response
         except Exception as exc:  # noqa: BLE001 - recorded, then re-raised
