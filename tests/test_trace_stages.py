@@ -87,3 +87,60 @@ class StageAttributionTest(_StreamCase):
         finally:
             tracing_mod.TraceSink = real_sink
         self.assertEqual(out["status"], "ANSWERED")
+
+
+class ThreadedDrainTest(_StreamCase):
+    """The way Starlette actually drains the stream.
+
+    `StreamingResponse` hands a sync iterator to `iterate_in_threadpool`, which
+    runs every `next()` through `anyio.to_thread.run_sync` -- and that copies the
+    context per call. Each resumption therefore starts from a *fresh copy* of the
+    task's context, so anything the generator set into a contextvar during an
+    earlier segment is gone. Draining in one context (which every other test in
+    this repo does) cannot see that; this one reproduces it.
+    """
+
+    def drain(self, llm, question):
+        import contextvars
+
+        from tests.test_extract_flow import _llm_patched
+
+        self.svc.llm = llm
+        with _llm_patched(self.svc, llm):
+            events = self.svc.answer_stream(self.tid, question,
+                                            conversation_id=self.c1)
+            out = []
+            while True:
+                # A fresh copy per item, exactly as the threadpool does it.
+                try:
+                    out.append(contextvars.copy_context().run(next, events))
+                except StopIteration:
+                    return out
+
+    def test_a_turn_drained_across_contexts_still_records(self):
+        from tests.test_extract_flow import SequencedLLM
+
+        self.approve_base()
+        self.drain(SequencedLLM(["sales by country", CUBE_1, PY_CELL, NARRATIVE]),
+                   "what are sales by country?")
+        traced = self.traces_of(self.ctx.stores.for_tenant(self.tid))
+        self.assertTrue([r for r in traced if r[1] == "llm"],
+                        "no llm calls were recorded when drained across contexts")
+        self.assertTrue([r for r in traced if r[1] == "retrieval"],
+                        "no brain searches were recorded when drained across contexts")
+
+    def test_stages_survive_being_drained_across_contexts(self):
+        from tests.test_extract_flow import SequencedLLM
+
+        self.approve_base()
+        self.drain(SequencedLLM(["sales by country", CUBE_1, PY_CELL, NARRATIVE]),
+                   "what are sales by country?")
+        stages = {r[0] for r in self.traces_of(self.ctx.stores.for_tenant(self.tid))}
+        self.assertIn("recalling", stages)
+        self.assertIn("planning", stages)
+        self.assertNotIn("unattributed", stages)
+
+    @staticmethod
+    def traces_of(store):
+        return [(r["stage"], r["kind"]) for r in store.query_all(
+            "SELECT stage, kind FROM llm_traces ORDER BY seq")]
