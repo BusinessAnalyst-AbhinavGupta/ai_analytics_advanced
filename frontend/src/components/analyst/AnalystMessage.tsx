@@ -139,6 +139,8 @@ export function AnalystMessageBody({ message }: { message: StakeholderMessage })
       <AnalysisDisclosures
         analysis={message.analysis}
         extractMeta={message.extract_meta}
+        tenantId={tenantId}
+        answerId={message.answer_id}
         download={
           <ExtractDownload
             tenantId={tenantId}

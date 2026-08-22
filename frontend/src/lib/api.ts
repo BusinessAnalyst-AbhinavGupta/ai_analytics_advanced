@@ -27,3 +27,13 @@ export function extractDownloadUrl(
     `${encodeURIComponent(conversationId)}/extracts/` +
     `${encodeURIComponent(label)}/download`);
 }
+
+/**
+ * The whole trace behind one answer. Keyed by answer id because that is what a
+ * reader has in front of them when an answer looks wrong.
+ */
+export function answerTraceUrl(tenantId: string, answerId: string): string {
+  return apiUrl(
+    `/tenants/${encodeURIComponent(tenantId)}/answers/` +
+    `${encodeURIComponent(answerId)}/trace`);
+}
