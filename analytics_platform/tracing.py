@@ -52,6 +52,15 @@ def current_sink() -> Optional["TraceSink"]:
     return _sink.get()
 
 
+def clear_turn() -> None:
+    """End-of-turn teardown. Sets both vars by value rather than resetting a
+    Token, because a generator resumed in a different context cannot reset a
+    token minted in the first one -- which is exactly what the SSE route does.
+    """
+    _sink.set(None)
+    _stage.set(UNATTRIBUTED)
+
+
 def record(kind: str, payload: Dict[str, Any], **kw: Any) -> None:
     """Record through the active sink, or do nothing. Never raises."""
     sink = _sink.get()
