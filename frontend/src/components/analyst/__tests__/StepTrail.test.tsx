@@ -1,8 +1,8 @@
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 
-import { StepTrail, formatElapsed, summarise } from '@/components/analyst/StepTrail';
+import { StepTrail, formatElapsed, runningStep, summarise } from '@/components/analyst/StepTrail';
 import { PIPELINE_STEPS, type StepEvent } from '@/types/analysis';
 
 const ev = (over: Partial<StepEvent> & { step: StepEvent['step'] }): StepEvent => ({
@@ -120,6 +120,82 @@ describe('an abandoned step', () => {
 
   test('does not claim the warehouse was spared', () => {
     expect(summarise([abandoned])).not.toContain('no warehouse query');
+  });
+});
+
+describe('formatElapsed past a minute', () => {
+  // A planning call really has been measured at 663s. "663.5s" makes the reader
+  // do the arithmetic; the whole point of the trail is that they should not
+  // have to.
+  test('reads as minutes and seconds', () => {
+    expect(formatElapsed(663_500)).toBe('11m 04s');
+    expect(formatElapsed(60_000)).toBe('1m 00s');
+  });
+
+  test('leaves the short cases exactly as they were', () => {
+    expect(formatElapsed(59_999)).toBe('60.0s');
+    expect(formatElapsed(1240)).toBe('1.2s');
+    expect(formatElapsed(340)).toBe('340ms');
+  });
+});
+
+describe('runningStep', () => {
+  test('is the step whose latest event is a start', () => {
+    expect(runningStep([
+      ev({ step: 'understanding', state: 'done' }),
+      ev({ step: 'planning', state: 'start' }),
+    ])).toBe('planning');
+  });
+
+  test('is null once that step closes', () => {
+    expect(runningStep([
+      ev({ step: 'planning', state: 'start' }),
+      ev({ step: 'planning', state: 'done' }),
+    ])).toBeNull();
+  });
+
+  test('is null for an empty trail', () => {
+    expect(runningStep([])).toBeNull();
+  });
+});
+
+describe('the running clock', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  const running = [
+    ev({ step: 'understanding', state: 'done', elapsed_ms: 212 }),
+    ev({ step: 'planning', state: 'start' }),
+  ];
+
+  test('counts up on the step in flight', () => {
+    vi.useFakeTimers();
+    render(<StepTrail steps={running} running />);
+    const row = () => screen.getByText(/Planning the turn/).closest('li')!;
+    expect(row().textContent).not.toMatch(/\ds/);
+
+    act(() => { vi.advanceTimersByTime(5000); });
+    expect(row().textContent).toContain('5.0s');
+
+    act(() => { vi.advanceTimersByTime(700_000); });
+    expect(row().textContent).toContain('11m');
+  });
+
+  test('does not put a clock on a step that has finished', () => {
+    vi.useFakeTimers();
+    render(<StepTrail steps={running} running />);
+    act(() => { vi.advanceTimersByTime(5000); });
+    // Understanding closed at 212ms and must keep saying so.
+    expect(screen.getByText(/Understanding the question/).closest('li')!.textContent)
+      .toContain('212ms');
+  });
+
+  test('stops ticking when nothing is running', () => {
+    vi.useFakeTimers();
+    const done = [ev({ step: 'planning', state: 'done', elapsed_ms: 1000 })];
+    render(<StepTrail steps={done} running />);
+    act(() => { vi.advanceTimersByTime(10_000); });
+    expect(screen.getByText(/Planning the turn/).closest('li')!.textContent)
+      .toContain('1.0s');
   });
 });
 

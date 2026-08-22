@@ -1,5 +1,7 @@
 'use client';
 
+import { useEffect, useState } from 'react';
+
 import { Disclosure } from '@/components/analyst/Disclosure';
 import { PIPELINE_STEPS, type PipelineStep, type StepEvent } from '@/types/analysis';
 
@@ -34,7 +36,56 @@ const MARK: Record<State, string> = {
 
 export function formatElapsed(ms?: number): string {
   if (!ms || ms <= 0) return '';
+  // Past a minute, "663.5s" is a number the reader has to do arithmetic on. A
+  // planning call really can run this long -- see the OpenRouter note in
+  // docs -- so the long case is worth formatting properly rather than treating
+  // as an anomaly.
+  if (ms >= 60_000) {
+    const total = Math.round(ms / 1000);
+    return `${Math.floor(total / 60)}m ${String(total % 60).padStart(2, '0')}s`;
+  }
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`;
+}
+
+/** The step currently in flight, or null when nothing is running. */
+export function runningStep(steps: StepEvent[]): PipelineStep | null {
+  for (const [step, ev] of latestByStep(steps)) {
+    if (ev.state === 'start') return step;
+  }
+  return null;
+}
+
+/**
+ * How long the step in flight has been running, ticking once a second.
+ *
+ * This is the difference between "the analyst is thinking" and "this thing is
+ * broken". A planning call has been measured at eleven minutes; with only a
+ * label on screen, that is indistinguishable from a hang, and the honest fix is
+ * to show the clock rather than to start cutting calls off.
+ *
+ * Purely a display concern: it measures when the `start` event *arrived*, asks
+ * nothing of the server, and cancels nothing.
+ */
+function useRunningElapsed(step: PipelineStep | null): number {
+  // Tagged with the step it was measured for. Without the tag, a step that ends
+  // leaves its elapsed time on screen for up to a second under the *next*
+  // step's label -- a small lie, but this component's whole job is not telling
+  // those. Untagged reads as 0, which is true: it has been running under a
+  // second.
+  const [measured, setMeasured] = useState<{ step: PipelineStep | null; ms: number }>(
+    { step: null, ms: 0 });
+
+  // The clock is read and advanced entirely inside the timer callback. Reading
+  // it during render would make render impure, and setting state synchronously
+  // in the effect body would cascade a second render on every step boundary.
+  useEffect(() => {
+    if (!step) return;
+    const began = Date.now();
+    const id = setInterval(() => setMeasured({ step, ms: Date.now() - began }), 1000);
+    return () => clearInterval(id);
+  }, [step]);
+
+  return step && measured.step === step ? measured.ms : 0;
 }
 
 /** The last event wins: a step goes start -> done, and only the latest matters. */
@@ -57,7 +108,9 @@ export function summarise(steps: StepEvent[]): string {
   return parts.join(' · ');
 }
 
-function Row({ step, event }: { step: PipelineStep; event?: StepEvent }) {
+function Row({ step, event, runningFor }: {
+  step: PipelineStep; event?: StepEvent; runningFor?: number;
+}) {
   const state: State = (event?.state as State) ?? 'pending';
   const skipped = state === 'skipped' || state === 'abandoned';
   const color = state === 'pending' ? 'var(--text-muted)'
@@ -79,11 +132,26 @@ function Row({ step, event }: { step: PipelineStep; event?: StepEvent }) {
           {formatElapsed(event?.elapsed_ms)}
         </span>
       )}
+      {/* The running clock. aria-live so a screen reader is told the turn is
+          still moving, rather than being left in silence for minutes. */}
+      {state === 'start' && !!runningFor && formatElapsed(runningFor) && (
+        <span
+          aria-live="polite"
+          style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginLeft: 'auto' }}
+        >
+          {formatElapsed(runningFor)}
+        </span>
+      )}
     </li>
   );
 }
 
 export function StepTrail({ steps, running }: { steps: StepEvent[]; running: boolean }) {
+  // Above the early return: a hook may not be called conditionally, and this
+  // component genuinely does render nothing when idle with an empty trail.
+  const activeStep = runningStep(steps);
+  const runningFor = useRunningElapsed(activeStep);
+
   if (!steps.length && !running) return null;
 
   const latest = latestByStep(steps);
@@ -99,7 +167,8 @@ export function StepTrail({ steps, running }: { steps: StepEvent[]; running: boo
       }}
     >
       {PIPELINE_STEPS.map((step) => (
-        <Row key={step} step={step} event={latest.get(step)} />
+        <Row key={step} step={step} event={latest.get(step)}
+             runningFor={step === activeStep ? runningFor : undefined} />
       ))}
     </ul>
   );
